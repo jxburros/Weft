@@ -183,6 +183,9 @@ export class ProfileKeys {
     this.currentVersion = currentVersion;
     this.locatorKey = hkdf(indexKey, 'weft component locator v1');
     this.fingerprintKey = hkdf(indexKey, 'weft request fingerprint v1');
+    // Embedding vectors are derived from text, not record versions: sealed under the stable index key so a data-key rotation leaves them alone.
+    this.vectorKey = hkdf(indexKey, 'weft embedding vector v1');
+    this.vectorDigestKey = hkdf(indexKey, 'weft embedding digest v1');
   }
   key(version) {
     const key = this.dataKeys.get(version);
@@ -192,6 +195,15 @@ export class ProfileKeys {
   /** Keyed component name: plaintext SHA-256 digests never appear on disk for encrypted profiles. */
   locator(hash) { return createHmac('sha256', this.locatorKey).update(`component\u0000${hash}`).digest('hex'); }
   fingerprint(digest) { return createHmac('sha256', this.fingerprintKey).update(`request\u0000${digest}`).digest('hex'); }
+  /** Keyed digest of an embedding chunk's text digest, so a guessed chunk text cannot be confirmed from disk. */
+  vectorDigest(digest) { return createHmac('sha256', this.vectorDigestKey).update(`vector\u0000${digest}`).digest('hex'); }
+  /** One sealed embedding chunk (text digest and float32 vector); AAD binds workspace, record, version, chunk, model and dimensions. */
+  sealVector(aad, payload) { return seal(this.vectorKey, payload, `weft/vector\u0000${this.profileId}\u0000${aad}`); }
+  openVector(aad, sealed) {
+    const plaintext = open(this.vectorKey, Buffer.from(sealed), `weft/vector\u0000${this.profileId}\u0000${aad}`);
+    if (!plaintext) throw integrity('an embedding vector');
+    return plaintext;
+  }
   sealText(domain, json, revision = 0, version = this.currentVersion) {
     const sealed = seal(this.key(version), Buffer.from(json, 'utf8'), `weft/${domain.join('\u0000')}\u0000${this.profileId}\u0000${version}\u0000${revision}`);
     return `${SEALED_PREFIX}${version}.${revision}.${sealed.toString('base64')}`;
@@ -235,7 +247,7 @@ export class ProfileKeys {
     return plaintext;
   }
   wipe() {
-    wipe(this.profileKey); wipe(this.indexKey); wipe(this.locatorKey); wipe(this.fingerprintKey);
+    wipe(this.profileKey); wipe(this.indexKey); wipe(this.locatorKey); wipe(this.fingerprintKey); wipe(this.vectorKey); wipe(this.vectorDigestKey);
     for (const key of this.dataKeys.values()) wipe(key);
     this.dataKeys = new Map();
   }

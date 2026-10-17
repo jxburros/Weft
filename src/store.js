@@ -6,7 +6,7 @@ import { ComponentStore, sha256 } from './components.js';
 import { syncDirectory } from './storage-safety.js';
 import { rejectSecretKeys } from './export-safety.js';
 import { SEARCH_INDEX_VERSION, compileQuery, indexable, recordDocument, versionDocument } from './search-index.js';
-import { VectorIndex } from './vector-index.js';
+import { VectorIndex, openVectorRow, sealVectorRow } from './vector-index.js';
 import { SEALED_PREFIX, encryptionError, lockedError } from './encryption.js';
 
 const SEALED_PREFIX_LIKE = SEALED_PREFIX;
@@ -152,9 +152,9 @@ export class MetadataStore {
       this.components.keys = this.keys;
       if (!readOnly) {
         this.migrate(); this.ensureSearchIndex();
-        // Encrypted profiles keep embedding vectors and their queue in memory only, like the search index (ADR 014, ADR 018).
+        // Encrypted profiles keep embedding vectors on disk sealed per chunk, so unlocking re-embeds nothing (ADR 014, ADR 018).
         this.vectors = new VectorIndex(db);
-        this.vectors.ensure(key => this.info(key), (key, value) => this.setInfo(key, value), { memory: Boolean(this.keys), now: this.clock() });
+        this.vectors.ensure(key => this.info(key), (key, value) => this.setInfo(key, value), { keys: this.keys, now: this.clock() });
       }
       else if (this.version() > STORE_SCHEMA_VERSION) throw failure('STORE_UNSUPPORTED', 'Workspace database was written by a newer Weft version');
       const stat = statSync(this.path);
@@ -626,8 +626,15 @@ export class MetadataStore {
       const insert = db.prepare('INSERT OR IGNORE INTO component_refs(sha256, collection, record_id, size) VALUES (?, ?, ?, ?)');
       for (const row of componentRows) insert.run(keys.locator(row.sha256), row.collection, row.record_id, row.size);
       db.exec("DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs; DELETE FROM store_info WHERE key = 'searchIndexVersion'");
-      // Embedding vectors are derived from record text: they are dropped here and rebuilt in memory after unlock (ADR 018 vectors, ADR 014).
-      db.exec('DROP TABLE IF EXISTS main.vector_chunks; DROP TABLE IF EXISTS main.vector_queue;');
+      // Embedding vectors are derived from record text: each chunk's text digest and vector are sealed in place, so nothing is re-embedded.
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vector_chunks'").get()) {
+        const update = db.prepare('UPDATE vector_chunks SET text_sha256 = ?, vector = ? WHERE rowid = ?');
+        for (const row of db.prepare('SELECT rowid, workspace_id, collection, record_id, version_id, chunk, text_sha256, model_key, dims, vector FROM vector_chunks').all()) {
+          const { digest, blob } = sealVectorRow(keys, row, row.text_sha256, row.vector);
+          update.run(digest, blob, row.rowid);
+        }
+      }
+      this.setInfo('vectorsSealed', '1');
       this.setInfo('encryption', JSON.stringify({ format: 1, profileId: keys.profileId, enabledAt: new Date(this.clock()).toISOString() }));
     });
     onStep('committed');
@@ -676,7 +683,14 @@ export class MetadataStore {
       db.exec('DELETE FROM component_refs');
       const insert = db.prepare('INSERT OR IGNORE INTO component_refs(sha256, collection, record_id, size) VALUES (?, ?, ?, ?)');
       for (const row of componentRows) insert.run(digests.get(row.sha256), row.collection, row.record_id, row.size);
-      db.exec("DELETE FROM store_info WHERE key IN ('encryption', 'searchIndexVersion')");
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vector_chunks'").get()) {
+        const update = db.prepare('UPDATE main.vector_chunks SET text_sha256 = ?, vector = ? WHERE rowid = ?');
+        for (const row of db.prepare('SELECT rowid, workspace_id, collection, record_id, version_id, chunk, text_sha256, model_key, dims, vector FROM main.vector_chunks').all()) {
+          const { digest, bytes } = openVectorRow(keys, row);
+          update.run(digest, bytes, row.rowid);
+        }
+      }
+      db.exec("DELETE FROM store_info WHERE key IN ('encryption', 'searchIndexVersion', 'vectorsSealed')");
     });
     onStep('committed');
     this.compact();

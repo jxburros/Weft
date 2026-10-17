@@ -55,10 +55,11 @@ function rows(directory, sql) {
   try { return db.prepare(sql).all(); } finally { db.close(); }
 }
 
-test('(a) embedding vectors of an encrypted profile live only in memory and are rebuilt after unlock', async t => {
+test('(a) embedding vectors of an encrypted profile are sealed at rest: enabling, locking and unlocking re-embed nothing', async t => {
   const directory = profile(t);
   const service = open(t, directory);
-  const server = await fakeEndpoint(t, (req, res, body) => json(res, { model: body.model, embeddings: body.input.map(text => [/sedan|automobile/i.test(text) ? 1 : 0, 0.1]) }));
+  const inputs = [];
+  const server = await fakeEndpoint(t, (req, res, body) => { inputs.push(...body.input); json(res, { model: body.model, embeddings: body.input.map(text => [/sedan|automobile/i.test(text) ? 1 : 0, 0.1]) }); });
   const providers = await new Providers({ directory, workspace: service, env: {} }).init();
   t.after(() => providers.close());
   const connection = await providers.execute('models.save', { name: 'Local', provider: 'ollama', endpoint: server.base, model: 'chat' });
@@ -66,30 +67,66 @@ test('(a) embedding vectors of an encrypted profile live only in memory and are 
   service.attachRetrieval(retrieval);
   t.after(() => retrieval.close());
   const note = await service.execute('materials.create', { title: 'NEEDLE-VECTOR-NOTE', content: 'The sedan needs tires.' });
+  await service.execute('materials.create', { title: 'Second note', content: 'Bicycle chain oil.' });
   await service.execute('search.configureEmbeddings', { enabled: true, modelId: connection.id, embeddingModel: 'fake-embed' }, human);
   await retrieval.drain();
-  assert.ok(rows(directory, 'SELECT count(*) AS n FROM vector_chunks')[0].n > 0, 'a plaintext profile stores vectors in the database');
+  const contentRequests = () => inputs.filter(text => text !== 'Weft embedding check' && text !== 'automobile');
+  const embedded = contentRequests().length;
+  assert.ok(embedded >= 2);
+  const plain = rows(directory, 'SELECT text_sha256, vector FROM vector_chunks ORDER BY rowid');
+  assert.ok(plain.length >= 2, 'a plaintext profile stores vectors in the database');
 
   await enable(service);
-  assert.deepEqual(rows(directory, "SELECT name FROM sqlite_master WHERE name IN ('vector_chunks', 'vector_queue')"), [], 'no vector table remains on disk');
-  assert.equal(rows(directory, "SELECT count(*) AS n FROM vector_config")[0].n, 1, 'the embedding setting survives (connection metadata, no content)');
   await retrieval.drain();
-  const memory = () => service.storage.db.prepare('SELECT count(*) AS n FROM mem.vector_chunks').get().n;
-  assert.ok(memory() > 0, 'vectors are rebuilt in memory');
+  assert.equal(contentRequests().length, embedded, 'enabling encryption seals existing vectors instead of re-embedding them');
+  const sealed = rows(directory, 'SELECT text_sha256, vector FROM vector_chunks ORDER BY rowid');
+  assert.equal(sealed.length, plain.length, 'vectors stay on disk, sealed');
+  for (const [index, row] of sealed.entries()) {
+    assert.notEqual(row.text_sha256, plain[index].text_sha256, 'the text digest on disk is keyed');
+    assert.equal(Buffer.from(row.vector).includes(Buffer.from(plain[index].vector)), false, 'the vector bytes are not on disk in the clear');
+  }
+  assert.deepEqual(plaintextHits(directory, ['NEEDLE-VECTOR-NOTE', ...plain.map(row => Buffer.from(row.vector)), ...plain.map(row => row.text_sha256)]), []);
   const hits = await service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human);
-  assert.equal(hits[0].id, note.id);
-  const blob = service.storage.db.prepare('SELECT vector FROM mem.vector_chunks LIMIT 1').get().vector;
-  assert.deepEqual(plaintextHits(directory, ['NEEDLE-VECTOR-NOTE', Buffer.from(blob)]), []);
+  assert.equal(hits[0].id, note.id, 'sealed vectors are opened for search');
 
-  // Locked: nothing to embed and no store; unlocking queues everything again in memory.
+  // Lock and unlock: vectors are decrypted on demand; no text goes to the endpoint again.
   await enc(service, 'encryption.lock');
   await retrieval.drain();
   await assert.rejects(service.execute('search.query', { query: 'automobile' }, human), error => error.code === 'locked');
   await enc(service, 'encryption.unlock', { method: 'passphrase', secret: 'correct horse battery staple' });
-  assert.equal(memory(), 0);
   await retrieval.drain();
-  assert.ok(memory() > 0);
-  assert.deepEqual(rows(directory, "SELECT name FROM sqlite_master WHERE name IN ('vector_chunks', 'vector_queue')"), []);
+  assert.equal(contentRequests().length, embedded, 'unlocking causes zero embedding requests for unchanged content');
+  assert.equal((await service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human))[0].id, note.id);
+  assert.equal(retrieval.status(service.activeWorkspaceId).vector.pending, 0);
+
+  // A changed record re-embeds only its own changed chunk.
+  await service.execute('materials.update', { id: note.id, changes: { content: 'The automobile needs new tires.' } });
+  await retrieval.drain();
+  assert.equal(contentRequests().length, embedded + 1);
+
+  // A sealed vector moved to another row fails authentication instead of being used.
+  const db = new DatabaseSync(join(directory, 'workspace.sqlite'));
+  try {
+    const [first, second] = db.prepare('SELECT rowid, vector FROM vector_chunks ORDER BY rowid LIMIT 2').all();
+    db.prepare('UPDATE vector_chunks SET vector = ? WHERE rowid = ?').run(first.vector, second.rowid);
+  } finally { db.close(); }
+  service.storage.vectors.cache.clear();
+  await assert.rejects(service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human), error => error.code === 'component_integrity');
+  // Reindexing replaces the damaged chunk (its text is embedded again); intact chunks are reused.
+  await service.execute('search.reindex', {}, human);
+  const count = contentRequests().length;
+  assert.equal(count, embedded + 2);
+  assert.equal((await service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human))[0].id, note.id);
+
+  // Turning encryption off opens the vectors back into plaintext rows; still nothing is re-embedded.
+  await enc(service, 'encryption.disable', { acknowledgePlaintext: true });
+  await retrieval.drain();
+  assert.equal(contentRequests().length, count);
+  const reopened = rows(directory, 'SELECT text_sha256 FROM vector_chunks');
+  assert.ok(reopened.every(row => /^[0-9a-f]{64}$/.test(row.text_sha256)));
+  await service.execute('materials.update', { id: note.id, changes: { title: 'NEEDLE-VECTOR-NOTE renamed' } });
+  await retrieval.drain();
+  assert.ok(contentRequests().length <= count + 1, 'unchanged chunks are still reused after disabling');
 });
 
 test('(b) resource archive bodies and manifests are sealed components and records; verification still works', async t => {
