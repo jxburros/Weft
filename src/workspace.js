@@ -165,6 +165,20 @@ export class WorkspaceService {
   log(action, workspaceId, targetId, actor = 'human', detail = '') {
     this.data.activity.push({ id: uuid('event'), workspaceId, targetId, action, actor, detail, createdAt: now() });
   }
+  /** Ordinary activity retention (age/count). Records and artifacts are never removed by retention. */
+  pruneActivity({ cutoff = null, maxEntries = null } = {}) {
+    const run = this.queue.then(() => {
+      const before = this.data.activity;
+      let kept = cutoff ? before.filter(item => String(item.createdAt) >= cutoff) : before;
+      if (maxEntries && kept.length > maxEntries) kept = kept.slice(-maxEntries);
+      if (kept.length === before.length) return 0;
+      this.data.activity = kept;
+      try { this.save(); } catch (error) { this.data.activity = before; throw error; }
+      return before.length - kept.length;
+    });
+    this.queue = run.catch(() => {});
+    return run;
+  }
   matchSiteRule(value, workspaceId = this.activeWorkspaceId) {
     let url;
     try { url = new URL(value); } catch { return null; }
@@ -241,7 +255,6 @@ export class WorkspaceService {
       return snapshot;
     }
     if (name === 'settings.get') return clone(this.data.settings);
-    if (name === 'activity.list') return clone(this.data.activity.filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
     if (name === 'search.query') {
       const query = args.query.trim().toLocaleLowerCase();
       if (!query) return [];

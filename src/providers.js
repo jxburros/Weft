@@ -23,7 +23,7 @@ function locality(endpoint) {
 }
 
 export class Providers {
-  constructor({ directory, workspace, safeStorage, admission, readPage, searchWorkspace, env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 60000 } = {}) {
+  constructor({ directory, workspace, safeStorage, admission, readPage, searchWorkspace, audit = () => {}, env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 60000 } = {}) {
     if (!directory || !workspace) throw new Error('Provider storage directory and workspace service are required');
     this.directory = directory;
     this.file = join(directory, 'model-connections.json');
@@ -32,6 +32,7 @@ export class Providers {
     this.admission = admission;
     this.readPage = readPage;
     this.searchWorkspace = searchWorkspace;
+    this.audit = entry => { try { audit(entry); } catch { /* Audit failure must not change the model decision. */ } };
     this.env = env;
     this.fetch = fetchImpl;
     this.timeoutMs = timeoutMs;
@@ -232,19 +233,25 @@ export class Providers {
         totalBytes: items.reduce((sum, item) => sum + (item.withheld ? 0 : item.bytes), 0) } };
   }
 
-  async send(args) {
+  async send(args, context = {}) {
     if (this.preparing.has(args.conversationId)) throw new Error('This conversation already has a running model request');
     this.preparing.add(args.conversationId);
-    try { return await this.sendPrepared(args); }
+    try { return await this.sendPrepared(args, context); }
     catch (error) { throw new Error(redactProviderSecrets(error.message)); }
     finally { this.preparing.delete(args.conversationId); }
   }
 
-  async sendPrepared({ conversationId, text, modelId, context = [], allowReadTools = false, tabId, disclosureAck = false }) {
+  async sendPrepared({ conversationId, text, modelId, context = [], allowReadTools = false, tabId, disclosureAck = false }, caller = {}) {
     if (this.running.has(conversationId)) throw new Error('This conversation already has a running model request');
     const prepared = await this.prepare({ conversationId, text, modelId, context, allowReadTools, tabId });
     const { profile, cloud, disclosure } = prepared;
     context = prepared.context;
+    // Model destination decisions are durable activity (destination origin, locality and sizes only; never content).
+    const destinationEvent = { command: 'chat.send', actor: caller.actor ?? 'human', clientId: caller.clientId, workspaceId: prepared.conversation.workspaceId, targetId: conversationId,
+      summary: { destination: new URL(profile.endpoint).origin, locality: disclosure.locality, model: profile.model, provider: profile.provider, items: disclosure.items.length,
+        withheldItems: disclosure.items.filter(item => item.withheld).length, totalBytes: disclosure.totalBytes, tools: disclosure.tools.length } };
+    if (disclosure.requiresAcknowledgement && !disclosureAck) this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'cloud_disclosure_required', outcome: 'denied' });
+    if (disclosure.requiresAcknowledgement && disclosureAck) this.audit({ ...destinationEvent, type: 'override', decision: 'approve', reason: 'cloud_disclosure_acknowledged', outcome: 'recorded' });
     if (disclosure.requiresAcknowledgement && !disclosureAck) throw new Error('CLOUD_DISCLOSURE_REQUIRED: Preview chat.preview and explicitly acknowledge the destination and data before sending.');
     if (disclosure.requiresAcknowledgement) await this.mutate(() => this.persist(this.profiles, [...this.acknowledgements, prepared.acknowledgementId].slice(-1000)));
     if (allowReadTools && (profile.provider !== 'openai' || !profile.tools)) {
@@ -293,6 +300,8 @@ export class Providers {
             ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}) };
         if (this.workspace.getConversation(conversationId).workspaceId !== workspaceId) throw new Error('Conversation workspace changed; model request refused');
         manifest.requests.push({ bytes: Buffer.byteLength(JSON.stringify(body)), toolResults: toolCalls });
+        this.audit({ ...destinationEvent, type: 'model', decision: 'allow', reason: cloud ? 'acknowledged_destination' : 'on_device_destination', outcome: 'attempted', external: cloud,
+          summary: { ...destinationEvent.summary, requestBytes: manifest.requests.at(-1).bytes, toolResults: toolCalls } });
         await this.workspace.recordTurnManifest?.(conversationId, manifest);
         this.admission?.assertAutomationAdmitted('model-reader', 'chat.send');
         let response;
@@ -348,6 +357,8 @@ export class Providers {
       clearTimeout(timer);
       this.running.delete(conversationId);
       manifest.finishedAt = new Date().toISOString();
+      this.audit({ ...destinationEvent, type: 'model', reason: `turn_${manifest.status.replace('-', '_')}`, outcome: { complete: 'completed', cancelled: 'cancelled' }[manifest.status] ?? 'failed',
+        summary: { ...destinationEvent.summary, requests: manifest.requests.length, toolCalls: manifest.tools.length, manifestId: manifest.id } });
       await this.workspace.recordTurnManifest?.(conversationId, manifest);
     }
   }
@@ -359,12 +370,12 @@ export class Providers {
     return { inputTokens: Number.isFinite(inputTokens) ? inputTokens : null, outputTokens: Number.isFinite(outputTokens) ? outputTokens : null };
   }
 
-  async execute(name, args = {}) {
-    try { return await this.executeCommand(name, args); }
+  async execute(name, args = {}, context = {}) {
+    try { return await this.executeCommand(name, args, context); }
     catch (error) { throw new Error(redactProviderSecrets(error.message)); }
   }
 
-  async executeCommand(name, args = {}) {
+  async executeCommand(name, args = {}, context = {}) {
     if (!Object.hasOwn(providerSchemas, name)) throw new Error(`Unknown provider command: ${name}`);
     args = providerSchemas[name].parse(args);
     switch (name) {
@@ -376,7 +387,7 @@ export class Providers {
         return { deleted: true };
       });
       case 'chat.preview': return { disclosure: (await this.prepare(args)).disclosure };
-      case 'chat.send': return this.send(args);
+      case 'chat.send': return this.send(args, context);
       case 'chat.cancel': {
         const run = this.running.get(args.conversationId);
         if (run) { run.cancelled = true; run.controller.abort(); }

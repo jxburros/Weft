@@ -38,7 +38,6 @@ export const commandDefinitions = {
   'workspaces.import': ['Import a versioned project export as a new workspace', { data: z.unknown() }],
   'settings.get': ['Get non-secret application preferences', {}],
   'settings.update': ['Update application preferences; credentials are not accepted', { theme: z.enum(['system', 'light', 'dark']).optional(), model: z.strictObject(modelShape).optional(), sidebarCollapsed: z.boolean().optional(), agentPanelOpen: z.boolean().optional() }],
-  'activity.list': ['List attributable activity', { ...optionalWorkspace, limit: z.number().int().min(1).max(1000).optional() }],
   'search.query': ['Search project records and saved text locally', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional() }],
   'conversations.message': ['Append a durable conversation message', { id, localOnly: z.boolean().optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: text, model: z.string().max(200).optional(), status: z.enum(['complete', 'interrupted', 'error']).optional(), attachments: references.optional() }],
   'tasks.transition': ['Change task state and record the cause', { id, status: recordShapes.tasks.status.removeDefault(), cause: z.string().max(2000).optional(), checkpoint: text.optional() }],

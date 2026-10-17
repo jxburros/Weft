@@ -77,6 +77,7 @@ export class Browser {
     tab.blocked = { url, ruleId: rule.id, hostname: rule.hostname, reason: rule.reason,
       scope: rule.scope, mode: rule.mode, note: rule.note || '', provenance: rule.provenance ?? null };
     tab.error = `Blocked by site rule: ${rule.hostname}`;
+    this.onAudit?.({ type: 'block', reason: 'site_rule', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, targetId: rule.id, summary: { hostname: rule.hostname, scope: rule.scope, mode: rule.mode } });
     this.layout();
     this.persist();
   }
@@ -279,7 +280,9 @@ export class Browser {
     if (!permitted) {
       const id = this.nextDownloadId++;
       this.downloads.set(id, { item: null, record: { id, workspaceId, sourceTabId: source?.id ?? null, url: item.getURL(), filename: basename(item.getFilename()), state: 'blocked', receivedBytes: 0, totalBytes: item.getTotalBytes(), scanStatus: 'Not scanned', reason: 'Download needs human approval. No recent browser input authorized this request.' } });
-      item.cancel(); return;
+      item.cancel();
+      this.onAudit?.({ type: 'block', reason: 'unsolicited_download', outcome: 'recorded', workspaceId, tabId: source?.id, summary: { url: item.getURL(), downloadId: id } });
+      return;
     }
     const id = this.nextDownloadId++;
     const directory = join(this.electron.app.getPath('downloads'), 'Weft');

@@ -228,6 +228,34 @@ if (process.argv.includes("--gui-workflows")) {
       'document.getElementById("palette-results").textContent.includes("Research notes")',
     );
     await click('[data-action="close-dialog"]');
+    // An agent request waits in the single approval queue until the human decides in browser-owned UI.
+    await click("#settings-button");
+    await click('[data-action="manage-clients"]');
+    await until('document.getElementById("bootstrap-level") !== null');
+    await run('{const s=document.getElementById("bootstrap-level");s.value="assist";s.dispatchEvent(new Event("change",{bubbles:true}))}');
+    await until('(async()=> (await window.weft.execute("autonomy.get",{})).bootstrapLevel==="assist")()');
+    await click('[data-action="close-dialog"]');
+    const agentCall = async (args) => {
+      const response = await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token", "content-type": "application/json" }, body: JSON.stringify({ command: "materials.create", args }) });
+      return { status: response.status, ...(await response.json()) };
+    };
+    const requested = await agentCall({ workspaceId: first.id, title: "Agent proposed note" });
+    assert.equal(requested.status, 403);
+    assert.equal(requested.error.code, "approval_required");
+    await until('document.getElementById("safety-notices").textContent.includes("agent request")');
+    await click('#safety-notices [data-section="approvals"]');
+    await until('document.getElementById("approval-list")?.textContent.includes("Agent proposed note")');
+    await click('[data-action="approval-decide"][data-mode="once"]');
+    await until('!document.getElementById("safety-notices").textContent.includes("agent request")');
+    const approvedCall = await agentCall({ workspaceId: first.id, title: "Agent proposed note" });
+    assert.equal(approvedCall.error, null, JSON.stringify(approvedCall.error));
+    await click('[data-section="activity"]');
+    await until('document.getElementById("activity-entries")?.textContent.includes("materials.create")');
+    await run('{const s=document.getElementById("activity-type");s.value="approval";s.dispatchEvent(new Event("change",{bubbles:true}))}');
+    await until('document.getElementById("activity-entries").textContent.includes("Waiting for approval")');
+    await click('[data-action="activity-settings"]');
+    await until('document.getElementById("activity-integrity")?.textContent.includes("chain intact")');
+    await click('[data-action="close-dialog"]');
     window.setSize(1000, 700);
     await click("#agent-toggle");
     await new Promise((resolve) => setTimeout(resolve, 180));
