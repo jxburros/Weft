@@ -1284,6 +1284,7 @@ function formDialog(
     e.preventDefault();
     const button = $("dialog-content").querySelector("button[form]");
     button.disabled = true;
+    $("form-error").textContent = "";
     try {
       await onSave(Object.fromEntries(new FormData($("edit-form"))));
       closeDialog();
@@ -2762,8 +2763,8 @@ function automationSettings() {
   formDialog("Agent input",
     `<p>Weft sends page input to a tab one action at a time. These settings decide what happens when several agents want the same tab. You can always take over a tab, and real input from you stops agent input at once.</p>`
       + choice("Which agents may act on a tab", "inputConcurrency", [["shared", "Shared: any permitted agent may act on a tab that is available to agents"], ["exclusive", "Exclusive: an agent must claim the tab first; one agent holds it at a time"]], current.inputConcurrency)
-      + field("Agent actions that may wait for a busy tab (0–20; 0 refuses at once)", "queueLimit", String(current.queueLimit), "number", true)
-      + field("Longest wait for a busy tab, in seconds (0–60)", "queueSeconds", String(Math.round(current.queueTimeoutMs / 100) / 10), "number", true)
+      + `<label>Agent actions that may wait for a busy tab (0–20; 0 refuses at once)<input name="queueLimit" type="number" min="0" max="20" step="1" value="${Number(current.queueLimit)}" required></label>`
+      + `<label>Longest wait for a busy tab, in seconds (0–60)<input name="queueSeconds" type="number" min="0" max="60" step="0.1" value="${Math.round(current.queueTimeoutMs / 100) / 10}" required></label>`
       + `<p class="muted">A waiting action is refused with “resource busy” when the wait runs out, so the agent can retry later. Changes apply to the next action.</p>`,
     async (values) => {
       const queueLimit = Number(values.queueLimit), queueTimeoutMs = Math.round(Number(values.queueSeconds) * 1000);

@@ -21,7 +21,8 @@
     "dist": "electron-builder --config electron-builder.config.cjs --publish never",
     "dist:dir": "electron-builder --config electron-builder.config.cjs --dir --publish never",
     "release:check": "node scripts/release/metadata.js",
-    "installer:art": "node scripts/generate-installer-art.js"
+    "installer:art": "node scripts/generate-installer-art.js",
+    "logo:validate": "electron scripts/validate-logo.js"
   },
   "repository": {
     "type": "git",
