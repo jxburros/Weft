@@ -153,8 +153,14 @@ if (mainSmoke) {
       if (window && !window.webContents.isLoading()) {
         const count = await window.webContents.executeJavaScript('document.getElementById("command")?.options.length ?? 0');
         if (count > 0 && await window.webContents.executeJavaScript('document.getElementById("status")?.textContent === "Ready"')) {
-          const { commands } = await import('../src/commands.js');
+          const { commands, executeOutcome } = await import('../src/commands.js');
           assert.equal(count, Object.keys(commands).length);
+          const guiInfo = await window.webContents.executeJavaScript('window.weft.executeOutcome("browser.info")');
+          const rawInfo = await window.webContents.executeJavaScript('window.weft.execute("browser.info")');
+          assert.deepEqual(guiInfo, await executeOutcome(() => rawInfo, 'browser.info'));
+          const invalidInput = { tab_id: -1 };
+          const guiInvalid = await window.webContents.executeJavaScript(`window.weft.executeOutcome('tabs.close', ${JSON.stringify(invalidInput)})`);
+          assert.deepEqual(guiInvalid, await executeOutcome(() => assert.fail('invalid input must not execute'), 'tabs.close', invalidInput));
           const preferences = window.webContents.getLastWebPreferences();
           assert.equal(preferences.sandbox, true);
           assert.equal(preferences.contextIsolation, true);
@@ -312,7 +318,8 @@ if (mainSmoke) {
         const cli = await promisify(execFile)(process.execPath, [
           fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'page.evaluate', JSON.stringify({ tabId: cliTab.id, expectedVersion: cliTab.version, expression: '6 * 7' }),
         ], { env: { ...process.env, WEFT_API_URL: `http://127.0.0.1:${port}`, WEFT_TOKEN: token } });
-        assert.equal(JSON.parse(cli.stdout), 42);
+        assert.equal(JSON.parse(cli.stdout).result, 42);
+        assert.equal(JSON.parse(cli.stdout).execution, 'succeeded');
         const mcp = new Client({ name: 'chromium-smoke', version: '1.0.0' });
         const transport = new StdioClientTransport({
           command: process.execPath,
@@ -321,14 +328,16 @@ if (mainSmoke) {
         });
         try {
           await mcp.connect(transport);
-          const { commands } = await import('../src/commands.js');
-          assert.equal((await mcp.listTools()).tools.length, Object.keys(commands).length);
+          const { mcpTools } = await import('../src/mcp.js');
+          assert.deepEqual((await mcp.listTools()).tools.map(tool => tool.name), mcpTools.map(tool => tool.name));
           const mcpTab = (await (await request('page.inspect')).json()).result;
-          const answer = await mcp.callTool({ name: 'page_evaluate', arguments: { tabId: mcpTab.id, expectedVersion: mcpTab.version, expression: '21 * 2' } });
-          assert.equal(JSON.parse(answer.content[0].text), 42);
-          const screenshot = await mcp.callTool({ name: 'page_screenshot', arguments: {} });
-          assert.equal(screenshot.content[0].type, 'image');
-          assert.equal(Buffer.from(screenshot.content[0].data, 'base64').subarray(1, 4).toString(), 'PNG');
+          const answer = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.evaluate', args: { tabId: mcpTab.id, expectedVersion: mcpTab.version, expression: '21 * 2' } } });
+          assert.equal(JSON.parse(answer.content[0].text).result, 42);
+          assert.equal(answer.structuredContent.execution, 'succeeded');
+          const screenshot = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.screenshot', args: { tabId: mcpTab.id } } });
+          assert.equal(screenshot.content[0].type, 'text');
+          assert.equal(screenshot.content[1].type, 'image');
+          assert.equal(Buffer.from(screenshot.content[1].data, 'base64').subarray(1, 4).toString(), 'PNG');
         } finally { await mcp.close(); }
         assert.equal((await request('browser.close')).status, 200);
         await new Promise(resolve => main.once('exit', resolve));
