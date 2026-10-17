@@ -1,103 +1,1723 @@
-const $ = id => document.getElementById(id);
-let catalog = {};
-let activeTab;
-let refreshing = false;
-let tabSnapshot = '';
-
-function showResult(result) {
-  $('result').textContent = JSON.stringify(result, null, 2);
-  $('artifact').replaceChildren();
-  if (result?.data && ['image/png', 'application/pdf'].includes(result.mimeType)) {
-    const link = document.createElement('a');
-    link.href = `data:${result.mimeType};base64,${result.data}`;
-    link.download = result.mimeType === 'image/png' ? 'screenshot.png' : 'page.pdf';
-    link.textContent = 'Save artifact';
-    $('artifact').append(link);
-    $('result').textContent = JSON.stringify({ ...result, data: `[${result.data.length} base64 characters]` }, null, 2);
+import { icon } from "./icons.js";
+const $ = (id) => document.getElementById(id);
+const esc = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+const short = (v, n = 100) =>
+  String(v || "").length > n ? String(v).slice(0, n) + "…" : String(v || "");
+const date = (value) =>
+  value
+    ? new Date(value).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : "Today";
+const ago = (value) => {
+  const mins = Math.floor((Date.now() - new Date(value).getTime()) / 60000);
+  return mins < 1
+    ? "Just now"
+    : mins < 60
+      ? `${mins}m ago`
+      : mins < 1440
+        ? `${Math.floor(mins / 60)}h ago`
+        : date(value);
+};
+const names = {
+  overview: "Overview",
+  tabs: "Tabs",
+  materials: "Materials",
+  context: "Context",
+  tasks: "Tasks",
+  conversations: "Conversations",
+  artifacts: "Artifacts",
+  activity: "Activity",
+  workflows: "Workflows",
+  settings: "Settings",
+  privacy: "Privacy & site rules",
+  downloads: "Downloads",
+  history: "History",
+  bookmarks: "Bookmarks",
+  browse: "Live page",
+};
+const sections = [
+  "overview",
+  "materials",
+  "context",
+  "tasks",
+  "conversations",
+  "artifacts",
+  "activity",
+];
+const sectionIcon = {
+  overview: "grid",
+  materials: "folder",
+  context: "context",
+  tasks: "tasks",
+  conversations: "chat",
+  artifacts: "artifacts",
+  activity: "activity",
+};
+let state = {
+  workspaces: [],
+  materials: [],
+  context: [],
+  tasks: [],
+  conversations: [],
+  artifacts: [],
+  activity: [],
+  workflows: [],
+  siteRules: [],
+  settings: {},
+};
+let tabs = [],
+  catalog = {},
+  section = "overview",
+  models = [],
+  modelId = "",
+  conversationId = null,
+  agentOpen = false,
+  chatBusy = false,
+  filter = "",
+  taskFilter = "",
+  splitTabId = null,
+  refreshPromise = null,
+  lastSnapshot = "",
+  toastTimer,
+  dialogRestore;
+const ws = () =>
+  state.workspaces.find((w) => w.id === state.activeWorkspaceId) || {
+    name: "My workspace",
+    id: "",
+  };
+const records = (key) =>
+  (state[key] || []).filter((r) => r.workspaceId === ws().id);
+const active = () => tabs.find((t) => t.active);
+const visibleTabs = () =>
+  tabs.filter((t) => !t.workspaceId || t.workspaceId === ws().id);
+const displayTitle = (t) =>
+  t.title && t.title !== "about:blank"
+    ? t.title
+    : t.url === "about:blank"
+      ? "New tab"
+      : t.url || "New tab";
+const host = (url) => {
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url || "Local note";
   }
+};
+const action = (name, label, ico = "", attrs = "", cls = "secondary") =>
+  `<button class="${cls}" data-action="${name}" ${attrs}>${ico ? icon(ico) : ""}${esc(label)}</button>`;
+function toast(message) {
+  $("toast").textContent = message;
+  $("toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => ($("toast").hidden = true), 4500);
 }
-
-async function execute(name, args = {}) {
-  $('status').textContent = `Running ${name}…`;
+function errorMessage(e) {
+  return String(e.message || e).replace(
+    /^Error invoking remote method '[^']+': Error: /,
+    "",
+  );
+}
+async function execute(name, args = {}, quiet = false) {
+  if (!quiet) $("status").textContent = `Running ${name}…`;
   try {
     const result = await window.weft.execute(name, args);
-    showResult(result);
-    $('status').textContent = 'Done';
-    await refreshTabs();
-    return result;
-  } catch (error) {
-    $('status').textContent = `Error: ${error.message}`;
-    throw error;
-  }
-}
-
-async function refreshTabs() {
-  if (refreshing) return;
-  refreshing = true;
-  try {
-    const tabs = await window.weft.execute('tabs.list', {});
-    activeTab = tabs.find(tab => tab.active);
-    if (document.activeElement !== $('address')) $('address').value = activeTab?.url ?? '';
-    const snapshot = JSON.stringify(tabs);
-    if (snapshot === tabSnapshot) return;
-    tabSnapshot = snapshot;
-    $('tabs').replaceChildren();
-    for (const tab of tabs) {
-      const group = document.createElement('div');
-      group.className = tab.active ? 'tab active' : 'tab';
-      const activate = document.createElement('button');
-      activate.textContent = tab.title || tab.url || 'New tab';
-      activate.title = tab.url;
-      activate.onclick = () => void execute('tabs.activate', { tabId: tab.id }).catch(() => {});
-      const close = document.createElement('button');
-      close.textContent = '×';
-      close.setAttribute('aria-label', `Close ${tab.title || 'tab'}`);
-      close.onclick = () => void execute('tabs.close', { tabId: tab.id }).catch(() => {});
-      group.append(activate, close);
-      $('tabs').append(group);
+    if (!quiet) {
+      showResult(result);
+      $("status").textContent = "Done";
+      await refresh(true);
     }
-  } finally { refreshing = false; }
-}
-
-function selectCommand() {
-  const entry = catalog[$('command').value];
-  $('description').textContent = entry.description;
-  $('schema').textContent = JSON.stringify(entry.inputSchema, null, 2);
-  const args = {};
-  for (const key of entry.inputSchema.required ?? []) {
-    const property = entry.inputSchema.properties[key];
-    args[key] = property.type === 'integer' ? (activeTab?.id ?? 1) :
-      property.type === 'boolean' ? false : '';
+    return result;
+  } catch (e) {
+    $("status").textContent = errorMessage(e);
+    if (!quiet) toast(errorMessage(e));
+    throw e;
   }
-  $('arguments').value = JSON.stringify(args, null, 2);
 }
-
-$('command').onchange = selectCommand;
-$('run').onclick = async () => {
-  try { await execute($('command').value, JSON.parse($('arguments').value)); }
-  catch (error) { $('status').textContent = `Error: ${error.message}`; }
-};
-$('new-tab').onclick = () => void execute('tabs.new').catch(() => {});
-for (const action of ['back', 'forward', 'reload', 'stop']) {
-  $(action).onclick = () => void execute(`page.${action}`).catch(() => {});
+function showResult(result) {
+  $("result").textContent = JSON.stringify(result, null, 2);
+  $("artifact").replaceChildren();
+  if (
+    result?.data &&
+    ["image/png", "application/pdf"].includes(result.mimeType)
+  ) {
+    const a = document.createElement("a");
+    a.href = `data:${result.mimeType};base64,${result.data}`;
+    a.download =
+      result.mimeType === "image/png" ? "weft-capture.png" : "weft-page.pdf";
+    a.textContent = "Save artifact";
+    $("artifact").append(a);
+    $("result").textContent = JSON.stringify(
+      { ...result, data: `[${result.data.length} base64 characters]` },
+      null,
+      2,
+    );
+  }
 }
-$('navigation').onsubmit = event => {
+async function refresh(force = false) {
+  if (refreshPromise) {
+    await refreshPromise;
+    if (force) return refresh(true);
+    return;
+  }
+  refreshPromise = refreshState(force);
+  try {
+    await refreshPromise;
+  } finally {
+    refreshPromise = null;
+  }
+}
+async function refreshState(force) {
+  {
+    const [next, nextTabs] = await Promise.all([
+      window.weft.execute("workspace.snapshot", {}),
+      window.weft.execute("tabs.list", {}),
+    ]);
+    const snapshot = JSON.stringify([next, nextTabs]);
+    state = next;
+    tabs = nextTabs;
+    if (snapshot !== lastSnapshot || force) {
+      lastSnapshot = snapshot;
+      renderShell();
+      if (
+        !document.activeElement?.closest(
+          "#content input,#content textarea,#content select",
+        )
+      )
+        renderContent();
+      if (agentOpen && !chatBusy) renderMessages();
+    }
+    if (document.activeElement !== $("address"))
+      $("address").value =
+        section === "browse" && active()?.url !== "about:blank"
+          ? active()?.url || ""
+          : "";
+    layout();
+  }
+}
+function theme() {
+  const value = state.settings.theme || "system";
+  const dark =
+    value === "dark" ||
+    (value === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.querySelector(".wordmark img").src = dark
+    ? "../assets/logo/dark/horizontal-dark.svg"
+    : "../assets/logo/svg/horizontal-full-color.svg";
+  $("theme-toggle").innerHTML = icon(dark ? "sun" : "moon");
+}
+function renderShell() {
+  theme();
+  $("workspace-name").textContent = ws().name;
+  $("breadcrumb-workspace").textContent = ws().name;
+  $("breadcrumb-section").textContent = names[section] || "Workspace";
+  $("workspace-buttons").innerHTML = state.workspaces
+    .filter((w) => !w.archived)
+    .map(
+      (w) =>
+        `<button class="rail-button workspace-dot ${w.id === ws().id ? "active" : ""}" data-action="switch-workspace" data-id="${esc(w.id)}" aria-label="${esc(w.name)}" title="${esc(w.name)}" ${w.id === ws().id ? 'aria-current="true"' : ""}>${esc(w.icon && w.icon.length < 4 ? w.icon : w.name.slice(0, 2).toUpperCase())}</button>`,
+    )
+    .join("");
+  $("sections").innerHTML = sections
+    .map(
+      (key) =>
+        `<button class="section-link ${section === key ? "active" : ""}" data-action="section" data-section="${key}" ${section === key ? 'aria-current="page"' : ""}>${icon(sectionIcon[key])}<span>${names[key]}</span>${["materials", "tasks", "artifacts"].includes(key) && records(key).length ? `<span class="count">${records(key).length}</span>` : ""}</button>`,
+    )
+    .join("");
+  $("tabs").innerHTML = visibleTabs()
+    .map(
+      (tab) =>
+        `<div class="tab ${tab.active ? "active" : ""}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span></button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}">×</button></div>`,
+    )
+    .join("");
+  $("agent-toggle").innerHTML = icon("spark") + "<span>Ask Weft</span>";
+  $("agent-toggle").classList.toggle("active", agentOpen);
+  $("ownership").textContent =
+    section === "browse"
+      ? `Control: ${active()?.controller || "available"}${active()?.version ? " · v" + active().version : ""}`
+      : "You are in control";
+  if (section === "browse" && active()?.warning)
+    $("status").textContent = "Site warning: " + active().warning;
+  $("item-count").textContent =
+    `${visibleTabs().length} tab${visibleTabs().length !== 1 ? "s" : ""} · ${records("materials").length} materials`;
+  $("back").disabled = !active()?.blocked && !active()?.canGoBack;
+  $("forward").disabled = !active()?.canGoForward;
+  $("stop").hidden = !active()?.loading;
+  $("reload").hidden = !!active()?.loading;
+  $("split-view").classList.toggle("sage-color", !!splitTabId);
+}
+function heading(title, subtitle, button = "") {
+  return `<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${button}</div>`;
+}
+function empty(title, body, ico, button = "") {
+  return `<div class="empty-card"><div class="empty-icon icon">${icon(ico)}</div><h3>${esc(title)}</h3><p>${esc(body)}</p>${button}</div>`;
+}
+function overview() {
+  const pending = records("tasks").filter(
+    (t) => !["completed", "cancelled"].includes(t.status),
+  );
+  const materials = records("materials")
+    .slice()
+    .sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        new Date(b.updatedAt) - new Date(a.updatedAt),
+    )
+    .slice(0, 3);
+  const artifacts = records("artifacts").slice(-3).reverse();
+  return `<div class="eyebrow">${icon("grid")} YOUR WORK, WOVEN TOGETHER</div>${heading(ws().name, ws().description || "A little space for everything you’re working on.", action("workspace-menu", "Workspace options", "more"))}
+ <div class="intro-panel"><div class="intro-copy"><h2>${records("materials").length || pending.length ? "Pick up where you left off." : "Make room for your next idea."}</h2><p>${records("materials").length || pending.length ? "Your tabs, references, and next steps are right here. Open a page or continue a task to keep your project moving." : "Bring your tabs, notes, and references together. Start with a page, save what matters, and build from there."}</p><div class="inline-actions">${action("new-tab", "Open a new tab", "plus", "", "primary")}${action("section", "Explore materials", "arrow", 'data-section="materials"', "text-button")}</div></div><img class="intro-mark" src="../assets/logo/svg/mark-full-color.svg" alt=""></div>
+ <div class="section-heading"><h2>A place to start</h2><span class="muted micro">Built around your project</span></div>
+ <div class="quick-grid">${[
+   [
+     "new-material",
+     "note",
+     "Save a thought",
+     "Notes, links, and files, all together.",
+   ],
+   [
+     "new-task",
+     "tasks",
+     "Plan the next step",
+     "Give your project a clear direction.",
+   ],
+   ["ask", "spark", "Think with an agent", "Your model. Your conversation."],
+ ]
+   .map(
+     ([a, i, t, d]) =>
+       `<button class="quick-card" data-action="${a}"><span class="tile-icon icon">${icon(i)}</span><span><strong>${t}</strong><small>${d}</small></span></button>`,
+   )
+   .join("")}</div>
+ <div class="overview-columns"><section><div class="section-heading"><h2>Materials & references</h2>${action("section", "View all", "arrow", 'data-section="materials"', "text-button")}</div>${materials.length ? materials.map((m) => `<button class="compact-record" data-action="edit-record" data-kind="materials" data-id="${esc(m.id)}">${icon(m.kind === "website" ? "globe" : "note")}<span class="record-text"><strong>${esc(m.title)}</strong><small>${esc(m.kind)} · ${date(m.updatedAt)}</small></span>${icon("chevron")}</button>`).join("") : empty("Keep the good stuff close", "Save useful pages, add your notes, or bring a file into this workspace.", "folder", action("new-material", "Add your first material", "plus", "", "text-button"))}</section>
+ <section><div class="section-heading"><h2>Next up</h2>${action("section", "All tasks", "arrow", 'data-section="tasks"', "text-button")}</div>${
+   pending.length
+     ? pending
+         .slice(0, 4)
+         .map(
+           (t) =>
+             `<button class="compact-record" data-action="edit-record" data-kind="tasks" data-id="${esc(t.id)}"><span class="task-check"></span><span class="record-text"><strong>${esc(t.title)}</strong><small>${esc(t.status === "waiting" ? "Waiting for you" : t.status)}${t.blocker ? " · " + esc(short(t.blocker, 50)) : ""}</small></span></button>`,
+         )
+         .join("")
+     : empty(
+         "A clear desk. A fresh start.",
+         "Turn an idea into a task when you’re ready. Your next steps will live here.",
+         "tasks",
+         action("new-task", "Create a task", "plus", "", "text-button"),
+       )
+ }</section></div>
+ ${artifacts.length ? `<section class="settings-section"><div class="section-heading"><h2>Recently saved captures</h2>${action("section", "Open collection", "arrow", 'data-section="artifacts"', "text-button")}</div><div class="record-grid">${artifacts.map(artifactCard).join("")}</div></section>` : ""}<div class="workspace-footnote icon">${icon("lock")} Local by default. Your workspace stays ready for your next session.</div>`;
+}
+function renderContent() {
+  if (section === "browse") {
+    const tab = active();
+    $("content").innerHTML =
+      `${tab?.loading ? '<div class="loading-line"></div>' : ""}<div class="browser-placeholder"><img src="../assets/logo/svg/mark-full-color.svg" alt="Weft"><h2>${tab?.blocked ? "This destination is restricted" : tab?.url === "about:blank" ? "Where would you like to go?" : "Your live page"}</h2><p>${tab?.blocked ? esc(tab.blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.") : "Enter a website or a search in the address bar above."}</p>${tab?.blocked ? '<div class="inline-actions">' + action("blocked-back", "Go back", "back") + action("allow-once", "Allow this visit", "globe") + action("section", "Change rule", "shield", 'data-section="privacy"') + "</div>" : ""}${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+    layout();
+    return;
+  }
+  let html = "";
+  if (section === "overview") html = overview();
+  else if (
+    ["materials", "context", "tasks", "conversations", "workflows"].includes(
+      section,
+    )
+  )
+    html = collectionView(section);
+  else if (section === "tabs")
+    html =
+      heading(
+        "Open tabs",
+        "Your pages, with a clear place and a clear owner.",
+        action("new-tab", "New tab", "plus", "", "primary"),
+      ) + tabTable();
+  else if (section === "artifacts")
+    html =
+      heading(
+        "Saved captures",
+        "A lasting reference, even when the live page changes.",
+        action("capture", "Save current page", "plus", "", "primary"),
+      ) +
+      (records("artifacts").length
+        ? `<div class="record-grid">${records("artifacts").slice().reverse().map(artifactCard).join("")}</div>`
+        : empty(
+            "Keep a page for later",
+            "Save page text and a screenshot as an offline reference. Each new capture preserves the previous version.",
+            "artifacts",
+            action("new-tab", "Open a page", "globe", "", "text-button"),
+          ));
+  else if (section === "activity")
+    html =
+      heading(
+        "Activity",
+        "The decisions, changes, and progress behind your project.",
+      ) + activityView();
+  else if (section === "history")
+    html =
+      heading(
+        "Browsing history",
+        "Recent visits in this workspace. Stored URL metadata omits known sensitive parameters.",
+        action("clear-history", "Clear history", "trash"),
+      ) +
+      `<div class="activity-list">${
+        (state.history || [])
+          .filter((r) => r.workspaceId === ws().id)
+          .slice()
+          .reverse()
+          .map(
+            (r) =>
+              `<button class="compact-record" data-action="open-url" data-url="${esc(r.url)}">${icon("clock")}<span class="record-text"><strong>${esc(r.title)}</strong><small>${esc(host(r.url))} · ${ago(r.visitedAt)}</small></span>${icon("external")}</button>`,
+          )
+          .join("") ||
+        empty(
+          "No visits recorded",
+          "Pages you visit will appear here.",
+          "clock",
+        )
+      }</div>`;
+  else if (section === "bookmarks")
+    html =
+      heading(
+        "Bookmarks",
+        "Useful live pages, saved with this project.",
+        action("bookmark-page", "Bookmark current page", "bookmark"),
+      ) +
+      `<div class="record-grid">${
+        records("materials")
+          .filter((r) => r.kind === "website" && r.pinned)
+          .map((r) => recordCard("materials", r))
+          .join("") ||
+        empty(
+          "Keep a useful page handy",
+          "Bookmarks also appear as pinned website materials.",
+          "bookmark",
+        )
+      }</div>`;
+  else if (section === "privacy") html = privacyView();
+  else if (section === "settings") html = settingsView();
+  else if (section === "downloads")
+    html =
+      heading(
+        "Downloads",
+        "Files saved by this browser. Downloaded files are never opened automatically.",
+      ) + '<div id="download-list"></div>';
+  $("content").innerHTML = `<div class="page-wrap">${html}</div>`;
+  if (section === "downloads") loadDownloads();
+  const search = $("collection-search");
+  if (search) {
+    search.value = filter;
+    search.oninput = () => {
+      filter = search.value;
+      renderCards();
+    };
+  }
+  const select = $("task-filter");
+  if (select) {
+    select.value = taskFilter;
+    select.onchange = () => {
+      taskFilter = select.value;
+      renderCards();
+    };
+  }
+  layout();
+}
+function collectionView(kind) {
+  const subtitles = {
+    materials: "The links, notes, and files that give your project a home.",
+    context: "Keep facts, questions, and decisions in view.",
+    tasks: "A clear next step. A durable place to pick things up.",
+    conversations: "Your thinking, saved with the project.",
+    workflows: "Reusable instructions and review points for repeatable work.",
+  };
+  const label = {
+    materials: "Add material",
+    context: "Add context",
+    tasks: "New task",
+    conversations: "New conversation",
+    workflows: "New workflow",
+  };
+  return (
+    heading(
+      names[kind],
+      subtitles[kind],
+      action(
+        "new-record",
+        label[kind],
+        "plus",
+        `data-kind="${kind}"`,
+        "primary",
+      ),
+    ) +
+    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting">Waiting for you</option><option value="paused">Paused</option><option value="completed">Completed</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
+  );
+}
+function cards(kind) {
+  const list = records(kind)
+    .filter(
+      (r) =>
+        (!filter ||
+          JSON.stringify(r).toLowerCase().includes(filter.toLowerCase())) &&
+        (!taskFilter || kind !== "tasks" || r.status === taskFilter),
+    )
+    .slice()
+    .reverse();
+  if (!list.length)
+    return empty(
+      filter ? "No matches found" : `Your ${kind} start here`,
+      filter
+        ? "Try another search."
+        : `Add your first ${kind === "materials" ? "note, link, or file" : kind === "context" ? "project fact or question" : kind === "tasks" ? "next step" : kind === "workflows" ? "reusable checklist" : "conversation"} to this workspace.`,
+      sectionIcon[kind] || "workflow",
+    );
+  return `<div class="record-grid">${list.map((r) => recordCard(kind, r)).join("")}</div>`;
+}
+function renderCards() {
+  if ($("record-cards")) $("record-cards").innerHTML = cards(section);
+}
+function recordCard(kind, r) {
+  let tag = r.kind || r.category || r.status || "Conversation";
+  if (kind === "workflows") tag = `${r.steps.length} steps`;
+  return `<article class="record-card"><div class="card-top"><span class="tag ${r.status === "completed" ? "sage" : r.status === "waiting" ? "clay" : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${kind === "tasks" ? action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "") : ""}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", "Create tasks", "tasks", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}</div></article>`;
+}
+function artifactCard(r) {
+  const version = r.versions?.at(-1);
+  return `<article class="record-card"><div class="card-top"><span class="tag sage">Saved capture</span><span class="muted">v${r.versions?.length || 1}</span></div><div class="empty-icon icon">${icon("artifacts")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.note || "An offline reference saved to this workspace.", 100))}</p><div class="record-meta">${esc(host(version?.url || version?.sourceUrl || r.url))} · ${date(version?.createdAt || r.createdAt)}</div><div class="inline-actions">${action("view-artifact", "View capture", "artifacts", `data-id="${esc(r.id)}"`)}${action("recapture", "New version", "reload", `data-id="${esc(r.id)}"`)}</div></article>`;
+}
+function tabTable() {
+  return `<table class="tabs-table"><thead><tr><th>PAGE</th><th>CONTROL</th><th>ACTIONS</th></tr></thead><tbody>${visibleTabs()
+    .map(
+      (t) =>
+        `<tr><td>${esc(displayTitle(t))}<small>${esc(short(t.url, 70))}</small></td><td>${esc(t.controller || "available")}<small>Version ${t.version || 1}</small></td><td><div class="inline-actions">${action("activate-tab", "Open", "", 'data-id="' + t.id + '"')}${action("pin-tab", t.pinned ? "Unpin" : "Pin", "pin", `data-id="${t.id}"`)}${action("takeover", "Take control", "", 'data-id="' + t.id + '"')}</div></td></tr>`,
+    )
+    .join("")}</tbody></table>`;
+}
+function activityView() {
+  const rows = records("activity").slice().reverse().slice(0, 100);
+  return rows.length
+    ? `<div class="activity-list">${rows.map((r) => `<div class="activity-row"><span class="activity-dot icon">${icon("check")}</span><div><strong>${esc(r.summary || r.action || r.type || "Workspace updated")}</strong><p>${esc(r.actor || "You")}${r.detail ? " · " + esc(typeof r.detail === "string" ? r.detail : JSON.stringify(r.detail)) : ""}</p></div><time>${ago(r.createdAt || r.timestamp)}</time></div>`).join("")}</div>`
+    : empty(
+        "Your project history starts here",
+        "Meaningful changes appear here with their source and time.",
+        "activity",
+      );
+}
+function privacyView() {
+  const rules = (state.siteRules || []).filter(
+    (r) => r.workspaceId === ws().id || r.scope === "global",
+  );
+  return (
+    heading(
+      "Privacy & site rules",
+      "Your browsing boundaries, managed by you.",
+      action(
+        "new-record",
+        "Add site rule",
+        "plus",
+        'data-kind="siteRules"',
+        "primary",
+      ),
+    ) +
+    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents.</div><div class="settings-row"><div><strong>Clear site storage</strong><small>Remove cookies and stored data for a specific site in this workspace.</small></div>${action("clear-storage", "Choose a site", "trash")}</div><div class="settings-section"><h2>Personal site rules</h2><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)}</small><div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests and external application launches are denied. Model chat cannot interact with pages or change your policy. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Credential vault operations, payment approval, malware feeds, and comprehensive storage blocking are not available in this build. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
+  );
+}
+function settingsView() {
+  return (
+    heading("Settings", "Make this space work for you.") +
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
+  );
+}
+async function loadDownloads() {
+  try {
+    const rows = await execute("downloads.list", {}, true);
+    if (!$("download-list")) return;
+    $("download-list").innerHTML = rows.length
+      ? rows
+          .map(
+            (r) =>
+              `<div class="activity-row"><span class="activity-dot icon">${icon("download")}</span><div><strong>${esc(r.filename)}</strong><p>${esc(host(r.url))} · ${esc(r.state)} · ${Math.round(r.receivedBytes / 1024)} KB${r.reason ? " · " + esc(r.reason) : ""} · Not scanned</p></div>${r.state === "blocked" ? action("approve-download", "Allow download", "download", 'data-id="' + r.id + '"') : r.state === "progressing" ? action("cancel-download", "Cancel", "", 'data-id="' + r.id + '"') : ""}</div>`,
+          )
+          .join("")
+      : empty(
+          "Nothing downloaded yet",
+          "Files you download will appear here with their source and status.",
+          "download",
+        );
+  } catch {}
+}
+function layout() {
+  if (!window.weft.layout) return;
+  const box = $("content").getBoundingClientRect();
+  const show =
+    section === "browse" &&
+    !!active() &&
+    !$("dialog").open &&
+    active().url !== "about:blank" &&
+    !active().blocked;
+  return window.weft
+    .layout({
+      x: Math.round(box.x),
+      y: Math.round(box.y),
+      width: Math.floor(box.width),
+      height: Math.floor(box.height),
+      visible: show,
+      ...(splitTabId ? { splitTabId } : {}),
+    })
+    .catch(() => {});
+}
+function navigateSection(next) {
+  section = next;
+  filter = "";
+  taskFilter = "";
+  renderShell();
+  renderContent();
+  $("content").scrollTop = 0;
+}
+function openDialog(title, body, footer = "", wide = false) {
+  const desk = $("command-desk");
+  if (desk?.closest("#dialog")) {
+    desk.hidden = true;
+    document.body.append(desk);
+  }
+  dialogRestore = document.activeElement;
+  $("dialog").classList.toggle("dialog-wide", wide);
+  $("dialog-content").innerHTML =
+    `<div class="dialog-header"><h2>${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div><div class="dialog-body">${body}<div class="form-error" id="form-error" role="alert"></div></div>${footer ? `<div class="dialog-footer">${footer}</div>` : ""}`;
+  if (!$("dialog").open) $("dialog").showModal();
+  layout();
+  setTimeout(
+    () => $("dialog-content").querySelector("input,textarea,select")?.focus(),
+    30,
+  );
+}
+function closeDialog() {
+  const desk = $("command-desk");
+  if (desk && desk.closest("#dialog")) {
+    desk.hidden = true;
+    document.body.append(desk);
+  }
+  $("dialog").close();
+  layout();
+  dialogRestore?.focus();
+}
+function field(label, name, value = "", type = "text", required = false) {
+  return `<label>${esc(label)}<input name="${name}" type="${type}" value="${esc(value)}" ${required ? "required" : ""}></label>`;
+}
+function area(label, name, value = "", required = false) {
+  return `<label>${esc(label)}<textarea name="${name}" ${required ? "required" : ""}>${esc(value)}</textarea></label>`;
+}
+function choice(label, name, options, value) {
+  return `<label>${esc(label)}<select name="${name}">${options
+    .map((o) => {
+      const [v, l] = Array.isArray(o) ? o : [o, o];
+      return `<option value="${esc(v)}" ${v === value ? "selected" : ""}>${esc(l)}</option>`;
+    })
+    .join("")}</select></label>`;
+}
+function formDialog(
+  title,
+  fields,
+  onSave,
+  { save = "Save", extra = "", wide = false } = {},
+) {
+  openDialog(
+    title,
+    `<form id="edit-form">${fields}<button type="submit" hidden></button></form>`,
+    extra +
+      action("close-dialog", "Cancel") +
+      `<button type="submit" form="edit-form" class="primary">${save}</button>`,
+    wide,
+  );
+  $("edit-form").onsubmit = async (e) => {
+    e.preventDefault();
+    const button = $("dialog-content").querySelector("button[form]");
+    button.disabled = true;
+    try {
+      await onSave(Object.fromEntries(new FormData($("edit-form"))));
+      closeDialog();
+      await refresh(true);
+    } catch (error) {
+      if ($("dialog").open && $("form-error"))
+        $("form-error").textContent = errorMessage(error);
+      else toast(errorMessage(error));
+    } finally {
+      button.disabled = false;
+    }
+  };
+}
+function workspaceForm(record) {
+  formDialog(
+    record ? "Edit workspace" : "Create a workspace",
+    field("Workspace name", "name", record?.name || "", "text", true) +
+      area(
+        "What are you working on?",
+        "description",
+        record?.description || "",
+      ) +
+      choice(
+        "Workspace symbol",
+        "icon",
+        ["W", "✦", "○", "□", "△", "✳"],
+        record?.icon || "W",
+      ),
+    async (values) => {
+      if (record)
+        await execute("workspaces.update", { id: record.id, changes: values });
+      else {
+        const created = await execute("workspaces.create", values);
+        await execute("workspaces.switch", { id: created.id });
+        section = "overview";
+      }
+    },
+    { save: record ? "Save changes" : "Create workspace" },
+  );
+}
+function editRecord(kind, id) {
+  const r = id ? (state[kind] || []).find((r) => r.id === id) : null;
+  let fields = "";
+  if (kind === "siteRules") {
+    fields =
+      choice(
+        "Rule status",
+        "enabled",
+        [
+          ["true", "Enabled"],
+          ["false", "Inactive"],
+        ],
+        String(r?.enabled !== false),
+      ) +
+      field(
+        "Domain (for example, example.com)",
+        "hostname",
+        r?.hostname || "",
+        "text",
+        true,
+      ) +
+      choice(
+        "Behavior",
+        "behavior",
+        [
+          ["block", "Block"],
+          ["warn", "Warn"],
+        ],
+        r?.behavior || "block",
+      ) +
+      choice(
+        "Coverage",
+        "mode",
+        [
+          ["navigation", "Visits, redirects, and popups"],
+          ["connection", "All matching browser connections"],
+        ],
+        r?.mode || "navigation",
+      ) +
+      choice(
+        "Scope",
+        "scope",
+        [
+          ["workspace", "This workspace"],
+          ["global", "Every workspace"],
+        ],
+        r?.scope || "workspace",
+      ) +
+      choice(
+        "Subdomains",
+        "includeSubdomains",
+        [
+          ["true", "Include subdomains"],
+          ["false", "Exact hostname only"],
+        ],
+        String(r?.includeSubdomains ?? true),
+      ) +
+      field("Path prefix", "path", r?.path || "/") +
+      field("Reason", "reason", r?.reason || "Personal preference") +
+      area("Note", "note", r?.note || "");
+  } else {
+    fields = field("Title", "title", r?.title || "", "text", true);
+    if (kind === "materials")
+      fields +=
+        choice(
+          "Type",
+          "kind",
+          [
+            ["note", "Note"],
+            ["website", "Website reference"],
+            ["file", "Stored file"],
+            ["linked-file", "File reference (manual notes only)"],
+            ["service", "Service reference (manual notes only)"],
+          ],
+          r?.kind || "note",
+        ) +
+        field("Website URL (optional)", "url", r?.url || "", "url") +
+        area("Notes or content", "content", r?.content || "") +
+        (!r
+          ? '<label class="file-upload">Attach a file (up to 10 MB)<input id="material-file" type="file"></label>'
+          : "") +
+        choice(
+          "Pinned",
+          "pinned",
+          [
+            ["false", "No"],
+            ["true", "Yes"],
+          ],
+          String(r?.pinned || false),
+        );
+    if (kind === "context")
+      fields +=
+        choice(
+          "Category",
+          "category",
+          [
+            ["confirmed", "Confirmed information"],
+            ["findings", "Agent findings"],
+            ["questions", "Open questions"],
+            ["instructions", "Instructions & preferences"],
+            ["decisions", "Decisions"],
+          ],
+          r?.category || "questions",
+        ) +
+        area("Content", "content", r?.content || "", true) +
+        area("Sources (one per line)", "sources", r?.sources?.join("\n") || "");
+    if (kind === "tasks")
+      fields +=
+        area("Objective", "objective", r?.objective || "") +
+        choice(
+          "State",
+          "status",
+          [
+            ["queued", "Queued"],
+            ["running", "Running"],
+            ["waiting", "Waiting for you"],
+            ["paused", "Paused"],
+            ["completed", "Completed"],
+            ["failed", "Failed"],
+            ["cancelled", "Cancelled"],
+          ],
+          r?.status || "queued",
+        ) +
+        field("Assignee", "assignee", r?.assignee || "human") +
+        area("Checkpoint / completed work", "checkpoint", r?.checkpoint || "") +
+        field("Next step", "nextStep", r?.nextStep || "") +
+        field("Blocker", "blocker", r?.blocker || "");
+    if (kind === "workflows")
+      fields +=
+        choice(
+          "Workflow status",
+          "enabled",
+          [
+            ["true", "Enabled"],
+            ["false", "Inactive"],
+          ],
+          String(r?.enabled !== false),
+        ) +
+        area("Description", "description", r?.description || "") +
+        area(
+          "Steps (one instruction per line)",
+          "steps",
+          r?.steps?.map((s) => s.instruction).join("\n") || "",
+          true,
+        ) +
+        area("Expected outputs", "expectedOutputs", r?.expectedOutputs || "");
+  }
+  formDialog(
+    `${r ? "Edit" : "New"} ${kind === "siteRules" ? "site rule" : kind === "materials" ? "material" : kind === "context" ? "context record" : kind === "tasks" ? "task" : kind === "workflows" ? "workflow" : "conversation"}`,
+    fields,
+    async (values) => {
+      if ("url" in values && !values.url) {
+        if (r) values.url = null;
+        else delete values.url;
+      }
+      if ("enabled" in values) values.enabled = values.enabled === "true";
+      if ("pinned" in values) values.pinned = values.pinned === "true";
+      if ("includeSubdomains" in values)
+        values.includeSubdomains = values.includeSubdomains === "true";
+      if (kind === "context")
+        values.sources = values.sources
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      if (kind === "workflows")
+        values.steps = values.steps
+          .split("\n")
+          .filter((s) => s.trim())
+          .map((s, i) => ({
+            title: `Step ${i + 1}`,
+            instruction: s,
+            reviewRequired: true,
+          }));
+      const file = $("material-file")?.files[0];
+      if (file) {
+        if (file.size > 10 * 1024 * 1024)
+          throw new Error("Choose a file smaller than 10 MB.");
+        values.kind = "file";
+        values.filename = file.name;
+        values.mimeType = file.type || "application/octet-stream";
+        values.fileBase64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      }
+      const result = await execute(
+        `${kind}.${r ? "update" : "create"}`,
+        r
+          ? { id: r.id, changes: values, expectedRevision: r.revision }
+          : { workspaceId: ws().id, ...values },
+      );
+      if (kind === "conversations") {
+        conversationId = result.id;
+        openAgent();
+      }
+    },
+    {
+      save: r ? "Save changes" : "Create",
+      extra: r
+        ? action(
+            "delete-record",
+            "Delete",
+            "trash",
+            `data-kind="${kind}" data-id="${esc(r.id)}"`,
+            "secondary danger",
+          )
+        : "",
+    },
+  );
+}
+async function confirmDelete(kind, id) {
+  formDialog(
+    "Delete this item?",
+    `<p>This permanently removes the selected ${kind === "workspaces" ? "workspace and its saved project contents" : "item"}. This cannot be undone.</p>`,
+    async () => {
+      await execute(`${kind}.delete`, { id });
+    },
+    { save: "Delete permanently" },
+  );
+}
+async function workspaceMenu() {
+  openDialog(
+    "Your workspaces",
+    state.workspaces
+      .map(
+        (w) =>
+          `<div class="settings-row"><div><strong>${esc(w.name)}</strong><small>${w.archived ? "Archived" : "Active workspace"} · ${date(w.updatedAt)}</small></div><div class="inline-actions">${action(w.archived ? "restore-workspace" : "switch-workspace", w.archived ? "Restore" : "Open", "", 'data-id="' + esc(w.id) + '"')}${action("edit-workspace", "Edit", "", 'data-id="' + esc(w.id) + '"')}${action("archive-workspace", w.archived ? "Delete" : "Archive", "", 'data-id="' + esc(w.id) + '"')}</div></div>`,
+      )
+      .join("") +
+      `<div class="notice">Duplicating copies project records and saved references. Browser login sessions and model credentials are excluded. Copied rules and workflows stay inactive until reviewed.</div><div class="inline-actions">${action("duplicate-workspace", "Duplicate current", "tabs")}${action("export-workspace", "Export current", "download")}</div>`,
+    action("new-workspace", "New workspace", "plus", "", "primary"),
+    true,
+  );
+}
+async function capture(artifactId) {
+  if (!active() || active().url === "about:blank")
+    throw new Error("Open a web page before saving a capture.");
+  formDialog(
+    artifactId ? "Save a new capture version" : "Save page to workspace",
+    field("Title", "title", displayTitle(active()), "text", true) +
+      area("Why is this useful?", "note", "") +
+      choice(
+        "Capture",
+        "kind",
+        [
+          ["bundle", "Reference bundle · text + screenshot"],
+          ["text", "Readable text"],
+          ["screenshot", "Screenshot"],
+        ],
+        "bundle",
+      ) +
+      "<p>Saved captures are historical references. Review the page for private information before saving it.</p>",
+    async (values) => {
+      closeDialog();
+      section = "browse";
+      renderShell();
+      renderContent();
+      await layout();
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      await execute("artifacts.capture", {
+        ...values,
+        workspaceId: ws().id,
+        tabId: active().id,
+        ...(artifactId ? { artifactId } : {}),
+      });
+      section = "artifacts";
+      toast("Saved to your workspace.");
+    },
+    { save: "Save capture" },
+  );
+}
+async function viewArtifact(id, versionId) {
+  const r = await execute(
+    "artifacts.get",
+    { id, ...(versionId ? { versionId } : {}) },
+    true,
+  );
+  const version = r.version || r.versions?.at(-1) || r;
+  const text = version.text ?? r.text ?? "";
+  const png = version.pngBase64 ?? r.pngBase64;
+  const versions =
+    r.versions || state.artifacts.find((a) => a.id === id)?.versions || [];
+  openDialog(
+    r.title || "Saved capture",
+    `<span class="tag sage">Saved capture · Offline</span><div class="notice">${esc(version.url || version.sourceUrl || "Local capture")}<br>${esc(new Date(version.createdAt || r.createdAt).toLocaleString())}<br>${esc((version.limitations || []).join?.(" ") || version.limitations || "Text and image are captured separately. Dynamic or lazy-loaded content may be incomplete.")}</div>${versions.length > 1 ? `<label>Version<select id="capture-version">${versions.map((v, i) => `<option value="${esc(v.id)}" ${v.id === (version.id || versionId) ? "selected" : ""}>Version ${i + 1} · ${date(v.createdAt)}</option>`).join("")}</select></label>` : ""}${png ? `<img class="artifact-image" src="data:image/png;base64,${esc(png)}" alt="Saved page screenshot">` : ""}<pre class="artifact-text">${esc(text)}</pre>`,
+    action(
+      "delete-record",
+      "Delete all versions",
+      "trash",
+      `data-kind="artifacts" data-id="${esc(id)}"`,
+      "secondary danger",
+    ) + action("close-dialog", "Close"),
+    true,
+  );
+  if ($("capture-version"))
+    $("capture-version").onchange = () =>
+      void viewArtifact(id, $("capture-version").value).catch((e) =>
+        toast(errorMessage(e)),
+      );
+}
+function downloadJson(name, value) {
+  const a = document.createElement("a");
+  a.href =
+    "data:application/json;charset=utf-8," +
+    encodeURIComponent(JSON.stringify(value, null, 2));
+  a.download = name;
+  a.click();
+}
+function importWorkspace() {
+  formDialog(
+    "Import a workspace",
+    '<p>Imported policies and workflows stay inactive until reviewed. Model keys and browser sessions are not imported.</p><label>Workspace export<input id="import-file" type="file" accept="application/json,.json" required></label>',
+    async () => {
+      const f = $("import-file").files[0];
+      if (!f || f.size > 50 * 1024 * 1024)
+        throw new Error("Choose a JSON workspace export under 50 MB.");
+      const result = await execute("workspaces.import", {
+        data: JSON.parse(await f.text()),
+      });
+      toast(
+        "Workspace imported. Review its contents before enabling policies.",
+      );
+      if (result.id) await execute("workspaces.switch", { id: result.id });
+    },
+    { save: "Import as new workspace" },
+  );
+}
+function modelForm(id) {
+  const r = models.find((m) => m.id === id);
+  formDialog(
+    r ? "Configure model connection" : "Add model connection",
+    field("Connection name", "name", r?.name || "", "text", true) +
+      choice(
+        "API format",
+        "provider",
+        [
+          ["openai", "OpenAI-compatible (including local models)"],
+          ["anthropic", "Anthropic"],
+        ],
+        r?.provider || "openai",
+      ) +
+      field(
+        "API base URL",
+        "endpoint",
+        r?.endpoint || "http://localhost:11434/v1",
+        "url",
+        true,
+      ) +
+      field("Model ID", "model", r?.model || "", "text", true) +
+      choice(
+        "Read-only tool capability (OpenAI-compatible only)",
+        "tools",
+        [
+          ["false", "Text only"],
+          ["true", "Enable page reading and workspace search"],
+        ],
+        String(r?.tools || false),
+      ) +
+      field(
+        "API key (optional; encrypted by the OS)",
+        "apiKey",
+        "",
+        "password",
+      ) +
+      field("Or environment variable name", "apiKeyEnv", r?.apiKeyEnv || "") +
+      "<p>Keys are stored separately from project files. Saving a key requires OS secure storage. Local models may not require a key.</p>",
+    async (values) => {
+      values.tools = values.tools === "true";
+      if (!values.apiKey) delete values.apiKey;
+      if (!values.apiKeyEnv) delete values.apiKeyEnv;
+      await execute("models.save", { ...values, ...(r ? { id: r.id } : {}) });
+      await loadModels();
+      if (agentOpen) renderAgent();
+    },
+    {
+      save: "Save connection",
+      extra: r
+        ? action(
+            "delete-model",
+            "Remove connection",
+            "trash",
+            `data-id="${esc(r.id)}"`,
+            "secondary danger",
+          )
+        : "",
+    },
+  );
+}
+async function loadModels() {
+  models = await execute("models.list", {}, true);
+  if (!models.some((m) => m.id === modelId)) modelId = models[0]?.id || "";
+}
+function openAgent() {
+  agentOpen = true;
+  void execute("settings.update", { agentPanelOpen: true }, true).catch(
+    () => {},
+  );
+  $("app").classList.add("agent-open");
+  $("agent-panel").hidden = false;
+  renderShell();
+  renderAgent();
+  layout();
+}
+function closeAgent() {
+  agentOpen = false;
+  void execute("settings.update", { agentPanelOpen: false }, true).catch(
+    () => {},
+  );
+  $("app").classList.remove("agent-open");
+  $("agent-panel").hidden = true;
+  renderShell();
+  layout();
+}
+function renderAgent() {
+  const conversation = records("conversations").find(
+    (c) => c.id === conversationId,
+  );
+  if (!conversation) conversationId = null;
+  $("agent-panel").innerHTML =
+    `<div class="agent-header"><span class="agent-symbol icon">${icon("spark")}</span><div><strong>${esc(conversation?.title || "A thinking partner")}</strong><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
+  updateDestination();
+  renderMessages();
+  $("chat-model").onchange = () => {
+    modelId = $("chat-model").value;
+    updateDestination();
+  };
+  $("chat-form").onsubmit = sendChat;
+}
+function updateDestination() {
+  const m = models.find((m) => m.id === modelId);
+  $("model-destination").textContent = m
+    ? `${m.endpoint} · ${m.capabilities?.tools ? "Read-only tools available (opt-in below)" : "Text only · No automatic page access"}`
+    : "Add a model connection in Settings to start.";
+  if ($("allow-read-tools")) {
+    $("allow-read-tools").disabled = !m?.capabilities?.tools;
+    if (!m?.capabilities?.tools) $("allow-read-tools").checked = false;
+  }
+}
+function renderMessages() {
+  if (!$("chat-messages")) return;
+  const c = records("conversations").find((c) => c.id === conversationId);
+  const messages = c?.messages || [];
+  $("chat-messages").innerHTML = messages.length
+    ? messages
+        .map(
+          (m) =>
+            `<div class="chat-message ${m.role === "user" ? "user" : "assistant"}"><div class="message-author">${esc(m.role === "user" ? "YOU" : m.role === "tool" ? "READ-ONLY TOOL" : m.model || "MODEL")}${m.status && m.status !== "complete" ? " · " + esc(m.status) : ""}</div><div class="message-body">${m.role === "tool" ? `<details><summary>Source and tool result</summary><pre class="tool-result">${esc(m.content)}</pre></details>` : esc(m.content)}</div></div>`,
+        )
+        .join("")
+    : `<div class="chat-welcome"><span class="agent-symbol icon">${icon("spark")}</span><h3>A little help,<br>a fresh perspective.</h3><p>Think through an idea, make a plan, or ask a question. Choose a model above to get started.</p><button data-action="chat-prompt" data-text="Help me turn a project idea into a clear plan.">Help me make a plan ${icon("arrow")}</button><button data-action="chat-prompt" data-text="Help me organize my research. What should I collect first?">Organize my research ${icon("arrow")}</button><button data-action="section" data-section="settings">Configure a model ${icon("settings")}</button></div>`;
+  if (chatBusy)
+    $("chat-messages").innerHTML +=
+      '<p class="muted">Waiting for your model…</p>';
+  $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
+}
+async function sendChat(e) {
+  e.preventDefault();
+  if (chatBusy) return;
+  const input = $("chat-input"),
+    text = input.value.trim();
+  if (!text || !modelId) return;
+  chatBusy = true;
+  $("chat-send").disabled = true;
+  try {
+    if (!conversationId) {
+      const c = await execute(
+        "conversations.create",
+        { title: short(text, 65), workspaceId: ws().id },
+        true,
+      );
+      conversationId = c.id;
+    }
+    const context = $("include-context").checked
+      ? records("context")
+          .slice(0, 12)
+          .map((r) => ({
+            title: `${r.category}: ${r.title}`,
+            content: r.content.slice(0, 100000),
+          }))
+      : [];
+    input.value = "";
+    $("chat-messages").innerHTML +=
+      `<div class="chat-message user"><div class="message-author">YOU</div><div class="message-body">${esc(text)}</div></div><p class="muted" id="chat-waiting">Waiting for your model… ${action("cancel-chat", "Cancel", "", "", "text-button")}</p>`;
+    await execute(
+      "chat.send",
+      {
+        conversationId,
+        modelId,
+        text,
+        context,
+        allowReadTools: $("allow-read-tools").checked,
+        ...($("allow-read-tools").checked &&
+        active() &&
+        active().url !== "about:blank"
+          ? { tabId: active().id }
+          : {}),
+      },
+      true,
+    );
+    await refresh(true);
+  } catch (error) {
+    toast(errorMessage(error));
+    await refresh(true);
+  } finally {
+    chatBusy = false;
+    if ($("chat-send")) $("chat-send").disabled = false;
+    renderMessages();
+  }
+}
+function selectCommand() {
+  const entry = catalog[$("command").value];
+  if (!entry) return;
+  $("description").textContent = entry.description;
+  $("schema").textContent = JSON.stringify(entry.inputSchema, null, 2);
+  const args = {};
+  for (const key of entry.inputSchema.required || []) {
+    const p = entry.inputSchema.properties[key];
+    args[key] =
+      p.type === "integer"
+        ? active()?.id || 1
+        : p.type === "boolean"
+          ? false
+          : p.type === "object"
+            ? {}
+            : p.type === "array"
+              ? []
+              : "";
+  }
+  $("arguments").value = JSON.stringify(args, null, 2);
+}
+function openCommands() {
+  openDialog(
+    "Command desk",
+    '<p>Every action uses the same command catalog as the CLI, REST API, and MCP.</p><div id="command-slot"></div>',
+    "",
+    true,
+  );
+  const desk = $("command-desk");
+  desk.className = "command-panel";
+  desk.hidden = false;
+  $("command-slot").append(desk);
+}
+function palette() {
+  openDialog(
+    "Find anything",
+    '<input id="palette-query" class="palette-input" aria-label="Search workspaces and commands" placeholder="Search your project or choose an action…"><div id="palette-results" class="palette-results"></div>',
+    "",
+    true,
+  );
+  const defaults = [
+    ["new-tab", "Open a new tab", "Ctrl T"],
+    ["new-material", "Add a material", ""],
+    ["new-task", "Create a task", ""],
+    ["ask", "Ask your model", ""],
+    ["capture", "Save current page", ""],
+    ["commands", "Open command desk", ""],
+    ...Object.keys(names)
+      .filter((k) => k !== "browse")
+      .map((k) => ["section", names[k], "", k]),
+  ];
+  const draw = (items) => ($("palette-results").innerHTML = items);
+  $("palette-query").oninput = async () => {
+    const q = $("palette-query").value.trim();
+    const filtered = defaults.filter((x) =>
+      x[1].toLowerCase().includes(q.toLowerCase()),
+    );
+    let html = filtered
+      .map(
+        ([a, l, k, s]) =>
+          `<button class="palette-item" data-action="${a}" ${s ? 'data-section="' + s + '"' : ""}>${icon("arrow")}${l}<small>${k}</small></button>`,
+      )
+      .join("");
+    if (q) {
+      const results = await execute(
+        "search.query",
+        { query: q, workspaceId: ws().id, limit: 20 },
+        true,
+      );
+      const rows = Array.isArray(results) ? results : results.results || [];
+      html += rows
+        .map(
+          (r) =>
+            `<button class="palette-item" data-action="search-result" data-kind="${esc(r.collection || r.type || r.kind)}" data-id="${esc(r.id)}">${icon("file")}${esc(r.title || r.name)}<small>${esc(r.collection || r.type || "")}</small></button>`,
+        )
+        .join("");
+    }
+    if ($("palette-results"))
+      draw(html || '<p class="muted">No matches found.</p>');
+  };
+  $("palette-query").oninput();
+}
+async function openUrl(value) {
+  await refresh(true);
+  let url = value.trim();
+  if (!url) return;
+  if (!/^[a-z][a-z\d+.-]*:/i.test(url)) {
+    url =
+      /\s/.test(url) || (!url.includes(".") && !url.startsWith("localhost"))
+        ? `https://www.google.com/search?q=${encodeURIComponent(url)}`
+        : `https://${url}`;
+  }
+  section = "browse";
+  renderShell();
+  renderContent();
+  try {
+    await execute(active() ? "page.navigate" : "tabs.new", { url });
+  } finally {
+    layout();
+  }
+}
+async function act(button) {
+  const a = button.dataset.action,
+    id = button.dataset.id,
+    kind = button.dataset.kind;
+  if (button.closest?.(".palette-results")) closeDialog();
+  switch (a) {
+    case "blocked-back":
+      await execute("page.back");
+      break;
+    case "allow-once":
+      await execute("page.allowOnce", { tabId: active().id });
+      break;
+    case "section":
+      if ($("dialog").open) closeDialog();
+      navigateSection(button.dataset.section);
+      break;
+    case "new-workspace":
+      workspaceForm();
+      break;
+    case "workspace-menu":
+      await workspaceMenu();
+      break;
+    case "edit-workspace":
+      workspaceForm(state.workspaces.find((w) => w.id === id));
+      break;
+    case "switch-workspace":
+      await execute("workspaces.switch", { id });
+      conversationId = null;
+      splitTabId = null;
+      if ($("dialog").open) closeDialog();
+      navigateSection("overview");
+      if (agentOpen) renderAgent();
+      break;
+    case "archive-workspace":
+      if (state.workspaces.find((w) => w.id === id)?.archived)
+        await confirmDelete("workspaces", id);
+      else {
+        await execute("workspaces.archive", { id });
+        await workspaceMenu();
+      }
+      break;
+    case "restore-workspace":
+      await execute("workspaces.restore", { id });
+      await workspaceMenu();
+      break;
+    case "duplicate-workspace":
+      await execute("workspaces.duplicate", { id: ws().id });
+      await workspaceMenu();
+      break;
+    case "export-workspace":
+      downloadJson(
+        `${ws().name.replace(/[^a-z\d -]/gi, "") || "workspace"}.weft.json`,
+        await execute("workspaces.export", { id: ws().id }),
+      );
+      toast("Workspace export prepared.");
+      break;
+    case "import-workspace":
+      importWorkspace();
+      break;
+    case "new-tab":
+      await execute("tabs.new", {});
+      navigateSection("browse");
+      $("address").focus();
+      break;
+    case "activate-tab":
+      await execute("tabs.activate", { tabId: Number(id) });
+      navigateSection("browse");
+      break;
+    case "close-tab":
+      await execute("tabs.close", { tabId: Number(id) });
+      if (!visibleTabs().length) navigateSection("overview");
+      break;
+    case "pin-tab":
+      await execute("tabs.pin", {
+        tabId: Number(id),
+        pinned: !tabs.find((t) => t.id === Number(id))?.pinned,
+      });
+      break;
+    case "takeover":
+      await execute("tabs.takeover", { tabId: Number(id) });
+      break;
+    case "new-material":
+      editRecord("materials");
+      break;
+    case "new-task":
+      editRecord("tasks");
+      break;
+    case "new-record":
+      editRecord(kind);
+      break;
+    case "edit-record":
+      editRecord(kind, id);
+      break;
+    case "delete-record":
+      await confirmDelete(kind, id);
+      break;
+    case "task-state":
+      await execute("tasks.transition", {
+        id,
+        status: button.dataset.state,
+        cause: "Changed by you in the workspace",
+      });
+      break;
+    case "run-workflow": {
+      const w = records("workflows").find((w) => w.id === id);
+      if (w.enabled === false) {
+        editRecord("workflows", id);
+        toast("Review and enable this imported workflow first.");
+        break;
+      }
+      for (const step of w.steps)
+        await execute("tasks.create", {
+          workspaceId: ws().id,
+          title: short(`${w.title}: ${step.title}`, 239),
+          objective: step.instruction,
+          status: "queued",
+          assignee: "human",
+        });
+      navigateSection("tasks");
+      toast("Workflow steps added as queued tasks.");
+      break;
+    }
+    case "open-url":
+      if ($("dialog").open) closeDialog();
+      await execute("tabs.new", { url: button.dataset.url });
+      navigateSection("browse");
+      break;
+    case "capture":
+      await capture();
+      break;
+    case "recapture":
+      await capture(id);
+      break;
+    case "view-artifact":
+      await viewArtifact(id);
+      break;
+    case "close-dialog":
+      closeDialog();
+      break;
+    case "ask":
+      openAgent();
+      break;
+    case "new-chat":
+      if (chatBusy)
+        throw new Error(
+          "Cancel the current request before starting a new conversation.",
+        );
+      conversationId = null;
+      renderAgent();
+      break;
+    case "close-agent":
+      closeAgent();
+      break;
+    case "open-chat":
+      conversationId = id;
+      openAgent();
+      break;
+    case "chat-prompt":
+      $("chat-input").value = button.dataset.text;
+      $("chat-input").focus();
+      break;
+    case "cancel-chat":
+      await execute("chat.cancel", { conversationId }, true);
+      break;
+    case "new-model":
+      modelForm();
+      break;
+    case "edit-model":
+      modelForm(id);
+      break;
+    case "delete-model":
+      await execute("models.delete", { modelId: id });
+      await loadModels();
+      closeDialog();
+      renderContent();
+      break;
+    case "commands":
+      openCommands();
+      break;
+    case "clear-storage":
+      formDialog(
+        "Clear site storage",
+        field(
+          "Site URL",
+          "url",
+          active()?.url !== "about:blank" ? active()?.url || "" : "",
+          "url",
+          true,
+        ) +
+          "<p>This signs you out of the site in this workspace. Server-side account records are not deleted.</p>",
+        async (v) => {
+          await execute("storage.clear", { url: v.url, workspaceId: ws().id });
+        },
+        { save: "Clear site data" },
+      );
+      break;
+    case "approve-download":
+      await execute("downloads.approve", { downloadId: Number(id) });
+      await loadDownloads();
+      break;
+    case "clear-history":
+      formDialog(
+        "Clear browsing history?",
+        "<p>This removes recorded visits in this workspace. Saved materials and captures remain.</p>",
+        async () => {
+          await execute("history.clear", { workspaceId: ws().id });
+        },
+        { save: "Clear history" },
+      );
+      break;
+    case "bookmark-page":
+      if (!active() || active().url === "about:blank")
+        throw new Error("Open a page before bookmarking it.");
+      await execute("bookmarks.create", {
+        workspaceId: ws().id,
+        title: displayTitle(active()).slice(0, 240),
+        url: active().url,
+      });
+      toast("Bookmark saved.");
+      break;
+    case "emergency-stop":
+      await execute("browser.emergencyStop", {});
+      toast(
+        "Agent control revoked. Loading, downloads, and model requests stopped.",
+      );
+      break;
+    case "cancel-download":
+      await execute("downloads.cancel", { downloadId: Number(id) });
+      await loadDownloads();
+      break;
+    case "search-result":
+      if (kind === "artifacts") await viewArtifact(id);
+      else if (kind === "workspaces") {
+        await execute("workspaces.switch", { id });
+        navigateSection("overview");
+      } else if (state[kind]) editRecord(kind, id);
+      break;
+    case "download-file": {
+      const r = await execute("materials.get", { id }, true);
+      if (!r.fileBase64)
+        throw new Error("Stored file bytes were not returned.");
+      const link = document.createElement("a");
+      link.href = `data:${r.mimeType || "application/octet-stream"};base64,${r.fileBase64}`;
+      link.download = r.filename || r.title;
+      link.click();
+      break;
+    }
+    case "find-page":
+      formDialog(
+        "Find in page",
+        field("Text to find", "text", "", "text", true),
+        async (v) => {
+          await execute("page.find", v);
+        },
+        { save: "Find" },
+      );
+      break;
+    case "zoom-page":
+      await execute("page.zoom", { factor: Number(button.dataset.factor) });
+      break;
+    case "duplicate-tab":
+      await execute("tabs.duplicate", { tabId: active().id });
+      closeDialog();
+      navigateSection("browse");
+      break;
+    case "save-pdf":
+      showResult(await execute("page.pdf"));
+      openCommands();
+      break;
+    case "show-tabs":
+      closeDialog();
+      navigateSection("tabs");
+      break;
+    case "move-tab":
+      formDialog(
+        "Move tab to another workspace",
+        choice(
+          "Destination",
+          "workspaceId",
+          state.workspaces
+            .filter((w) => !w.archived && w.id !== ws().id)
+            .map((w) => [w.id, w.name]),
+          "",
+        ) +
+          "<p>The page reloads in a separate storage container. Login state is not transferred.</p>",
+        async (values) => {
+          await execute("tabs.move", { tabId: active().id, ...values });
+        },
+        { save: "Move tab" },
+      );
+      break;
+  }
+}
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action]");
+  if (button) void act(button).catch((e) => toast(errorMessage(e)));
+});
+document.addEventListener("change", (event) => {
+  if (event.target.id === "theme-select")
+    void execute("settings.update", { theme: event.target.value }).catch(
+      () => {},
+    );
+});
+$("dialog").addEventListener("cancel", (event) => {
   event.preventDefault();
-  let url = $('address').value.trim();
-  if (!/^[a-z][a-z\d+.-]*:/i.test(url)) url = `https://${url}`;
-  void execute(activeTab ? 'page.navigate' : 'tabs.new', { url }).catch(() => {});
+  closeDialog();
+});
+$("dialog").addEventListener("click", (event) => {
+  if (event.target === $("dialog")) {
+    const r = $("dialog").getBoundingClientRect();
+    if (
+      event.clientX < r.left ||
+      event.clientX > r.right ||
+      event.clientY < r.top ||
+      event.clientY > r.bottom
+    )
+      closeDialog();
+  }
+});
+for (const [id, name] of Object.entries({
+  back: "back",
+  forward: "arrow",
+  reload: "reload",
+  stop: "stop",
+  "site-controls": "shield",
+  "save-page": "bookmark",
+  "split-view": "split",
+  "page-more": "more",
+  "toggle-sidebar": "sidebar",
+  "command-button": "terminal",
+  "settings-button": "settings",
+}))
+  $(id).innerHTML = icon(name);
+$("downloads-button").innerHTML = icon("download") + "Downloads";
+$("privacy-button").innerHTML = icon("shield") + "Privacy & site rules";
+document.querySelector(".search-icon").innerHTML = icon("search");
+$("home").onclick = () => navigateSection("overview");
+$("workspace-heading").onclick = () => void workspaceMenu();
+$("add-workspace").onclick = () => workspaceForm();
+$("new-tab").onclick = () =>
+  void act({ dataset: { action: "new-tab" } }).catch(() => {});
+$("search-button").onclick = palette;
+$("command-button").onclick = openCommands;
+$("agent-toggle").onclick = () => (agentOpen ? closeAgent() : openAgent());
+$("settings-button").onclick = () => navigateSection("settings");
+$("downloads-button").onclick = () => navigateSection("downloads");
+$("privacy-button").onclick = () => navigateSection("privacy");
+$("site-controls").onclick = () => {
+  navigateSection("privacy");
 };
-
+$("save-page").onclick = () =>
+  void capture().catch((e) => toast(errorMessage(e)));
+$("theme-toggle").onclick = () =>
+  void execute("settings.update", {
+    theme: document.documentElement.dataset.theme === "dark" ? "light" : "dark",
+  }).catch(() => {});
+$("toggle-sidebar").onclick = () => {
+  $("app").classList.toggle("sidebar-collapsed");
+  void execute(
+    "settings.update",
+    { sidebarCollapsed: $("app").classList.contains("sidebar-collapsed") },
+    true,
+  ).catch(() => {});
+  layout();
+};
+$("split-view").onclick = () => {
+  const other = visibleTabs().find((t) => t.id !== active()?.id);
+  if (!other) return toast("Open a second tab to use split view.");
+  splitTabId = splitTabId ? null : other.id;
+  navigateSection("browse");
+};
+$("page-more").onclick = () =>
+  openDialog(
+    "Page tools",
+    `<div class="inline-actions">${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
+  );
+for (const name of ["back", "forward", "reload", "stop"])
+  $(name).onclick = () => void execute(`page.${name}`).catch(() => {});
+$("navigation").onsubmit = (e) => {
+  e.preventDefault();
+  void openUrl($("address").value).catch(() => {});
+};
+$("command").onchange = selectCommand;
+$("run").onclick = async () => {
+  try {
+    await execute($("command").value, JSON.parse($("arguments").value));
+  } catch (e) {
+    $("status").textContent = errorMessage(e);
+  }
+};
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+    const key = e.key.toLowerCase();
+    if (["k", "l", "t", "w", "f", "j"].includes(key)) e.preventDefault();
+    if (key === "k") palette();
+    if (key === "l") {
+      $("address").focus();
+      $("address").select();
+    }
+    if (key === "t") void act({ dataset: { action: "new-tab" } });
+    if (key === "w" && active())
+      void act({ dataset: { action: "close-tab", id: active().id } });
+    if (key === "f") void act({ dataset: { action: "find-page" } });
+    if (key === "j") navigateSection("downloads");
+  }
+});
+new ResizeObserver(layout).observe($("content"));
+window.addEventListener("resize", layout);
 try {
   catalog = await window.weft.commands();
   for (const name of Object.keys(catalog)) {
-    const option = document.createElement('option');
+    const option = document.createElement("option");
     option.value = option.textContent = name;
-    $('command').append(option);
+    $("command").append(option);
   }
   selectCommand();
-  await refreshTabs();
-  setInterval(() => void refreshTabs().catch(() => {}), 1000);
+  await loadModels();
+  await refresh(true);
+  $("app").classList.toggle(
+    "sidebar-collapsed",
+    !!state.settings.sidebarCollapsed,
+  );
+  if (state.settings.agentPanelOpen) openAgent();
+  setInterval(() => void refresh().catch(() => {}), 1500);
+  $("status").textContent = "Ready";
 } catch (error) {
-  $('status').textContent = `Startup error: ${error.message}`;
+  $("status").textContent = `Startup error: ${errorMessage(error)}`;
+  toast(errorMessage(error));
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
+import { once, EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
@@ -12,11 +12,12 @@ import { createApiServer } from '../src/server.js';
 import { createClient } from '../src/client.js';
 import { createMcpServer } from '../src/mcp.js';
 
-async function fixture(t) {
+async function fixture(t, options = {}) {
   const calls = [];
   const token = randomBytes(32).toString('hex');
   const server = createApiServer({
     token,
+    subscribe: options.subscribe,
     execute: async (command, args) => {
       calls.push({ command, args });
       if (command === 'page.title') throw new Error('No active tab');
@@ -159,4 +160,73 @@ test('MCP stdio entry point performs a real protocol handshake without stdout no
   assert.equal((await client.listTools()).tools.length, Object.keys(commands).length);
   const response = await client.callTool({ name: 'tabs_list', arguments: {} });
   assert.deepEqual(JSON.parse(response.content[0].text), { command: 'tabs.list', args: {} });
+});
+
+test('generated OpenAPI describes every canonical command and requires authorization', async t => {
+  const { url, headers } = await fixture(t);
+  assert.equal((await fetch(`${url}/v1/openapi.json`)).status, 401);
+  assert.equal((await fetch(`${url}/v1/openapi.json`, { headers: { ...headers, origin: 'https://website.test' } })).status, 403);
+  const response = await fetch(`${url}/v1/openapi.json`, { headers });
+  assert.equal(response.status, 200);
+  const document = await response.json();
+  assert.equal(document.openapi, '3.1.0');
+  assert.equal(document.components.securitySchemes.localBearer.scheme, 'bearer');
+  assert.deepEqual(document.security, [{ localBearer: [] }]);
+  const variants = document.paths['/v1/execute'].post.requestBody.content['application/json'].schema.oneOf;
+  assert.equal(variants.length, Object.keys(commands).length);
+  for (const variant of variants) {
+    const name = variant.properties.command.const;
+    const { $schema, ...expected } = commands[name].inputSchema;
+    assert.deepEqual(document.components.schemas[name], expected);
+    assert.equal(variant.properties.args.$ref, `#/components/schemas/${name}`);
+  }
+  assert.ok(variants.find(item => item.properties.command.const === 'page.navigate').required.includes('args'));
+  assert.ok(!variants.find(item => item.properties.command.const === 'tabs.list').required.includes('args'));
+  assert.ok(document.paths['/v1/events'].get.responses[200].content['text/event-stream']);
+});
+
+test('SSE authenticates, strips content and secrets, and unsubscribes disconnected clients', { timeout: 5000 }, async t => {
+  const events = new EventEmitter();
+  let removed;
+  const removedPromise = new Promise(resolve => { removed = resolve; });
+  const { url, headers } = await fixture(t, { subscribe: listener => {
+    events.on('event', listener);
+    return () => { events.off('event', listener); removed(); };
+  } });
+  assert.equal((await fetch(`${url}/v1/events`)).status, 401);
+  assert.equal((await fetch(`${url}/v1/events`, { headers: { ...headers, 'sec-fetch-site': 'same-origin' } })).status, 403);
+  const response = await fetch(`${url}/v1/events`, { headers });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/event-stream/);
+  const reader = response.body.getReader();
+  assert.match(new TextDecoder().decode((await reader.read()).value), /connected/);
+  assert.equal(events.listenerCount('event'), 1);
+  events.emit('event', { type: 'command', command: 'page.fill', actor: 'human', status: 'success', tabId: 7, version: 4, workspaceId: 'ws_12345678-1234-1234-1234-123456789abc', args: { value: 'secret-input' }, url: 'https://example.com/?token=secret', result: 'private transcript', error: 'provider key', title: 'Private title', targetId: 'secret-token' });
+  const message = new TextDecoder().decode((await reader.read()).value);
+  assert.match(message, /event: weft/);
+  const event = JSON.parse(message.split('data: ')[1].trim());
+  assert.equal(event.command, 'page.fill');
+  assert.equal(event.tabId, 7);
+  assert.equal(event.version, 4);
+  assert.deepEqual(Object.keys(event).sort(), ['actor', 'command', 'createdAt', 'status', 'tabId', 'type', 'version', 'workspaceId']);
+  assert.doesNotMatch(message, /secret|private|Private|provider/);
+  await reader.cancel();
+  await removedPromise;
+  assert.equal(events.listenerCount('event'), 0);
+});
+
+test('standalone API events report successful and failed commands without result payloads', { timeout: 5000 }, async t => {
+  const { url, headers, client } = await fixture(t);
+  const response = await fetch(`${url}/v1/events`, { headers });
+  const reader = response.body.getReader();
+  await reader.read();
+  await client.execute('tabs.new', { url: 'https://example.com/private' });
+  const success = new TextDecoder().decode((await reader.read()).value);
+  assert.match(success, /"status":"success"/);
+  assert.doesNotMatch(success, /example\.com|private/);
+  await assert.rejects(client.execute('page.title'), /No active tab/);
+  const failure = new TextDecoder().decode((await reader.read()).value);
+  assert.match(failure, /"status":"failure"/);
+  assert.doesNotMatch(failure, /No active tab/);
+  await reader.cancel();
 });

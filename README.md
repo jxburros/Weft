@@ -1,111 +1,124 @@
 # Weft
 
-An agent-human handshake browser: a Chromium GUI with the same command catalog
-available through the CLI, authenticated REST API, and MCP.
+A local-first workspace browser for people and their chosen agents. Weft brings
+Chromium tabs, materials, project context, tasks, conversations, and saved page
+captures into persistent workspaces. The GUI, CLI, authenticated REST API, and
+MCP bridge use one validated command catalog.
+
+The interface follows the supplied [visual style guide](Weft-Visual-Style-Guide.md)
+and uses the supplied logo assets, locally bundled Source Sans 3, warm ivory
+surfaces, plum controls, and deliberate light/dark themes.
+
+![Weft workspace overview](artifacts/weft-overview.png)
 
 ## Run
 
-Requires Node.js 22.12+, npm, and a desktop session on Linux, macOS, or Windows.
-Electron supplies Chromium; you do not need a separate Chrome installation.
+Requires **Node.js 22.12+**, npm, and a desktop session. Electron supplies Chromium.
 
 ```sh
 npm ci
-# Choose a strong token and keep it out of source control:
+npm start
+```
+
+The API binds only to `127.0.0.1:9222`. Without `WEFT_TOKEN`, the browser generates
+a random token and prints it to the local terminal. For automation, choose a
+strong token and use it in both processes:
+
+```sh
 export WEFT_TOKEN="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
 npm start
 ```
 
-The browser opens with a tab bar, address bar, navigation controls, and a
-**Command desk**. The desk discovers every command and its input schema from the
-same catalog used by the API and MCP. Results appear alongside the live page;
-screenshots and PDFs can be saved from the desk.
+Set `WEFT_PORT` to change the port. In PowerShell, use `$env:WEFT_TOKEN = ...`.
+A desktop display is required. On headless Linux, `xvfb-run -a npm start` provides
+a virtual display. Normal startup keeps Chromium's sandbox enabled.
 
-The API listens **only on `127.0.0.1:9222`**. Set `WEFT_PORT` before starting to
-choose another port. If `WEFT_TOKEN` is omitted, Weft generates a random token and
-prints it to the local terminal; copy it into the CLI/MCP environment.
-In PowerShell, use `$env:WEFT_TOKEN = ...` instead of `export`.
+## What you can do
 
-Browser storage uses Electron's persistent `weft` partition in the OS application
-data directory; pass `npm start -- --user-data-dir=/absolute/path/to/profile`
-to use a separate profile. Tabs are shared live between humans and agents, but are not
-restored after restart. Downloads are saved under the OS Downloads directory in
-`Weft/`, with unique filenames to prevent overwrites.
+- **Browse:** address/search bar, native Chromium pages, separate workspace
+  sessions, back/forward, reload/stop, pinned/duplicated/moved tabs, split view,
+  find, zoom, browsing history, bookmarks, downloads, and PDF output.
+- **Organize:** create, rename, duplicate, archive, restore, and export workspaces;
+  keep editable notes, website references, and copied files; track confirmed
+  information, findings, questions, instructions, and decisions.
+- **Continue work:** save task objectives, owners, states, blockers, checkpoints,
+  and next steps. Turn reusable workflow instructions into queued human tasks.
+- **Keep evidence:** save readable page text and PNG screenshots as immutable
+  capture versions. Open them offline without executing source HTML or contacting
+  the original site. Capture limitations and source metadata remain visible.
+- **Choose a model:** use OpenAI-compatible cloud/local endpoints or Anthropic;
+  retain conversations across model changes; explicitly include project context.
+  Optional read-only tools can read a selected tab and search its workspace.
+- **Set boundaries:** create personal site rules, block redirects and covered
+  background requests, inspect browser-owned stop pages, allow an exact visit,
+  clear site data, take control of an agent-held tab, and stop agent activity.
+- **Automate externally:** discover the same typed commands through CLI, MCP,
+  or authenticated REST. Tab versions reject stale input after handoff.
 
-## CLI
+The app starts with one empty workspace. Screenshots in this repository show the
+real interface; tests use clearly separate fixture profiles and local websites.
 
-Keep the browser running. In another terminal, use the same `WEFT_TOKEN`:
+## Keyboard controls
+
+| Shortcut | Action |
+| --- | --- |
+| Ctrl/Cmd K | Search project records and actions |
+| Ctrl/Cmd L | Focus the address bar |
+| Ctrl/Cmd T | New tab |
+| Ctrl/Cmd W | Close the current tab |
+| Ctrl/Cmd F | Find in page |
+| Ctrl/Cmd J | Downloads |
+| Escape | Close the current dialog |
+
+Use the top-right **Ask Weft** button for conversations and the command icon for
+the complete command desk. Sidebar controls remain usable without configuring
+any model.
+
+## Model connections
+
+Open **Settings → Model connections**. Configure the exact endpoint and model ID
+supported by your provider. The included entries are editable starting points,
+not a claim that an account, endpoint, or model is available.
+
+OpenAI-compatible API bases normally end in `/v1`; a local Ollama example is
+`http://127.0.0.1:11434/v1`. The Anthropic adapter uses its messages API. An API key
+may be supplied through a named environment variable (`OPENAI_API_KEY` and
+`ANTHROPIC_API_KEY` are initial defaults), or saved using OS-backed Electron
+`safeStorage`. Plaintext key-storage fallbacks are refused. Model keys live in a
+separate file and are excluded from project exports.
+
+The panel shows the destination before sending. Inference happens at that
+endpoint; local connection failures never silently select a cloud provider.
+Text, explicit project context, and enabled read-only tool results may be sent.
+Read-only tools require both an enabled model profile and the message's explicit
+opt-in. They are limited to the selected tab and conversation workspace, allow
+at most five calls, and cannot click, fill forms, change policies, or execute
+arbitrary code. Tool results retain their source and are expandable in chat.
+
+Image input, token streaming, autonomous task execution, and vision fallback are
+not implemented. Errors, cancellation, and unsupported responses are shown as
+such; the application does not manufacture an assistant reply.
+
+## CLI and MCP
+
+Keep the browser running and give the CLI the same token:
 
 ```sh
 node bin/weft.js commands
+node bin/weft.js workspaces.list
 node bin/weft.js tabs.new '{"url":"https://example.com"}'
-node bin/weft.js page.title
-node bin/weft.js page.fill '{"selector":"input[name=q]","value":"hello"}'
-node bin/weft.js page.click '{"selector":"button[type=submit]"}'
-node bin/weft.js page.screenshot '{"fullPage":true}'
+node bin/weft.js page.readable
+node bin/weft.js materials.create '{"title":"Research note","content":"Questions to explore","kind":"note"}'
+node bin/weft.js tasks.create '{"title":"Review the source","objective":"Check the evidence"}'
+node bin/weft.js artifacts.capture '{"kind":"bundle","title":"Source reference"}'
 ```
 
 `npm run cli -- <command> '<JSON arguments>'` is equivalent. `npm link` optionally
-makes the `weft` command available on your PATH. Output is JSON; errors go to
-stderr with a nonzero exit code. Omit `tabId` to target the active tab. CLI and MCP
-use `WEFT_API_URL` (default `http://127.0.0.1:9222`); only loopback HTTP origins are
-accepted and redirects are not followed.
+installs the `weft` command. Output is JSON; errors use stderr and a nonzero exit
+code. Screenshots require a visible tab. Hidden-tab bundles retain readable text
+and report an unavailable image rather than inventing one.
 
-## REST API
-
-Every request requires an `Authorization` header using the `Bearer` scheme and
-the browser token. There are two routes:
-
-* `GET /v1/commands` → `{ "commands": { "<name>": { "description", "inputSchema" } } }`
-* `POST /v1/execute` with `{ "command": "<name>", "args": {} }` → `{ "result": ... }`
-
-```sh
-AUTH_HEADER=$(printf 'Authorization: %s %s' 'Bearer' "$WEFT_TOKEN")
-curl -H "$AUTH_HEADER" http://127.0.0.1:9222/v1/commands
-curl -H "$AUTH_HEADER" \
-  -H 'Content-Type: application/json' \
-  -d '{"command":"tabs.new","args":{"url":"https://example.com"}}' \
-  http://127.0.0.1:9222/v1/execute
-```
-
-Errors have the shape `{ "error": { "message": "..." } }`. Status codes:
-`400` invalid command/arguments/JSON, `401` authentication failure, `403`
-browser-origin request, `404` unknown route, `413` body larger than 1 MiB,
-`415` wrong content type, and `422` browser execution failure.
-Unknown argument fields are rejected, not silently ignored.
-
-### Command catalog
-
-| Commands | Arguments |
-| --- | --- |
-| `browser.info`, `browser.close` | `{}` |
-| `tabs.list` | `{}` |
-| `tabs.new` | optional `url` (defaults to `about:blank`) |
-| `tabs.activate`, `tabs.close` | required positive integer `tabId` |
-| `page.navigate` | required `url`, optional `tabId` |
-| `page.back`, `page.forward`, `page.reload`, `page.stop` | optional `tabId` |
-| `page.title`, `page.content` | optional `tabId` |
-| `page.evaluate` | required JavaScript `expression`, optional `tabId` |
-| `page.click` | required CSS `selector`, optional `tabId` |
-| `page.fill` | required `selector` and string `value`, optional `tabId` |
-| `page.screenshot` | optional `tabId`, `fullPage` |
-| `page.pdf` | optional `tabId` |
-| `cookies.list` | optional HTTP(S) `url` |
-| `cookies.set` | required HTTP(S) `url`, `name`, `value`; optional `secure`, `httpOnly` |
-| `cookies.clear` | `{}` (clears cookies only) |
-| `downloads.list` | `{}` |
-| `downloads.cancel` | required positive integer `downloadId` |
-
-Screenshots and PDFs return `{ "data": "<base64>", "mimeType": "..." }`.
-`page.evaluate` returns a JSON-serializable value (`undefined` becomes `null`);
-non-serializable results fail. `page.fill` supports inputs, textareas, selects,
-and content-editable elements and dispatches input/change events.
-Navigation permits HTTP(S) and `about:blank`, not local files or URLs containing
-credentials. Back/forward/reload initiate navigation; query the page again after
-it has loaded. `downloads.list` tracks this run's downloads only.
-
-## MCP
-
-Start the browser first, then configure an MCP client to launch the stdio bridge:
+For MCP, configure your client:
 
 ```json
 {
@@ -122,43 +135,96 @@ Start the browser first, then configure an MCP client to launch the stdio bridge
 }
 ```
 
-Every command is an MCP tool, with dots replaced by underscores
-(`page.navigate` → `page_navigate`). Input schemas match REST and GUI exactly.
-Screenshots return MCP image content; other results return JSON text. Tool
-execution failures return `isError: true`. The bridge writes only MCP protocol
-messages to stdout. You can also launch it with `npm run mcp --silent`.
+Command dots become underscores (`page.readable` → `page_readable`), and schemas
+are shared. Screenshots use MCP image content. The bridge writes only protocol
+messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
+do not follow redirects.
 
-## Security and scope
+## REST and authority
 
-Treat the token as full control of the browser profile: authorized agents can
-read pages/cookies, execute page JavaScript, initiate downloads, and quit the
-browser. Use a dedicated profile and do not expose the API through a public
-proxy. The API has no CORS support and rejects browser-origin requests.
-Remote pages have no Node.js integration or privileged preload, run sandboxed
-with context isolation, and cannot call the GUI's IPC bridge. Permission
-requests are denied by default. Popups become managed tabs; unsupported
-navigation schemes are blocked.
+Requests require `Authorization: Bearer <token>`:
 
-This is a runnable browser foundation, not a Chrome distribution: it does not
-include Chrome account sync, extensions, a password manager, an installer, or
-automatic application updates. All **implemented browser commands** are exposed
-through all four interfaces. Keep Electron current for Chromium security fixes.
+- `GET /v1/commands` returns descriptions and input schemas.
+- `GET /v1/openapi.json` returns the generated OpenAPI 3.1 contract.
+- `GET /v1/events` streams authenticated command metadata through SSE, without
+  arguments, page content, model messages, credentials, or results.
+- `POST /v1/execute` accepts `{ "command": "...", "args": {} }` and returns
+  `{ "result": ... }` or `{ "error": { "message": "..." } }`.
 
-## Development
+Discovery is the authoritative list of available commands and arguments. Unknown
+fields are rejected. API request bodies are capped at 1 MiB, so large file imports
+should use the GUI. REST rejects browser-origin requests and does not enable CORS.
+
+Human-only policy, configuration, storage-administration, override, and takeover
+commands appear in discovery but reject automation callers. The local token
+otherwise provides broad access to workspace data and browser content. API
+clients share one automation identity; this is not a fine-grained, multi-user
+permission service. Takeovers revoke leases and state versions, but cannot undo
+an external action or arbitrary page script that already executed.
+
+## Persistence and portability
+
+Electron uses its OS application-data directory by default. Use a separate
+profile with:
+
+```sh
+npm start -- --user-data-dir=/absolute/path/to/profile
+```
+
+Project records are stored under `workspace-data/`; Chromium storage uses a
+persistent partition per workspace. Tabs reopen their URLs after restart, without
+restoring arbitrary JavaScript state or unsent form input. Moving a tab opens it
+in the destination workspace's storage container and may change its login state.
+The original foundation's shared `persist:weft` session is not merged into new
+workspace containers.
+
+Exports include versioned project records, copied material bytes, and captures.
+They exclude browser sessions, configured model keys, and global policies.
+Imports create new IDs and leave imported rules/workflows inactive for review.
+Copies use this same behavior. Linked-file/service entries are manual reference
+metadata; their sources are not automatically copied or refreshed.
+
+The project store is a bounded, single-process JSON file written with atomic
+replacement. It is **not encrypted**, and is not a transactional multi-process
+database. Stored materials are limited to 10 MiB, PNGs to 20 MiB, and total
+project state to 100 MiB. Exports are the current manual backup mechanism.
+Free-form content, files, and captures can contain private data; export does not
+perform comprehensive secret or personal-information redaction.
+
+## Implementation coverage
+
+This is a working browser build, **not every requirement in the full product
+specification**. The exact section-by-section and acceptance-criteria assessment
+is in [implementation coverage](docs/IMPLEMENTATION.md).
+
+The largest remaining capabilities are the isolated credential/payment broker,
+fine-grained agent grants and autonomous execution, comprehensive storage
+block/session modes, community subscriptions, extension support, synchronization,
+and signed installers/automatic updates. Provider key storage is not a credential
+broker. The application does not make strong secret-isolation claims against
+agents that can control the host computer.
+
+Remote pages are sandboxed and have no Node integration or privileged preload.
+Unsupported protocols and native launches are blocked; permission requests are
+denied. Site rules cover documented Chromium request paths, not an external
+agent's independent network tools. Unsolicited downloads are cancelled and can be approved from Downloads. Downloads are never executed automatically
+and are not claimed to have been scanned for malware. Keep Electron current for
+Chromium security fixes.
+
+## Development and validation
 
 ```sh
 npm test
+# Include actual Chromium and GUI tests on headless Linux:
+xvfb-run -a npm test
 ```
 
-Tests use Node's built-in test runner. The interface tests exercise validation,
-authentication, REST, the CLI subprocess, and MCP protocol discovery/execution.
-The real Chromium integration test also exercises the GUI, page interaction,
-screenshots/PDFs, cookies, and downloads. On Linux without `DISPLAY` it is
-explicitly skipped; run `xvfb-run -a npm test` to include it. Integration-test
-subprocesses use `--no-sandbox` for CI environments without a configured setuid
-helper; the normal application does not disable the sandbox.
+No bundler or compilation step is needed. Tests cover command validation,
+authentication, REST/CLI/MCP, model HTTP fixtures and tool boundaries, persistence,
+imports/exports, native Chromium isolation and control, and complete GUI workflows
+including a real offline capture. Display tests explicitly skip when no display
+is available. Test subprocesses use `--no-sandbox` only for CI environments without
+a configured sandbox helper; normal application startup does not.
 
-No separate bundler or compilation step is required. On headless Linux, launch
-the GUI under an X server (for example, `xvfb-run -a npm start`); a normal desktop
-launch is recommended for interactive use. Do not disable Chromium's sandbox in
-production.
+The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
+variants are documented in [assets/logo/README.md](assets/logo/README.md).
