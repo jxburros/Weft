@@ -6,6 +6,8 @@ This pass reviewed all 67 issues open at the start. “Completed” describes th
 
 | Issue | Evidence/change |
 | --- | --- |
+| [#12](https://github.com/jxburros/Weft/issues/12) | Streaming replies with cancel/partial/error states and durable originals across model switches; typed attachments (passages, tab snapshots, materials, context, tasks, exact artifact versions) with per-item delivery and exclusion; per-model context-window planning with visible omission (no summarization); locality, provider-reported usage and configured-price estimates in GUI/results; local-outage/no-fallback tests. Fake-provider evidence only; Ask/settings Linux goldens need a reviewed update on the reference platform. |
+| [#13](https://github.com/jxburros/Weft/issues/13) | Per-model image/tool/streaming/context capability records (configured, probed, default) with typed `unsupported_capability`; bounded PNG bytes via OpenAI data URIs, Anthropic image blocks and Ollama images; explicit acknowledged vision fallback with scoped data; capture/version provenance and hashes in manifests; tests for text-only visual requests, unavailable fallback, redacted/inaccessible region metadata and image paths as non-evidence. Region metadata producers belong to capture/redaction work (#15, #17). |
 | [#32](https://github.com/jxburros/Weft/issues/32) | Cross-platform Node CI, Linux Chromium/visual jobs, lockfile installs, syntax checks and retained failure artifacts. |
 | [#35](https://github.com/jxburros/Weft/issues/35) | ADR-002 explicitly retains local-only operation and defers hosted sync/collaboration/remote service with concrete future gates. |
 | [#37](https://github.com/jxburros/Weft/issues/37) | Actionable bounded validation errors, field paths, allowed values, suggestions and shared API error schema. |
@@ -21,6 +23,7 @@ This pass reviewed all 67 issues open at the start. “Completed” describes th
 | [#50](https://github.com/jxburros/Weft/issues/50) | Automation ambiguity rejection, resolved workspace/tab targets and echoed outcomes, scoped record lookup and focus-safe dispatch. |
 | [#51](https://github.com/jxburros/Weft/issues/51) | Cross-process ownership lock, external-change detection, verified temporary writes, file/directory flush and preserved conflicts. |
 | [#52](https://github.com/jxburros/Weft/issues/52) | Versioned migration runner, historical state/export fixtures, original backups and refusal of newer/invalid schemas. |
+| [#53](https://github.com/jxburros/Weft/issues/53) | Turn lifecycle (originating disconnect stops, followers do not; stops keep partials; errors are failed turns; length/timeout continuable), first-token/idle/total deadlines, in-band error frames, one turn-frame schema checked on emit/consume, resumable turn streams and `/v1/events` `Last-Event-ID` replay with bounded retention (ADR-004). |
 | [#55](https://github.com/jxburros/Weft/issues/55) | Bounded readable provider errors with literal and encoded credential redaction, including short keys. |
 | [#56](https://github.com/jxburros/Weft/issues/56) | Recursive secret-field guards, sensitive-term export scan with found/clean/unverifiable outcomes, GUI review. |
 | [#57](https://github.com/jxburros/Weft/issues/57) | Itemized provider disclosure, scoped cloud acknowledgement, local-only restrictions and durable per-turn manifests. |
@@ -47,8 +50,6 @@ Each row states the specific uncompleted requirement and why this pass does not 
 | [#9](https://github.com/jxburros/Weft/issues/9) | Tab serialization/takeover is hardened, but structured handoff requests, review/acceptance and multi-agent task collaboration remain incomplete. |
 | [#10](https://github.com/jxburros/Weft/issues/10) | Workflow records do not execute; parameter binding, permission rechecks and resumable review points require the task runtime. |
 | [#11](https://github.com/jxburros/Weft/issues/11) | No supported headless session inspection/display-handoff lifecycle. Xvfb testing is not a shipped headless product mode. |
-| [#12](https://github.com/jxburros/Weft/issues/12) | Cloud disclosure improved, but token streaming, richer attachment ingestion/context management and complete usage UI remain unfinished. |
-| [#13](https://github.com/jxburros/Weft/issues/13) | Adapters remain text-only; capability negotiation, vision payloads and explicit fallback are not implemented. |
 | [#14](https://github.com/jxburros/Weft/issues/14) | Typed outcomes and clients are complete, but pagination, replayable events, deadline propagation and broader integration contracts remain missing. |
 | [#15](https://github.com/jxburros/Weft/issues/15) | Readable extraction removes obvious sensitive controls; semantic/accessibility snapshots, stable element fingerprints and bounded region capture remain missing. |
 | [#16](https://github.com/jxburros/Weft/issues/16) | Captures remain text/PNG; resource archives and comparison UI need a larger artifact-storage design. |
@@ -73,7 +74,6 @@ Each row states the specific uncompleted requirement and why this pass does not 
 | [#39](https://github.com/jxburros/Weft/issues/39) | Record request IDs, atomic batches and dry runs are not implemented; requires transaction semantics across store mutations and retention. |
 | [#41](https://github.com/jxburros/Weft/issues/41) | Tab version/lease/concurrency checks and secret-field extraction improved; immutable element fingerprints and semantic grounding remain missing. |
 | [#43](https://github.com/jxburros/Weft/issues/43) | Every command is classified and a pure policy evaluator exists; a trusted approval broker/queue and integrated autonomy-level enforcement are not shipped. |
-| [#53](https://github.com/jxburros/Weft/issues/53) | Provider turn manifests improve auditability, but streaming, partial response persistence and resumable event/deadline lifecycle are not implemented. |
 | [#54](https://github.com/jxburros/Weft/issues/54) | No custom Windows installer; packaging, code signing, upgrade/uninstall policy and native installer verification remain unimplemented. |
 | [#58](https://github.com/jxburros/Weft/issues/58) | No durable job executor/uncertain-state recovery; requires remote action identity and reconciliation contracts before safe retry. |
 | [#60](https://github.com/jxburros/Weft/issues/60) | Release/update mechanisms are not implemented; stable-channel trust roots, verified activation, rollback, kill switch and signing pipeline remain open. |

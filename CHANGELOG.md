@@ -16,6 +16,25 @@ alone is not a shipped capability.
 - Centralized design tokens, improved keyboard/dialog behavior, added reviewed
   light/dark GUI goldens and real Chromium/cross-platform Node CI.
 
+- Model replies stream from OpenAI-compatible, Anthropic and Ollama-native
+  endpoints (SSE/NDJSON) to the GUI and to API clients (`Accept:
+  text/event-stream`), with a defined turn lifecycle: stops keep partial replies
+  marked interrupted, length/deadline stops are continuable, runtime and in-band
+  provider errors become failed turns, and first-token/idle/total deadlines apply.
+- `/v1/events` events have ids and replay from `Last-Event-ID` with bounded
+  retention and explicit gaps; `/v1/turns/{turnId}/events` resumes one turn.
+  Event types are a registry for other components.
+- Chat turns accept typed attachments (passages, tab snapshots, materials,
+  context, tasks, exact artifact versions) with item-level review/exclusion,
+  per-model context-window planning that omits oldest history visibly, and show
+  endpoint locality, provider-reported usage and configured-price estimates.
+- Per-model capability records (configured, probed via `models.probe`, or
+  default), typed `unsupported_capability` outcomes (CLI exit 5), bounded PNG
+  image input per API transport, and explicit acknowledged vision fallback with
+  provenance. Image paths are never treated as visual evidence. See ADR-004.
+- Verified only against local fake providers; Linux GUI goldens for the Ask
+  panel and settings need a reviewed update on the reference platform.
+
 - Added canonical agent guidance, a generated skill reference, and a local MCP
   client plugin manifest/configuration. Guidance is available as `guide.get`
   through the shared catalog.

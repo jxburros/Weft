@@ -96,9 +96,19 @@ opt-in. They are limited to the selected tab and conversation workspace, allow
 at most five calls, and cannot click, fill forms, change policies, or execute
 arbitrary code. Tool results retain their source and are expandable in chat.
 
-Image input, token streaming, autonomous task execution, and vision fallback are
-not implemented. Errors, cancellation, and unsupported responses are shown as
-such; the application does not manufacture an assistant reply.
+Replies stream as they are written. **Attach** adds a tab snapshot, materials,
+context, tasks, exact capture versions or a pasted passage; before sending, the
+review lists what the selected model receives item by item, lets you exclude
+items, and shows when older history is omitted to fit the model's context window
+(your saved conversation is never rewritten). Images go only to connections you
+mark or discover (`models.probe`) as image-capable, or to a vision fallback you
+configure, after acknowledgement. Each reply shows endpoint locality,
+provider-reported tokens and, if you set prices, a labeled cost estimate. The
+Ollama native API (`http://127.0.0.1:11434`) is also supported.
+
+Autonomous task execution is not implemented. Errors, cancellation, and
+unsupported responses are shown as such; a stopped reply is kept and marked
+interrupted, and the application does not manufacture an assistant reply.
 
 ## CLI and MCP
 
@@ -151,7 +161,11 @@ Requests require `Authorization: Bearer <token>`:
 - `GET /v1/commands` returns descriptions and input schemas.
 - `GET /v1/openapi.json` returns the generated OpenAPI 3.1 contract.
 - `GET /v1/events` streams authenticated command metadata through SSE, without
-  arguments, page content, model messages, credentials, or results.
+  arguments, page content, model messages, credentials, or results. Reconnect
+  with `Last-Event-ID` to replay recently retained events.
+- `GET /v1/turns/{turnId}/events` follows or resumes one model turn; send
+  `Accept: text/event-stream` to `POST /v1/execute` to stream a turn you start.
+  See [agent integration](docs/AGENT-INTEGRATION.md).
 - `POST /v1/execute` accepts `{ "command": "...", "args": {} }` and returns
   a versioned outcome with `schemaVersion`, `command`, `execution`, `validation`,
   `review`, `workspaceId`, `tabId`, `normalized`, `result` and `error`.
