@@ -42,6 +42,7 @@ async function runSmoke() {
     if (request.url === '/slow-download') {
       response.setHeader('Content-Disposition', 'attachment; filename="fixture.txt"');
       response.setHeader('Content-Length', '10000000');
+      response.setHeader('Content-Type', 'application/octet-stream');
       response.write('first chunk');
       const timer = setInterval(() => response.write('more data'), 100);
       response.on('close', () => clearInterval(timer));
@@ -143,11 +144,15 @@ if (mainSmoke) {
   (async () => {
     await import('../src/main.js');
     await electron.app.whenReady();
+    const fixture = createServer((_request, response) => { response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>GUI fixture</title><main>Visible browser capture</main>'); });
+    await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
+    electron.app.on('before-quit', () => fixture.close());
+    const fixtureUrl = `http://127.0.0.1:${fixture.address().port}`;
     for (let attempt = 0; attempt < 200; attempt++) {
       const window = electron.BrowserWindow.getAllWindows()[0];
       if (window && !window.webContents.isLoading()) {
         const count = await window.webContents.executeJavaScript('document.getElementById("command")?.options.length ?? 0');
-        if (count > 0) {
+        if (count > 0 && await window.webContents.executeJavaScript('document.getElementById("status")?.textContent === "Ready"')) {
           const { commands } = await import('../src/commands.js');
           assert.equal(count, Object.keys(commands).length);
           const preferences = window.webContents.getLastWebPreferences();
@@ -158,12 +163,15 @@ if (mainSmoke) {
           assert.equal(await window.webContents.executeJavaScript('window.weft.execute("page.evaluate", {expression: "typeof process"})'), 'undefined');
           await window.webContents.executeJavaScript('document.getElementById("new-tab").click()');
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("tabs.list")')).length === 2);
+          await until(async () => (await window.webContents.executeJavaScript('document.querySelectorAll("#tabs .tab").length')) === 2);
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
           await window.webContents.executeJavaScript('document.getElementById("address").value = "about:blank"; document.getElementById("navigation").requestSubmit()');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
           await window.webContents.executeJavaScript('document.getElementById("command").value = "browser.info"; document.getElementById("command").dispatchEvent(new Event("change")); document.getElementById("run").click()');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("result").textContent')).includes('chromium'));
           await window.webContents.executeJavaScript('document.querySelector("#tabs .tab.active button:last-child").click()');
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("tabs.list")')).length === 1);
+          await until(async () => (await window.webContents.executeJavaScript('document.querySelectorAll("#tabs .tab").length')) === 1);
           assert.equal(await window.webContents.executeJavaScript('typeof process'), 'undefined');
           await assert.rejects(window.webContents.executeJavaScript('window.weft.execute("tabs.close", {tabId: 0})'));
           await assert.rejects(window.webContents.executeJavaScript('window.weft.execute("page.navigate", {url: "file:///etc/passwd"})'));
@@ -187,12 +195,19 @@ if (mainSmoke) {
             await impostor.loadURL(guiUrl);
             await assert.rejects(impostor.webContents.executeJavaScript('window.weft.commands()'));
             await assert.rejects(impostor.webContents.executeJavaScript('window.weft.execute("tabs.list")'));
+            await assert.rejects(impostor.webContents.executeJavaScript('window.weft.layout({x:0,y:0,width:100,height:100,visible:true})'));
           } finally { impostor.destroy(); }
           await window.loadURL('about:blank');
           await assert.rejects(window.webContents.executeJavaScript('window.weft.commands()'));
           await assert.rejects(window.webContents.executeJavaScript('window.weft.execute("tabs.list")'));
           await window.loadURL(guiUrl);
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("command").options.length')) === Object.keys(commands).length);
+          // Restoring the application opens its workspace overview. Use the actual
+          // browser controls to show a live page before exercising MCP capture.
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready');
+          await window.webContents.executeJavaScript(`document.getElementById('address').value = ${JSON.stringify(fixtureUrl)}; document.getElementById('navigation').requestSubmit()`);
+          await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("page.title")')) === 'GUI fixture');
+          await until(() => window.contentView.children.length > 0);
           console.log('WEFT_GUI_SMOKE_OK');
           if (process.argv.includes('--weft-close-gui')) window.close();
           return;

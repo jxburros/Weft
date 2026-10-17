@@ -1,40 +1,195 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>Weft</title>
-  <link rel="stylesheet" href="./gui.css">
-  <script type="module" src="./gui.js"></script>
-</head>
-<body>
-  <header>
-    <div class="tabbar"><strong>WEFT</strong><div id="tabs" aria-label="Browser tabs"></div><button id="new-tab" title="New tab">＋</button></div>
-    <form id="navigation">
-      <button type="button" id="back" title="Back">←</button>
-      <button type="button" id="forward" title="Forward">→</button>
-      <button type="button" id="reload" title="Reload">↻</button>
-      <button type="button" id="stop" title="Stop loading">■</button>
-      <input id="address" aria-label="Website URL" placeholder="https://example.com" autocomplete="off">
-      <button type="submit">Go</button>
-    </form>
-  </header>
-  <main><p>Open a tab to start browsing.</p></main>
-  <aside>
-    <h1>Command desk</h1>
-    <p class="muted">The same browser. Every command. Human or agent.</p>
-    <label for="command">Command</label>
-    <select id="command"></select>
-    <p id="description"></p>
-    <details><summary>Input schema</summary><pre id="schema"></pre></details>
-    <label for="arguments">Arguments (JSON)</label>
-    <textarea id="arguments" spellcheck="false" rows="8">{}</textarea>
-    <button id="run">Run command</button>
-    <p id="status" role="status">Ready</p>
-    <h2>Result</h2>
-    <div id="artifact"></div>
-    <pre id="result" tabindex="0"></pre>
-  </aside>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Weft — Your work, woven together</title>
+    <link rel="icon" href="../assets/logo/icons/favicon.ico" />
+    <link rel="stylesheet" href="./gui.css" />
+    <script type="module" src="./gui.js"></script>
+  </head>
+  <body>
+    <div class="app" id="app">
+      <nav class="workspace-rail" aria-label="Workspaces">
+        <button class="brand-mark" id="home" title="Workspace overview">
+          <img src="../assets/logo/svg/mark-full-color.svg" alt="Weft" />
+        </button>
+        <div class="rail-line"></div>
+        <div id="workspace-buttons"></div>
+        <button
+          class="rail-button add-workspace"
+          id="add-workspace"
+          aria-label="Create workspace"
+        >
+          +
+        </button>
+        <div class="rail-bottom">
+          <button
+            class="rail-button"
+            id="theme-toggle"
+            aria-label="Toggle color theme"
+          ></button
+          ><button
+            class="rail-button"
+            id="settings-button"
+            aria-label="Settings"
+          ></button>
+          <div class="user-avatar" title="Local profile">You</div>
+        </div>
+      </nav>
+      <aside class="workspace-sidebar" id="sidebar">
+        <div class="wordmark">
+          <img
+            src="../assets/logo/svg/horizontal-full-color.svg"
+            alt="Weft"
+          /><span>YOUR PROJECT SPACE</span>
+        </div>
+        <button id="workspace-heading" class="workspace-heading">
+          <span
+            ><small>WORKSPACE</small
+            ><strong id="workspace-name">My workspace</strong></span
+          ><span>⌄</span>
+        </button>
+        <button id="search-button" class="search-button">
+          <span class="search-icon"></span><span>Find anything</span
+          ><kbd>Ctrl K</kbd>
+        </button>
+        <nav id="sections" aria-label="Workspace sections"></nav>
+        <div class="sidebar-divider"></div>
+        <div class="sidebar-label">
+          <span>OPEN TABS</span
+          ><button
+            id="new-tab"
+            class="icon-button"
+            aria-label="New tab"
+            title="New tab · Ctrl T"
+          >
+            +
+          </button>
+        </div>
+        <div id="tabs" aria-label="Browser tabs"></div>
+        <div class="sidebar-bottom">
+          <button id="downloads-button"></button
+          ><button id="privacy-button"></button>
+          <div class="local-note">
+            <span class="status-dot"></span>Saved on this device
+          </div>
+        </div>
+      </aside>
+      <div class="workspace-main">
+        <header class="topbar">
+          <button
+            class="icon-button"
+            id="toggle-sidebar"
+            aria-label="Toggle sidebar"
+          ></button>
+          <div class="breadcrumb">
+            <span id="breadcrumb-workspace">My workspace</span
+            ><span class="crumb-slash">/</span
+            ><strong id="breadcrumb-section">Overview</strong>
+          </div>
+          <div class="topbar-actions">
+            <button
+              class="icon-button"
+              id="command-button"
+              aria-label="Command desk"
+              title="Command desk"
+            ></button
+            ><button class="agent-toggle" id="agent-toggle"></button>
+          </div>
+        </header>
+        <form id="navigation" class="navigation">
+          <button
+            type="button"
+            id="back"
+            class="icon-button"
+            aria-label="Back"
+          ></button
+          ><button
+            type="button"
+            id="forward"
+            class="icon-button"
+            aria-label="Forward"
+          ></button
+          ><button
+            type="button"
+            id="reload"
+            class="icon-button"
+            aria-label="Reload"
+          ></button
+          ><button
+            type="button"
+            id="stop"
+            class="icon-button"
+            aria-label="Stop loading"
+          ></button>
+          <div class="address-field">
+            <button
+              type="button"
+              id="site-controls"
+              aria-label="Site controls"
+            ></button
+            ><input
+              id="address"
+              aria-label="Website URL or search"
+              placeholder="Search the web or enter a URL"
+              autocomplete="off"
+              spellcheck="false"
+            /><kbd>Ctrl L</kbd>
+          </div>
+          <button
+            type="button"
+            id="save-page"
+            class="icon-button"
+            aria-label="Save page to workspace"
+            title="Save page to workspace"
+          ></button
+          ><button
+            type="button"
+            id="split-view"
+            class="icon-button"
+            aria-label="Split view"
+            title="Split view"
+          ></button
+          ><button
+            type="button"
+            id="page-more"
+            class="icon-button"
+            aria-label="Page tools"
+          ></button>
+        </form>
+        <div class="work-area">
+          <main id="content" tabindex="-1"></main>
+          <aside
+            id="agent-panel"
+            class="agent-panel"
+            aria-label="Agent conversation"
+            hidden
+          ></aside>
+        </div>
+        <footer class="statusbar">
+          <span id="status" role="status">Ready</span
+          ><span id="ownership">You are in control</span
+          ><span class="status-spacer"></span
+          ><span id="item-count">Local workspace</span
+          ><span class="status-dot"></span>
+        </footer>
+      </div>
+    </div>
+    <dialog id="dialog"><div id="dialog-content"></div></dialog>
+    <div id="toast" role="status" hidden></div>
+    <section id="command-desk" hidden>
+      <select id="command"></select>
+      <p id="description"></p>
+      <pre id="schema"></pre>
+      <textarea id="arguments">{}</textarea
+      ><button id="run">Run command</button>
+      <div id="artifact"></div>
+      <pre id="result"></pre>
+    </section>
+  </body>
 </html>
