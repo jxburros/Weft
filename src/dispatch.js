@@ -329,6 +329,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     let timer;
     const expired = new Promise(resolve => { timer = setTimeout(() => resolve(DEADLINE), deadlineMs); timer.unref?.(); });
     const running = work();
+    // The concurrency slot follows the work, not the reply: a timed-out command keeps its slot until it settles.
+    state.running = running;
     const first = await Promise.race([running, expired]);
     clearTimeout(timer);
     if (first !== DEADLINE) {
@@ -337,6 +339,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       return first;
     }
     const started = state.started === true;
+    state.overdue = true;
     context.abortForDeadline();
     let settled = null;
     if (started) {
@@ -378,7 +381,11 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         context.signal = controller.signal;
         context.abortForDeadline = () => controller.abort(Object.assign(new Error('Request deadline exceeded'), { code: 'deadline_exceeded' }));
         try { outcome = await withDeadline(deadlineMs, context, state, () => executeOutcome((command, validated) => { state.command = command; return run(command, validated, context, target, state); }, name, input)); }
-        finally { state.release?.(); }
+        finally {
+          // deadline_exceeded is returned promptly, but a command still running after its deadline keeps its slot until it settles.
+          const release = state.release;
+          if (release && state.overdue) { release.overdue?.(); state.running.then(release, release); } else release?.();
+        }
       }
     } else {
       try { outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input); }

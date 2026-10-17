@@ -125,7 +125,7 @@ export class ApprovalQueue {
     const now = this.clock();
     const item = { id: `appr_${randomUUID()}`, status: 'pending', fingerprint, actor, clientId: clientId ?? null, command, actionClass, categories: categories ?? [], level: level ?? null,
       workspaceId: workspaceId ?? null, tabId: tabId ?? null, taskId: taskId ?? null, destinationOrigin: origin(destination), destination: destination ? minimizeUrl(destination) : null,
-      reason, summary: summarizeArgs(args), preview: shown ?? { ...preview(args), ...(previewExtra ?? {}) }, createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null, ...(onceOnly && { onceOnly: true }) };
+      reason, summary: summarizeArgs(args, command), preview: shown ?? { ...preview(args), ...(previewExtra ?? {}) }, createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null, ...(onceOnly && { onceOnly: true }) };
     this.items.push(item);
     this.save();
     this.onChange();

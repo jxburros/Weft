@@ -71,9 +71,13 @@ export class ResourceScheduler {
     check('client', limits.maxPerClient, all.filter(item => item.clientKey === clientKey).length);
     if (context.taskId) check('task', limits.maxPerTask, all.filter(item => item.taskId === context.taskId).length);
     const token = Symbol(command);
-    this.active.set(token, { clientKey, taskId: context.taskId ?? null, command, actor: String(context.actor).slice(0, 64), startedAt: this.clock() });
+    const entry = { clientKey, taskId: context.taskId ?? null, command, actor: String(context.actor).slice(0, 64), startedAt: this.clock(), afterDeadline: false };
+    this.active.set(token, entry);
     let released = false;
-    return () => { if (!released) { released = true; this.active.delete(token); } };
+    const release = () => { if (!released) { released = true; this.active.delete(token); } };
+    // A command whose deadline passed while it still runs keeps its slot until it settles; status shows it as such.
+    release.overdue = () => { entry.afterDeadline = true; };
+    return release;
   }
 
   isCapture(command) { return CAPTURE_COMMANDS.has(command); }
@@ -159,7 +163,7 @@ export class ResourceScheduler {
     const all = [...this.active.values()];
     const visible = job => !context.workspaceIds || context.workspaceIds.includes(job.workspaceId);
     return { limits: this.limits(),
-      agentCommands: { running: all.length, byCommand: Object.entries(all.reduce((acc, item) => ({ ...acc, [item.command]: (acc[item.command] ?? 0) + 1 }), {})).map(([command, count]) => ({ command, count })) },
+      agentCommands: { running: all.length, afterDeadline: all.filter(item => item.afterDeadline).length, byCommand: Object.entries(all.reduce((acc, item) => ({ ...acc, [item.command]: (acc[item.command] ?? 0) + 1 }), {})).map(([command, count]) => ({ command, count })) },
       captures: { running: this.running, queued: this.queue.length, jobs: this.list(context.workspaceIds ? { workspaceIds: context.workspaceIds } : {}).filter(visible).slice(0, 50) } };
   }
 }
