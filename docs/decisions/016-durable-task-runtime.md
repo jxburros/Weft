@@ -104,7 +104,10 @@ Payment work (#7) plugs in without changing the runtime: a payment command is
 classified `payment` (once-only approval per use, `external` effect), so it is
 recorded `attempted` before dispatch and becomes `uncertain` on interruption; a
 payment module registers a reconciler for its command or operation kind that
-queries the provider's transaction status by the operation id it stored. The
+queries the provider's transaction status by the operation id it stored. ADR 019
+implements this: `payments.submit` steps use the payment reconciler
+(virtual-card transaction lookup, otherwise a person decides), and
+determinations recorded on the task operation apply to the payment record. The
 credential broker (#6, ADR 017) is wired the same way: `credentials.fill` is a
 plan step dispatched as the task identity, needs an exact approval or a human
 `credentials.grantTask` for that task, and is treated as external work.

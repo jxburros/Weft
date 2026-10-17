@@ -263,6 +263,75 @@ revoking and granting credentials are human-only. The broker has not had an
 independent security review; see
 [ADR-017](decisions/017-credential-broker-and-protected-login.md) for its limits.
 
+## Payments: exact approval, revalidation and one attempt
+
+Agents never complete a purchase on their own and never see card numbers. On a
+checkout page, propose the payment: give the merchant name and purpose (shown to
+the person as your text), an amount ceiling in major units, the ISO 4217
+currency, the recurrence (`{"type":"none"}`, or `recurring` with `interval`,
+`intervalCount` and a cap, `maxCharges` and/or `endsAt`) and where the terms are
+shown, as CSS selectors or refs from your latest `page.snapshot` (top frame
+only). Add `checkout.frameOrigin` when the totals and pay button are inside an
+embedded frame. A recurring payment needs `checkout.recurrence`.
+
+```json
+{"command":"payments.propose","args":{"tabId":1,"merchantName":"Example Stationery","purpose":"Printer paper for the office","amountCeiling":"60.00","currency":"USD","checkout":{"total":{"selector":"#order-total"},"tax":{"selector":"#tax"},"shipping":{"selector":"#shipping"},"submit":{"selector":"#place-order"}}}}
+```
+
+Weft reads the terms itself: the browser-verified top-level origin and checkout
+frame origin, the checkout address, the rendered total, subtotal, tax and
+shipping in the currency's minor units, the currency indicator, recurrence
+wording and the pay-control label. It refuses a proposal whose page total exceeds
+the ceiling, shows another currency or no currency, shows a billing period you
+did not declare (or another one), or whose elements are missing or ambiguous
+(`error.details.payment` names why; ambiguous formats such as `$1,234` are not
+guessed). Otherwise it queues one approval bound to a fingerprint of every term;
+the person sees a dedicated payment card in the Weft window and can approve it
+once (never for a period). Card details are a separate authorization: a person
+saves a payment card (or issues a virtual card), `credentials.list` shows it as
+`kind: "payment_card"` with brand and last four digits, and `credentials.fill`
+fills it on the exact merchant origin and processor frames inside the same
+protected operation as a sign-in, with its own approval. A card fill never
+submits (`card_submit_separate`).
+
+Then inspect the tab and submit:
+
+```json
+{"command":"payments.submit","args":{"id":"pay_00000000-0000-4000-8000-000000000000","tabId":1,"expectedVersion":7}}
+```
+
+Weft re-reads the checkout immediately before clicking. If anything differs
+from the approved terms the outcome is `terms_changed` or `merchant_changed`
+(HTTP 409, CLI exit 3, `execution: "not_started"`, `error.details.changed` lists
+fixed words such as `total`, `tax`, `recurrence`, `submit_control`,
+`destination`, `merchant_origin`, `checkout_frame`, `exceeds_ceiling`): nothing
+was clicked, the approval is void and you must propose again. Do not work
+around it. The attempt is recorded before the click; one approval allows at most
+one attempt (`already_submitted` is final). A successful result has `status:
+"submitted"` and `outcome: "externally_uncertain"`: the page accepted the click,
+the charge is not verified, and Weft never refunds.
+
+If Weft stops or the click fails ambiguously, the payment is `uncertain` and
+`payments.submit` returns `duplicate_risk` with `details.payment:
+"externally_uncertain"`. Stop: a person records what happened
+(`payments.reconcile`, or `tasks.reconcile` for a task step, optionally looking
+up the virtual card's transactions) or accepts the duplicate risk
+(`payments.retry`), and any new attempt needs a new approval. `payments.cancel`
+voids a payment that was not submitted; closing its task does the same. A
+submitted payment cannot be cancelled through Weft. `payments.checkCharges`
+compares a virtual card's transactions with the approved amount, currency and
+recurrence; a charge outside them means the approval no longer covers the
+payment.
+
+Virtual cards are optional and off by default. A person configures a card
+issuer (`payments.configureProvider`) and issues a card for one approved payment
+(`payments.issueCard`): single-use for one-time payments, merchant-locked and
+limited to the ceiling for recurring ones. Without a provider, or for an
+unsupported currency or a request the issuer refuses, the outcome is
+`unsupported` with a fixed reason (`provider_not_configured`,
+`currency_unsupported`, `provider_rejected`, …). The issuer adapter has been
+tested only against a fake server. See
+[ADR-019](decisions/019-payment-authorization.md).
 
 ## Durable tasks, uncertain work and workflows
 

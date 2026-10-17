@@ -147,7 +147,10 @@ redaction and minimization before anything leaves the device.
   later commands on the redirected page are refused.
 - Click/fill cannot distinguish a harmless click from a submission; all are
   treated as external changes.
-- There is no credential broker or payment flow; their classes exist so future
-  commands inherit once-only approval, but no such command ships.
+- The credential broker (ADR 017) and payment authorization (ADR 019) ship
+  `credentials.fill` and `payments.submit` in the once-only classes. A payment
+  approval is bound to its payment's terms through the gate's `approvalBinding`
+  hook rather than to a tab version, and a payment refusal for changed terms
+  marks the approval `invalidated` instead of giving it back.
 - The bootstrap token's default is `autonomous`; operators who want approvals for
   it must lower it.

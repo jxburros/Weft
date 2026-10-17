@@ -908,6 +908,20 @@ details.activity-row > summary::-webkit-details-marker {
   font-size: var(--font-size-12);
   color: var(--muted);
 }
+.payment-terms {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-4) var(--space-12);
+  margin: var(--space-8) 0;
+  font-size: var(--font-size-13);
+}
+.payment-terms dt {
+  color: var(--muted);
+}
+.payment-terms dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 details.activity-row pre,
 .approval-card pre {
   font-size: var(--font-size-11);

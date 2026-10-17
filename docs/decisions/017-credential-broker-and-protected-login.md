@@ -193,6 +193,18 @@ workspaceId, expectedVersion, ref?, submit? }, { actor, taskId })`. Without a
 task grant it receives `approval_required` like any agent and must wait; a
 refusal is final for that attempt (`error.details.credential` explains why).
 
+### Payment cards (ADR 019)
+
+Entries of kind `payment_card` hold card number, expiry, security code and name
+in the same sealed payload; kind, brand and last four digits are added to the
+associated data only for card entries, so existing login entries keep their
+original associated data. `credentials.fill` on a card entry uses the same
+protected operation but fills card fields in every frame that holds them (each
+must be the top origin or a listed frame origin; the broker checks every frame
+origin on release) and refuses `submit`. Purchase authorization is the separate
+`payments.submit` command; see
+[ADR-019](019-payment-authorization.md).
+
 ### Core versus plugin
 
 Kept in core: it handles credentials, sessions and authority (question 3 of the
