@@ -8,6 +8,7 @@ const httpUrl = z.string().max(16384).refine(value => {
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password; } catch { return false; }
 }, 'Expected HTTP(S) URL without credentials');
 const references = z.array(id).max(1000);
+const reviewDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-DD review date');
 const tags = z.array(z.string().max(100)).max(100);
 export const finishReason = z.enum(['stop', 'length', 'content_filter', 'other', 'cancelled', 'timeout', 'emergency_stop', 'disconnected']);
 export const recordShapes = {
@@ -16,7 +17,7 @@ export const recordShapes = {
   tasks: { title, objective: text.default(''), status: z.enum(['queued', 'running', 'waiting', 'paused', 'completed', 'failed', 'cancelled']).default('queued'), assignee: z.string().max(200).default('human'), progress: z.number().min(0).max(100).default(0), blocker: text.default(''), checkpoint: text.default(''), nextStep: text.default(''), evidence: references.default([]), materialIds: references.default([]), tabIds: z.array(z.number().int().positive()).max(100).default([]), outputs: references.default([]) },
   conversations: { title: title.default('New conversation') },
   workflows: { title, enabled: z.boolean().default(true), description: text.default(''), parameters: z.array(z.string().max(200)).max(100).default([]), steps: z.array(z.strictObject({ title, instruction: text, reviewRequired: z.boolean().default(true) })).max(100).default([]), allowedSites: z.array(z.string().max(255)).max(100).default([]), materialIds: references.default([]), expectedOutputs: text.default('') },
-  siteRules: { enabled: z.boolean().default(true), hostname: z.string().trim().min(1).max(253), includeSubdomains: z.boolean().default(true), path: z.string().max(2048).default('/'), behavior: z.enum(['block', 'warn']).default('block'), mode: z.enum(['navigation', 'connection']).default('navigation'), reason: z.string().max(240).default('Personal preference'), note: text.default(''), scope: z.enum(['workspace', 'global']).default('workspace') },
+  siteRules: { enabled: z.boolean().default(true), hostname: z.string().trim().min(1).max(253), includeSubdomains: z.boolean().default(true), path: z.string().max(2048).default('/'), behavior: z.enum(['block', 'warn']).default('block'), mode: z.enum(['navigation', 'connection']).default('navigation'), reason: z.string().max(240).default('Personal preference'), note: text.default(''), scope: z.enum(['workspace', 'global']).default('workspace'), evidence: z.array(httpUrl).max(20).default([]), reviewBy: reviewDate.nullable().optional() },
 };
 export const modelShape = { provider: z.string().max(100).optional(), endpoint: httpUrl.optional(), model: z.string().max(200).optional() };
 export const commandDefinitions = {
@@ -51,6 +52,7 @@ export const commandDefinitions = {
   'artifacts.create': ['Save supplied text or PNG as an untrusted offline artifact', { ...optionalWorkspace, artifactId: id.optional(), title, text: text.optional(), pngBase64: z.string().max(28000000).optional(), url: httpUrl.optional(), note: text.optional(), tags: tags.optional() }],
   'artifacts.annotate': ['Append a revision of artifact notes and tags', { id, note: text, tags: tags.optional() }],
   'artifacts.delete': ['Permanently delete a saved artifact and every version', { id }],
+  'siteRules.review': ['Human records a site-rule review and optionally schedules the next review date', { id, reviewBy: reviewDate.optional(), note: z.string().max(2000).optional() }],
 };
 for (const [collection, shape] of Object.entries(recordShapes)) {
   commandDefinitions[`${collection}.list`] = [`List ${collection}`, optionalWorkspace];

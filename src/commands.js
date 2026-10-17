@@ -12,6 +12,9 @@ import { extensionCommandDefinitions } from './extensions.js';
 import { pluginCommandAdminDefinitions } from './plugin-commands.js';
 import { pluginCommandDefinitions } from './plugins/registry.js';
 import { handoffCommandDefinitions } from './handoff-commands.js';
+import { storageCommandDefinitions } from './site-storage.js';
+import { threatCommandDefinitions } from './threat-intel.js';
+import { downloadSafetyCommandDefinitions } from './download-safety.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -61,7 +64,8 @@ const definitions = {
   'page.zoom': ['Set page zoom factor', { ...page, factor: z.number().min(0.25).max(5) }],
   'storage.info': ['Describe storage isolation and supported controls', { workspaceId }],
   'storage.clear': ['Clear site origin or entire workspace data (human administration)', { workspaceId, url: cookieUrl.optional() }],
-  'page.allowOnce': ['Allow this blocked destination for this tab visit (human only; redirects and other destinations remain checked)', { tabId: tabId.unwrap() }],
+  'page.allowOnce': ['Allow this blocked destination for this tab visit (human only; redirects and other destinations remain checked)', { tabId: tabId.unwrap(), acknowledgeSecurityRisk: z.boolean().optional() }],
+  'siteRules.explain': ['Explain every site rule, security finding and exact-visit exception matching a URL, in precedence order', { url: cookieUrl, workspaceId, tabId }],
   'page.navigate': ['Navigate a tab', { ...page, url }],
   'page.back': ['Go back', page],
   'page.forward': ['Go forward', page],
@@ -111,6 +115,9 @@ const definitions = {
   // Built-in plugin commands (plugin.<name>.<operation>) from validated manifests.
   ...pluginCommandDefinitions,
   ...handoffCommandDefinitions,
+  ...storageCommandDefinitions,
+  ...threatCommandDefinitions,
+  ...downloadSafetyCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -121,7 +128,9 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.update', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback',
   'lists.subscribe', 'lists.preview', 'lists.update', 'lists.configure', 'lists.exception', 'lists.unsubscribe', 'lists.check', 'lists.matches',
   'approvals.approve', 'approvals.reject', 'autonomy.update', 'activity.configure',
-  'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions)]);
+  'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
+  'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
+  'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
@@ -235,6 +244,12 @@ export function toCommandError(error, commandName, input) {
   if (code === 'stale_state' && Array.isArray(error.details?.changed)) details.changed = error.details.changed.filter(item => ['url', 'width', 'height', 'scrollX', 'scrollY', 'devicePixelRatio'].includes(item));
   if (code === 'action_interrupted' && error.details) details.interrupted = { command: Object.hasOwn(commands, error.details.command) ? error.details.command : null, cancellable: false };
   if (code === 'tab_busy' && error.details) details.queued = Number.isSafeInteger(error.details.queued) ? error.details.queued : 0;
+  if (code === 'site_blocked' && error.details && typeof error.details === 'object') {
+    const text = (value, max = 500) => typeof value === 'string' ? value.slice(0, max) : null;
+    details.blocked = { url: text(error.details.url, 16384), kind: ['security', 'preference'].includes(error.details.kind) ? error.details.kind : null, ruleId: text(error.details.ruleId, 200),
+      hostname: text(error.details.hostname, 253), source: text(error.details.source, 50), mode: text(error.details.mode, 30), reason: text(error.details.reason), category: text(error.details.category, 50),
+      stale: typeof error.details.stale === 'boolean' ? error.details.stale : null, exception: text(error.details.exception), explain: text(error.details.explain, 50) };
+  }
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   if (code === 'unsupported_capability') {
     if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback'].includes(error.details?.capability)) details.capability = error.details.capability;
@@ -281,7 +296,7 @@ export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpSt
 export function errorOutcome(error, command = null, args = {}, normalized = [], validation = 'passed') {
   const details = toCommandError(error, command);
   return { schemaVersion: 1, command, execution: ['cancelled', 'emergency_stop'].includes(details.code) ? 'cancelled' : validation === 'failed' || error?.notStarted === true ? 'not_started' : 'failed',
-    validation, review: ['permission_required', 'human_required', 'approval_required'].includes(details.code) ? 'required' : 'not_required',
+    validation, review: ['permission_required', 'human_required', 'approval_required', 'site_blocked'].includes(details.code) ? 'required' : 'not_required',
     workspaceId: typeof args?.workspaceId === 'string' && args.workspaceId.length <= 200 ? args.workspaceId : null, tabId: Number.isSafeInteger(args?.tabId) && args.tabId > 0 ? args.tabId : null, normalized, result: null, error: details };
 }
 export async function executeOutcome(execute, name, input = {}, { returnsOutcome = false } = {}) {

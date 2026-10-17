@@ -124,6 +124,35 @@ alone is not a shipped capability.
   follow, so an approval never substitutes for fresh inspection. Takeover
   boundaries are recorded in durable activity and published as `handoff`
   events; handoff record changes also publish `handoff` events.
+- Added browser-owned site storage modes (block, session-only, remember, clear)
+  with revocable workspace exceptions and defaults, an opaque-origin sandbox
+  for blocked sites, cross-site `SameSite=None` cookie blocking by default, a
+  crash-safe temporary-data journal and a published coverage matrix (#18).
+- Added site-rule evidence links, creator, revision history, review dates and
+  `siteRules.review`; `siteRules.explain` and a GUI explanation of every matching
+  rule, exception and security finding in precedence order; structured
+  `site_blocked` outcomes (HTTP 403, CLI exit 4); cancellation of speculative
+  prefetch/prerender requests, which Electron's feature switches did not stop;
+  and real Chromium before-contact tests with positive controls (#19, #41).
+- Page-initiated popups now need input in their tab; gesture grants end when
+  the tab commits another document (#41).
+- Added hash-pinned offline threat lists with staleness, an optional
+  off-by-default Safe Browsing v4-compatible hash-prefix provider, security
+  findings that need an explicit risk acknowledgement, pending human approval
+  for external application launches, collapsed repeat/burst downloads with
+  source and file type, OS origin metadata, quarantine and an optional local
+  scanner with honest statuses (#20). Live provider, real scanner and
+  Windows/macOS metadata were not verified.
+- `site_blocked` is one code across navigation, input and engine-abort paths:
+  HTTP 403, CLI exit 4 (a policy refusal; exit 5 stays `approval_required`) and
+  the same `error.details.blocked` structure. Site-storage, threat, launch and
+  scanner setters are human-only administration; `storage.policy`,
+  `siteRules.explain`, `threats.status` and `launches.list` are classified reads.
+  Site-rule and security blocks, unsolicited downloads, pending/refused external
+  launches, popups without input and quarantined downloads are recorded in
+  durable activity. Extension-originated requests are also subject to security
+  intelligence. ADRs renumbered to 008 (storage modes) and 009 (destination
+  intelligence and downloads).
 
 ### Not completed
 

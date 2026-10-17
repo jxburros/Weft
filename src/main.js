@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { Browser } from './browser.js';
+import { Browser, applyEngineHardening } from './browser.js';
 import { commands, CommandError } from './commands.js';
 import { createApiServer } from './server.js';
 import { WorkspaceService } from './workspace.js';
@@ -32,8 +32,8 @@ const events = new EventEmitter();
 const relay = new TurnRelay();
 const guiUrl = new URL('./gui.html', import.meta.url).href;
 // Disable speculative connections; site rules are enforced on actual Chromium requests.
-app.commandLine.appendSwitch('dns-prefetch-disable');
-app.commandLine.appendSwitch('disable-features', 'PreconnectToSearch,SpeculationRulesPrefetch,Prerender2');
+applyEngineHardening(app);
+let quitCleanupDone = false;
 
 function trusted(event) {
   if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== guiUrl) {
@@ -120,13 +120,18 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => {
+app.on('before-quit', event => {
   clearInterval(listTimer);
   server?.close();
   providers?.close();
   relay.close();
   plugins?.close();
-  browser?.close();
+  const cleanup = browser?.close();
   browser = null;
   workspace?.close();
+  // Erase temporary site data before exiting; a crash leaves the journal for the next startup.
+  if (cleanup && !quitCleanupDone) {
+    event.preventDefault();
+    Promise.race([cleanup, new Promise(resolve => setTimeout(resolve, 5000))]).finally(() => { quitCleanupDone = true; app.quit(); });
+  }
 });

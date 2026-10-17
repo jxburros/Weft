@@ -1,14 +1,14 @@
 {
   "toolCount": 8,
-  "totalCharacters": 6076,
+  "totalCharacters": 6356,
   "maxToolCharacters": 2000,
   "tools": {
     "weft_tabs": 589,
     "weft_page": 730,
     "weft_workspace": 1047,
-    "weft_records": 1281,
+    "weft_records": 1320,
     "weft_artifacts": 573,
-    "weft_browser": 925,
+    "weft_browser": 1166,
     "weft_models": 535,
     "weft_reference": 387
   }

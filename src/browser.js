@@ -21,8 +21,25 @@ const elementFailures = {
 };
 const elementFailure = reason => (elementFailures[reason] ?? (() => new Error('Element action failed')))();
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, openSync, closeSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { mkdirSync, openSync, closeSync, chmodSync } from 'node:fs';
+import { basename, join, resolve, sep } from 'node:path';
+import { SiteStoragePolicy, STORAGE_COVERAGE } from './site-storage.js';
+import { ThreatIntel } from './threat-intel.js';
+import { DownloadSafety, NEVER_LAUNCH, applyOriginMetadata, fileCategory, hashFile } from './download-safety.js';
+import { ruleSource } from './site-rules.js';
+import { sanitizeUrl } from './workspace.js';
+
+const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
+const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
+const HUMAN_GESTURE_MS = 2000;
+// Schemes that are navigation denials rather than external-application launches.
+const NOT_LAUNCHES = new Set(['http', 'https', 'about', 'data', 'javascript', 'blob', 'file', 'filesystem', 'chrome', 'devtools', 'view-source']);
+
+/** Engine switches that keep speculative connections from running ahead of site rules. */
+export function applyEngineHardening(app) {
+  app.commandLine.appendSwitch('dns-prefetch-disable');
+  app.commandLine.appendSwitch('disable-features', 'PreconnectToSearch,SpeculationRulesPrefetch,Prerender2');
+}
 
 export function safeUrl(value) {
   const url = new URL(value);
@@ -39,8 +56,15 @@ function bounded(promise, timeout = 8000) {
 }
 
 export class Browser {
-  constructor({ window, session, workspaceService, admission = new AutomationAdmission(), electronApi = electron } = {}) {
+  constructor({ window, session, workspaceService, admission = new AutomationAdmission(), electronApi = electron, siteStorage, threatIntel, downloadSafety, dataDirectory } = {}) {
     this.electron = electronApi;
+    const directory = dataDirectory ?? workspaceService?.directory;
+    this.siteStorage = siteStorage ?? (workspaceService ? new SiteStoragePolicy({ workspaceService, journalPath: directory && join(directory, 'temporary-storage-journal.json'), sessionFor: id => this.partition(id) }) : null);
+    this.threats = threatIntel ?? new ThreatIntel({ path: directory && join(directory, 'threat-intel.json') });
+    this.downloadSafety = downloadSafety ?? new DownloadSafety({ path: directory && join(directory, 'download-safety.json') });
+    this.launches = new Map();
+    this.nextLaunchId = 1;
+    this.openExternal = url => this.electron.shell.openExternal(url);
     this.admission = admission;
     this.window = window;
     this.workspaceService = workspaceService;
@@ -63,6 +87,10 @@ export class Browser {
 
   get workspaceId() { return this.workspaceService?.activeWorkspaceId ?? 'general'; }
 
+  partition(workspaceId) {
+    return this.sessions.get(workspaceId)?.session ?? this.electron.session.fromPartition(`persist:weft-${workspaceId}`);
+  }
+
   sessionFor(workspaceId = this.workspaceId) {
     if (this.sessions.has(workspaceId)) return this.sessions.get(workspaceId).session;
     const session = this.electron.session.fromPartition(`persist:weft-${workspaceId}`);
@@ -71,53 +99,150 @@ export class Browser {
   }
 
   configureSession(session, workspaceId) {
-    session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    // Every web permission is denied. External-protocol launches become pending
+    // browser-owned requests; repeated or deceptive prompts never reach the person.
+    session.setPermissionRequestHandler((contents, permission, callback, details) => {
+      if (permission === 'openExternal') this.requestLaunch(contents, details?.externalURL, details?.isMainFrame === false ? 'subframe' : 'main-frame', details?.requestingUrl);
+      else this.notePermission(contents, permission);
+      callback(false);
+    });
     session.setPermissionCheckHandler(() => false);
     const onDownload = (_event, item, contents) => this.trackDownload(item, workspaceId, contents);
     session.on('will-download', onDownload);
     // Chromium's request interception covers navigations, redirects, frames and
     // ordinary background requests. It is not a firewall for external tools.
     session.webRequest?.onBeforeRequest((details, callback) => {
-      const rule = this.workspaceService?.matchSiteRule(details.url, workspaceId);
-      // Extension service-worker/page requests: any block rule applies (not only
-      // navigation rules) and the destination must be a host granted to that extension.
-      if (typeof details.initiatorOrigin === 'string' && details.initiatorOrigin.startsWith('chrome-extension://') && /^https?:/i.test(details.url)) {
+      // Extension service-worker/page requests: the destination must be a host granted to that
+      // extension, and any block rule (not only navigation rules) or security finding applies; no
+      // human visit exception covers them.
+      const extensionRequest = typeof details.initiatorOrigin === 'string' && details.initiatorOrigin.startsWith('chrome-extension://') && /^https?:/i.test(details.url);
+      if (extensionRequest) {
         let allowed = false;
         try { allowed = this.extensionRequestAllowed?.(workspaceId, details) === true; } catch { allowed = false; }
-        callback({ cancel: !allowed || (!!rule && rule.behavior === 'block') });
-        return;
+        if (!allowed) { callback({ cancel: true }); return; }
       }
       const navigation = ['mainFrame', 'subFrame'].includes(details.resourceType);
       const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents.id === details.webContentsId);
       const overridden = tab && tab.allowUrl === this.overrideKey(details.url);
-      const cancel = !!rule && rule.behavior === 'block' && (rule.mode === 'connection' || navigation) && !overridden;
-      if (cancel && details.resourceType === 'mainFrame' && tab) this.block(tab, details.url, rule);
-      callback({ cancel });
+      let answered = false;
+      const finish = findings => {
+        if (answered) return;
+        answered = true;
+        const security = findings.find(finding => finding.action === 'block');
+        if (security && (extensionRequest || !(overridden && tab.allowSecurity))) {
+          if (details.resourceType === 'mainFrame' && tab?.navigating === details.url) this.block(tab, details.url, null, security);
+          callback({ cancel: true });
+          return;
+        }
+        const rule = this.workspaceService?.matchSiteRule(details.url, workspaceId);
+        if (extensionRequest) { callback({ cancel: !!rule && rule.behavior === 'block' }); return; }
+        const cancel = !!rule && rule.behavior === 'block' && (rule.mode === 'connection' || navigation) && !overridden;
+        // Only the tab's own committed-to navigation produces a stop page; speculative
+        // main-frame requests are cancelled without changing what the tab shows.
+        if (cancel && details.resourceType === 'mainFrame' && tab?.navigating === details.url) this.block(tab, details.url, rule);
+        callback({ cancel });
+      };
+      let assessed;
+      try { assessed = this.threats?.assess(details.url, { remote: navigation }) ?? []; } catch { assessed = []; }
+      if (typeof assessed?.then === 'function') {
+        assessed.then(finish, error => {
+          // Provider lookups fail open, visibly; installed local lists were already checked.
+          if (tab) { tab.securityWarning = `Reputation lookup unavailable: ${String(error.message).slice(0, 200)}`; this.persist(); }
+          finish([]);
+        });
+      } else finish(assessed);
     });
-    this.sessions.set(workspaceId, { session, onDownload });
+    // Speculative prefetch/prerender requests (link rel=prefetch, speculation rules)
+    // are cancelled outright: Chromium flags them with Sec-Purpose and Electron's
+    // feature switches do not disable them. Site rules already saw them above.
+    session.webRequest?.onBeforeSendHeaders?.((details, callback) => {
+      try {
+        const purpose = Object.entries(details.requestHeaders ?? {}).find(([key]) => ['sec-purpose', 'purpose'].includes(key.toLowerCase()))?.[1];
+        if (/prefetch|prerender/i.test(String(purpose ?? ''))) { this.siteStorage?.count(details.webContentsId, 'speculativeLoadsCancelled'); callback({ cancel: true }); return; }
+        callback(this.siteStorage?.beforeSendHeaders(details, workspaceId) ?? {});
+      } catch { callback({ cancel: true }); }
+    });
+    session.webRequest?.onHeadersReceived?.((details, callback) => {
+      try { callback(this.siteStorage?.headersReceived(details, workspaceId) ?? {}); } catch { callback({ cancel: true }); }
+    });
+    const detachStorage = this.siteStorage?.attach(session, workspaceId);
+    this.sessions.set(workspaceId, { session, onDownload, detachStorage });
+  }
+
+  notePermission(contents, permission) {
+    const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents === contents);
+    if (!tab) return;
+    tab.permissionDenials ??= {};
+    tab.permissionDenials[permission] = (tab.permissionDenials[permission] ?? 0) + 1;
+  }
+
+  recentHumanInput(tab) { return Boolean(tab?.lastHumanInput && Date.now() - tab.lastHumanInput < HUMAN_GESTURE_MS); }
+
+  requestLaunch(contents, target, frame, requestingUrl) {
+    let scheme;
+    try { scheme = new URL(target).protocol.slice(0, -1).toLowerCase(); } catch { return null; }
+    if (NOT_LAUNCHES.has(scheme)) return null;
+    const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents === contents);
+    const targetUrl = String(target).slice(0, 2048);
+    const existing = [...this.launches.values()].find(item => ['pending', 'refused'].includes(item.state) && item.tabId === (tab?.id ?? null) && item.targetUrl === targetUrl);
+    if (existing) { existing.attempts++; existing.lastAttemptAt = new Date().toISOString(); return existing; }
+    const id = this.nextLaunchId++;
+    const refused = NEVER_LAUNCH.has(scheme);
+    const record = { id, workspaceId: tab?.workspaceId ?? this.workspaceId, tabId: tab?.id ?? null, scheme, targetUrl, frame,
+      sourceUrl: sanitizeUrl(contents?.getURL?.() || '') || null, sourceTitle: String(contents?.getTitle?.() || '').slice(0, 300),
+      requestingUrl: sanitizeUrl(requestingUrl || '') || null, recentHumanInput: this.recentHumanInput(tab), attempts: 1,
+      state: refused ? 'refused' : 'pending', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 300000).toISOString(),
+      reason: refused ? `The ${scheme}: scheme is never launched from web content.` : 'External application launches require a person to approve this exact request in Weft.' };
+    this.launches.set(id, record);
+    this.onAudit?.({ type: 'block', reason: refused ? 'external_launch_refused' : 'external_launch_pending', outcome: 'recorded', workspaceId: record.workspaceId, tabId: record.tabId ?? undefined,
+      summary: { scheme, frame, launchId: id, source: record.sourceUrl } });
+    if (this.launches.size > 200) this.launches.delete(this.launches.keys().next().value);
+    return record;
   }
 
   overrideKey(value) {
     try { const url = new URL(value); url.hash = ''; return url.href; } catch { return ''; }
   }
 
-  block(tab, url, rule) {
-    tab.blocked = { url, ruleId: rule.id, hostname: rule.hostname, reason: rule.reason,
-      scope: rule.scope, mode: rule.mode, note: rule.note || '', provenance: rule.provenance ?? null };
-    tab.error = `Blocked by site rule: ${rule.hostname}`;
-    this.onAudit?.({ type: 'block', reason: 'site_rule', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, targetId: rule.id, summary: { hostname: rule.hostname, scope: rule.scope, mode: rule.mode } });
+  block(tab, url, rule, finding = null) {
+    tab.blocked = finding
+      ? { url, kind: 'security', category: finding.category, source: finding.source, listId: finding.listId, publisher: finding.publisher,
+        reference: finding.reference, freshness: finding.freshness, stale: finding.stale, reason: `Security finding: known ${finding.category} destination`, at: Date.now() }
+      : { url, kind: 'preference', ruleId: rule.id, hostname: rule.hostname, reason: rule.reason, source: ruleSource(rule),
+        scope: rule.scope, mode: rule.mode, note: rule.note || '', provenance: rule.provenance ?? null, at: Date.now() };
+    tab.error = finding ? `Blocked by security intelligence: ${finding.category}` : `Blocked by site rule: ${rule.hostname}`;
+    this.onAudit?.(finding
+      ? { type: 'block', reason: 'security_finding', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version,
+        summary: { url, category: finding.category, source: finding.source, listId: finding.listId, stale: Boolean(finding.stale) } }
+      : { type: 'block', reason: 'site_rule', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, targetId: rule.id,
+        summary: { hostname: rule.hostname, scope: rule.scope, mode: rule.mode, source: ruleSource(rule) } });
     this.layout();
     this.persist();
   }
 
+  /** Structured result for agents: what stopped the request and how a human may proceed. */
+  blockedError(blocked) {
+    const error = new Error(blocked.kind === 'security' ? `Blocked by security intelligence (${blocked.category}); a person may proceed with an explicit risk acknowledgement`
+      : `Blocked by site rule: ${blocked.hostname}${blocked.reason ? ` — ${blocked.reason}` : ''}`);
+    error.code = 'site_blocked';
+    error.details = { url: sanitizeUrl(blocked.url) || null, kind: blocked.kind, ruleId: blocked.ruleId ?? null, hostname: blocked.hostname ?? null, source: blocked.source ?? null,
+      mode: blocked.mode ?? null, reason: blocked.reason ?? null, category: blocked.category ?? null, stale: blocked.stale ?? null,
+      exception: 'human-only: page.allowOnce from the trusted browser interface', explain: 'siteRules.explain' };
+    return error;
+  }
+
   allowedUrl(value, workspaceId, tab) {
     const url = safeUrl(value);
+    const overridden = tab && tab.allowUrl === this.overrideKey(url);
+    const security = this.threats?.checkUrl(url).find(finding => finding.action === 'block');
+    if (security && !(overridden && tab.allowSecurity)) {
+      if (tab) this.block(tab, url, null, security);
+      throw this.blockedError(tab?.blocked ?? { url, kind: 'security', category: security.category, source: security.source, stale: security.stale, reason: 'Security finding' });
+    }
     const rule = this.workspaceService?.matchSiteRule(url, workspaceId);
-    if (rule?.behavior === 'block' && (!tab || tab.allowUrl !== this.overrideKey(url))) {
+    if (rule?.behavior === 'block' && !overridden) {
       if (tab) this.block(tab, url, rule);
-      const error = new Error(`Blocked by site rule: ${rule.hostname}${rule.reason ? ` — ${rule.reason}` : ''}`);
-      error.code = 'SITE_BLOCKED';
-      throw error;
+      throw this.blockedError(tab?.blocked ?? { url, kind: 'preference', ruleId: rule.id, hostname: rule.hostname, reason: rule.reason, source: ruleSource(rule), mode: rule.mode });
     }
     return url;
   }
@@ -177,7 +302,7 @@ export class Browser {
       loading: contents.isLoading?.() ?? false, canGoBack: contents.navigationHistory?.canGoBack() ?? false,
       canGoForward: contents.navigationHistory?.canGoForward() ?? false, zoom: contents.getZoomFactor?.() ?? 1,
       blocked: tab.blocked ?? null, error: tab.error ?? null, warning: rule?.behavior === 'warn' ? `${rule.hostname}: ${rule.reason}` : null,
-      communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId) };
+      communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId), protection: this.protection(tab) };
   }
 
   /** Informational community-list labels (never blocking); each names its list, claim kind and entry. */
@@ -188,12 +313,24 @@ export class Browser {
     } catch { return []; }
   }
 
+  /** Quiet browser-owned indicator data: what was blocked in this tab. */
+  protection(tab) {
+    let hostname = null;
+    try { hostname = new URL(tab.view.webContents.getURL() || tab.url).hostname || null; } catch { /* about:blank */ }
+    return { storageMode: hostname && this.siteStorage ? this.siteStorage.modeFor(hostname, tab.workspaceId) : null,
+      storageActivity: this.siteStorage?.activityFor(tab.view.webContents.id) ?? {}, blockedPopups: tab.blockedPopups ?? [],
+      permissionDenials: tab.permissionDenials ?? {}, pendingLaunches: [...this.launches.values()].filter(item => item.tabId === tab.id && item.state === 'pending').length,
+      securityWarning: tab.securityWarning ?? null, exception: tab.allowUrl ? { url: sanitizeUrl(tab.allowUrl) || null, security: Boolean(tab.allowSecurity) } : null };
+  }
+
   persist() {
     if (this.closing || this.restoring) return;
     this.workspaceService?.persistSession({ tabs: [...this.tabs.values()].map(tab => this.describe(tab)), activeId: this.activeId });
   }
 
   async restore() {
+    // Temporary site data left by a crash is erased before any tab can load it again.
+    await this.siteStorage?.cleanup('startup').catch(error => { this.storageRecoveryError = error.message; });
     const saved = this.workspaceService?.snapshot().browserSession;
     this.restoring = true;
     try {
@@ -236,11 +373,17 @@ export class Browser {
     // Human ownership persists across restarts; agent leases end with the agent's connection.
     const humanHeld = restored.controller === 'human';
     const tab = { id, workspaceId, view, url, title: restored.title, pinned: !!restored.pinned, version: restored.version || 1,
-      controller: humanHeld ? 'human' : 'available', assistant: humanHeld && typeof restored.assistant === 'string' ? restored.assistant.slice(0, 200) : null };
+      controller: humanHeld ? 'human' : 'available', assistant: humanHeld && typeof restored.assistant === 'string' ? restored.assistant.slice(0, 200) : null,
+      openerTabId: restored.openerTabId ?? null, openedBy: restored.openedBy ?? null };
     this.tabs.set(tab.id, tab);
     const contents = view.webContents;
     const guard = (event, target) => {
-      try { this.allowedUrl(target, tab.workspaceId, tab); } catch (error) { event.preventDefault(); tab.error = error.message; this.persist(); }
+      try { this.allowedUrl(target, tab.workspaceId, tab); } catch (error) {
+        event.preventDefault();
+        const launch = this.requestLaunch(contents, target, 'main-frame', contents.getURL());
+        tab.error = launch ? `External application launch blocked (${launch.scheme}:); review it in Downloads & launches` : error.message;
+        this.persist();
+      }
     };
     contents.on('will-navigate', guard);
     contents.on('will-redirect', guard);
@@ -251,7 +394,7 @@ export class Browser {
       if (this.consumeSynthetic(tab, input)) return;
       // Any human interaction invalidates element refs and coordinates observed before it.
       if (['mouseDown', 'keyDown', 'rawKeyDown', 'mouseWheel'].includes(input.type)) tab.inputSerial = (tab.inputSerial ?? 0) + 1;
-      if (['mouseDown', 'keyDown', 'rawKeyDown'].includes(input.type)) this.downloadGrants.set(tab.id, Date.now() + 2000);
+      if (['mouseDown', 'keyDown', 'rawKeyDown'].includes(input.type)) { this.downloadGrants.set(tab.id, Date.now() + HUMAN_GESTURE_MS); tab.lastHumanInput = Date.now(); }
       if (tab.controller !== 'human' && tab.controller !== 'available') {
         // Real native input is a human takeover at the next input boundary.
         // Already executed page scripts cannot be rolled back.
@@ -260,8 +403,22 @@ export class Browser {
     };
     contents.on('before-input-event', humanInput);
     contents.on('before-mouse-event', humanInput);
-    contents.on('did-navigate', () => { tab.version++; this.stateBoundary(tab, 'navigation'); tab.observations = null; tab.error = null; tab.blocked = null; if (tab.allowUrl !== this.overrideKey(contents.getURL())) tab.allowUrl = null; this.layout(); this.persist(); });
+    contents.on('did-navigate', () => {
+      tab.version++; tab.popupAudits = 0; this.stateBoundary(tab, 'navigation'); tab.observations = null; tab.error = null; tab.blocked = null; tab.securityWarning = null;
+      // A gesture authorizes downloads/popups for the document it happened in, not the next page.
+      if (typeof this.downloadGrants.get(tab.id) === 'number') this.downloadGrants.delete(tab.id);
+      tab.lastHumanInput = 0;
+      // An exact-visit exception ends as soon as the tab commits any other destination.
+      if (tab.allowUrl !== this.overrideKey(contents.getURL())) { tab.allowUrl = null; tab.allowSecurity = false; }
+      this.layout(); this.persist();
+    });
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame === false) return; tab.version++; this.stateBoundary(tab, 'in-page navigation'); this.persist(); });
+    contents.on('did-start-navigation', details => {
+      if (!details?.isMainFrame || details.isSameDocument || (details.frame && details.frame !== contents.mainFrame)) return;
+      tab.navigating = details.url;
+      this.siteStorage?.resetActivity(contents.id);
+    });
+    contents.on('did-redirect-navigation', details => { if (details?.isMainFrame && (!details.frame || details.frame === contents.mainFrame)) tab.navigating = details.url; });
     contents.on('page-title-updated', () => this.persist());
     contents.on('did-finish-load', () => {
       this.workspaceService?.recordVisit({ workspaceId: tab.workspaceId, url: contents.getURL(), title: contents.getTitle().slice(0, 1000), tabId: tab.id });
@@ -270,17 +427,31 @@ export class Browser {
     contents.on('did-fail-load', (_event, code, description, failedUrl, isMainFrame) => {
       if (isMainFrame && code !== -3) { tab.error = description; this.persist(); }
     });
-    contents.setWindowOpenHandler(({ url: target }) => {
+    contents.setWindowOpenHandler(({ url: target, disposition }) => {
+      // Native windows are never created. A page may open a tab only during a
+      // human gesture in this tab or an automation action in flight on it.
+      const actor = this.recentHumanInput(tab) ? 'human' : tab.inFlight ? 'automation' : null;
+      if (!actor) {
+        tab.blockedPopups = [...(tab.blockedPopups ?? []), { url: sanitizeUrl(target) || String(target).slice(0, 200), disposition, at: new Date().toISOString(), reason: 'Opened without recent input in this tab' }].slice(-20);
+        // Bounded per document so a popup-spamming page cannot flood durable activity.
+        if ((tab.popupAudits = (tab.popupAudits ?? 0) + 1) <= 20) this.onAudit?.({ type: 'block', reason: 'popup_without_input', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, summary: { url: sanitizeUrl(target) || null, disposition } });
+        this.persist();
+        return { action: 'deny' };
+      }
       try {
         this.allowedUrl(target, tab.workspaceId);
-        void this.newTab(target, tab.workspaceId).catch(error => { tab.error = error.message; });
+        void this.newTab(target, tab.workspaceId, { openerTabId: tab.id, openedBy: actor }).catch(error => { tab.error = error.message; });
       } catch (error) { tab.error = error.message; }
       return { action: 'deny' };
     });
     if (workspaceId === this.workspaceId) this.activate(tab.id);
     this.persist();
     try { await contents.loadURL(this.allowedUrl(url, workspaceId, tab)); }
-    catch (error) { tab.error = error.message; this.persist(); throw new Error(`Navigation failed: ${error.message}`); }
+    catch (error) {
+      tab.error = error.message; this.persist();
+      const blocked = error.code === 'site_blocked' ? error : tab.blocked ? this.blockedError(tab.blocked) : null;
+      throw Object.assign(new Error(`Navigation failed: ${(blocked ?? error).message}`), blocked ? { code: 'site_blocked', details: blocked.details } : {});
+    }
     this.persist();
     return this.describe(tab);
   }
@@ -326,26 +497,45 @@ export class Browser {
     const grant = source && this.downloadGrants.get(source.id);
     const permitted = source && (typeof grant === 'number' ? grant >= Date.now() : grant?.expires >= Date.now() && grant.url === item.getURL());
     if (source) this.downloadGrants.delete(source.id);
+    // Source page, file type and redirect chain are shown with every record so a
+    // person can judge the request; Chromium's own gesture flag is informational only.
+    const filename = basename(item.getFilename()).replace(/[^\p{L}\p{N}._-]/gu, '_').slice(0, 160) || 'download';
+    const mimeType = String(item.getMimeType?.() || '').slice(0, 200);
+    const details = { workspaceId, sourceTabId: source?.id ?? null, url: item.getURL(), filename, mimeType, ...fileCategory(filename, mimeType),
+      sourcePage: sanitizeUrl(contents?.getURL?.() || '') || null, sourceTitle: String(contents?.getTitle?.() || '').slice(0, 300),
+      redirectHosts: [...new Set((item.getURLChain?.() ?? []).map(value => { try { return new URL(value).host; } catch { return ''; } }).filter(Boolean))].slice(0, 10),
+      engineUserGesture: item.hasUserGesture?.() ?? null, totalBytes: item.getTotalBytes(), receivedBytes: 0, startedAt: new Date().toISOString() };
     if (!permitted) {
-      const id = this.nextDownloadId++;
-      this.downloads.set(id, { item: null, record: { id, workspaceId, sourceTabId: source?.id ?? null, url: item.getURL(), filename: basename(item.getFilename()), state: 'blocked', receivedBytes: 0, totalBytes: item.getTotalBytes(), scanStatus: 'Not scanned', reason: 'Download needs human approval. No recent browser input authorized this request.' } });
       item.cancel();
-      this.onAudit?.({ type: 'block', reason: 'unsolicited_download', outcome: 'recorded', workspaceId, tabId: source?.id, summary: { url: item.getURL(), downloadId: id } });
+      const now = Date.now();
+      // Repeated attempts collapse into one record; a burst of distinct unsolicited
+      // downloads from one tab is counted instead of flooding the list.
+      const existing = [...this.downloads.values()].find(({ record }) => record.state === 'blocked' && record.sourceTabId === details.sourceTabId && record.url === details.url);
+      if (existing) { existing.record.attempts++; existing.record.lastAttemptAt = new Date(now).toISOString(); return; }
+      const recent = [...this.downloads.values()].filter(({ record }) => record.state === 'blocked' && record.sourceTabId === details.sourceTabId && now - Date.parse(record.startedAt) < 60000);
+      if (recent.length >= 5) { const last = recent.at(-1).record; last.suppressedAttempts = (last.suppressedAttempts ?? 0) + 1; return; }
+      const id = this.nextDownloadId++;
+      this.downloads.set(id, { item: null, record: { id, ...details, state: 'blocked', attempts: 1, scanStatus: 'unscanned',
+        reason: 'Download needs human approval. No recent browser input in this tab authorized this request.' } });
+      this.onAudit?.({ type: 'block', reason: 'unsolicited_download', outcome: 'recorded', workspaceId, tabId: source?.id, summary: { url: details.url, downloadId: id, category: details.category ?? null } });
       return;
     }
     const id = this.nextDownloadId++;
     const directory = join(this.electron.app.getPath('downloads'), 'Weft');
-    const filename = basename(item.getFilename()).replace(/[^\p{L}\p{N}._-]/gu, '_').slice(0, 160) || 'download';
+    let path;
     try {
+      // Downloads stay in a dedicated data folder, never beside application code.
+      const appPath = this.electron.app.getAppPath?.();
+      if (appPath && (resolve(directory) + sep).startsWith(resolve(appPath) + sep)) throw new Error('Download folder is inside the application directory');
       mkdirSync(directory, { recursive: true });
-      const path = join(directory, `${randomUUID()}-${filename}`);
+      path = join(directory, `${randomUUID()}-${filename}`);
       closeSync(openSync(path, 'wx', 0o600));
       item.setSavePath(path);
     } catch {
       item.cancel();
       return;
     }
-    const record = { id, workspaceId, sourceTabId: source?.id ?? null, scanStatus: 'Not scanned', url: item.getURL(), filename, state: 'progressing', receivedBytes: 0, totalBytes: item.getTotalBytes() };
+    const record = { id, ...details, scanStatus: 'pending', state: 'progressing', attempts: 1 };
     this.downloads.set(id, { item, record });
     item.on('updated', (_event, state) => {
       Object.assign(record, { state, receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes() });
@@ -353,7 +543,30 @@ export class Browser {
     item.once('done', (_event, state) => {
       Object.assign(record, { state, receivedBytes: item.getReceivedBytes(), totalBytes: item.getTotalBytes() });
       if (this.downloads.has(id)) this.downloads.get(id).item = null;
+      if (state === 'completed') record.inspection = this.inspectDownload(record, path, directory);
+      else record.scanStatus = 'unscanned';
     });
+  }
+
+  /** Post-download handling. Files are never opened or executed by Weft. */
+  async inspectDownload(record, path, directory) {
+    try {
+      try { chmodSync(path, 0o600); } catch { /* Windows has no POSIX execute bits. */ }
+      record.sha256 = await hashFile(path);
+      record.originMetadata = await applyOriginMetadata(path, { url: record.url, referrer: record.sourcePage });
+      const known = this.threats?.checkHash(record.sha256) ?? [];
+      if (known.length) Object.assign(record, { scanStatus: 'known-malicious', scanDetail: `SHA-256 listed by ${known[0].listId} (${known[0].category})`, securityFinding: known[0] });
+      else { record.scanStatus = 'scanning'; Object.assign(record, await this.downloadSafety.scan(path)); }
+      if (['known-malicious', 'infected'].includes(record.scanStatus)) {
+        this.downloadSafety.quarantine(path, directory); record.quarantined = true;
+        this.onAudit?.({ type: 'block', reason: 'download_quarantined', outcome: 'recorded', workspaceId: record.workspaceId, tabId: record.sourceTabId ?? undefined,
+          summary: { url: record.url, downloadId: record.id, scanStatus: record.scanStatus, sha256: record.sha256 } });
+      }
+    } catch (error) {
+      record.scanStatus = record.scanStatus === 'scanning' || record.scanStatus === 'pending' ? 'scan-failed' : record.scanStatus;
+      record.scanDetail = `Post-download inspection failed: ${String(error.message).slice(0, 200)}`;
+    }
+    return record.scanStatus;
   }
 
   async execute(name, args = {}, context = { actor: 'human' }) {
@@ -363,17 +576,23 @@ export class Browser {
     const slot = tab ? await this.acquireInput(tab, name, context.actor, human) : null;
     const epoch = tab?.controlEpoch ?? 0;
     const blockedBefore = tab?.blocked ?? null;
+    const started = Date.now();
+    // Navigation or input that ends on a newly blocked destination fails with one structured
+    // site_blocked error (same details on every path); a pre-existing block is not misattributed.
+    const newlyBlocked = () => tab?.blocked && tab.blocked !== blockedBefore && (navigationCommands.has(name) || inputCommands.has(name));
     try {
       const result = await this.executeAdmitted(name, args, context);
       if (tab && !human && epoch !== (tab.controlEpoch ?? 0)) {
         throw failure('action_interrupted', 'Tab control changed during the action; inspect current state. Already submitted effects cannot be undone.',
           { command: name, boundary: tab.lastBoundary?.reason ?? null, cancellable: false });
       }
-      if (tab?.blocked && tab.blocked !== blockedBefore && inputCommands.has(name)) {
-        throw failure('site_blocked', tab.error || 'Blocked by site rule', { url: pageString(tab.blocked.url, 2048), hostname: tab.blocked.hostname, ruleId: tab.blocked.ruleId });
-      }
+      if (newlyBlocked()) throw this.blockedError(tab.blocked);
       if (!human) this.noteInspection(result, context.actor);
       return result;
+    } catch (error) {
+      // An engine abort caused by a rule is reported as a structured block, never a generic failure.
+      if (newlyBlocked() && !['site_blocked', 'action_interrupted'].includes(error.code) && (tab.blocked.at ?? 0) >= started) throw this.blockedError(tab.blocked);
+      throw error;
     } finally { if (slot) this.releaseInput(tab, slot); }
   }
 
@@ -615,6 +834,39 @@ export class Browser {
     } finally { release(); }
   }
 
+  async executeSecurity(name, args, context, workspaceId) {
+    const human = ['human', 'admin'].includes(context.actor);
+    if (!human && humanOnlyBrowserCommands.has(name)) throw new Error(`${name} requires the trusted browser interface`);
+    if (name.startsWith('storage.')) {
+      if (!this.siteStorage) throw new Error('Site storage modes require workspace storage');
+      return this.siteStorage.execute(name, { ...args, workspaceId }, context);
+    }
+    if (name === 'threats.status') return { ...this.threats.status(), downloadScanner: this.downloadSafety.status() };
+    if (name.startsWith('threats.')) return this.threats.execute(name, args);
+    if (name === 'downloads.configureScanner') return this.downloadSafety.configure(args);
+    if (name === 'siteRules.explain') {
+      if (!this.workspaceService) throw new Error('Site-rule explanation requires workspace storage');
+      const url = safeUrl(args.url);
+      const tab = args.tabId != null ? this.tab(args.tabId) : null;
+      if (tab && tab.workspaceId !== workspaceId) throw new Error('Tab belongs to a different workspace');
+      const exception = tab?.allowUrl && tab.allowUrl === this.overrideKey(url) ? { kind: 'exact-visit', tabId: tab.id, url: sanitizeUrl(url), coversSecurityFinding: Boolean(tab.allowSecurity),
+        expires: 'When this tab commits another destination, closes, or Weft restarts. Redirects, embedded resources and other tabs are never covered.' } : null;
+      return this.workspaceService.explainSiteRules(url, workspaceId, { exception, security: this.threats.checkUrl(url) });
+    }
+    if (name === 'launches.list') return [...this.launches.values()].filter(item => item.workspaceId === workspaceId).map(item => ({ ...item }));
+    const launch = this.launches.get(args.launchId);
+    if (!launch) throw new Error('Launch request not found');
+    if (name === 'launches.deny') { if (launch.state === 'pending') launch.state = 'denied'; return { ...launch }; }
+    if (launch.state !== 'pending') throw new Error(`Launch request is ${launch.state}`);
+    if (Date.parse(launch.expiresAt) < Date.now()) { launch.state = 'expired'; throw new Error('Launch request expired; trigger it again from the page'); }
+    if (NEVER_LAUNCH.has(launch.scheme)) { launch.state = 'refused'; throw new Error(`The ${launch.scheme}: scheme is never launched`); }
+    launch.state = 'approved';
+    launch.approvedAt = new Date().toISOString();
+    await this.openExternal(launch.targetUrl);
+    launch.state = 'launched';
+    return { ...launch, notice: 'Handed to the operating system once. Weft cannot see or undo what the external application does.' };
+  }
+
   async executeAdmitted(name, args = {}, context = { actor: 'human' }) {
     const human = ['human', 'admin'].includes(context.actor);
     const workspaceId = args.workspaceId ?? this.workspaceId;
@@ -624,6 +876,7 @@ export class Browser {
     if (name !== 'tabs.move' && args.tabId != null && args.workspaceId != null && this.tab(args.tabId).workspaceId !== args.workspaceId) throw new Error('Tab belongs to a different workspace');
     if (!human && name === 'page.allowOnce') throw new Error('Site exceptions require the trusted browser interface');
     if (mutatingCommands.has(name)) this.checkControl(this.tab(args.tabId), args, context, name);
+    if (/^(storage\.(policy|setSiteMode|setDefaultMode)|threats\.|launches\.|downloads\.configureScanner$|siteRules\.explain$)/.test(name)) return this.executeSecurity(name, args, context, workspaceId);
 
     switch (name) {
       case 'browser.emergencyStop': {
@@ -694,10 +947,11 @@ export class Browser {
         if (tab.controller === 'human') tab.assistant = null;
         tab.controller = 'available'; tab.version++; this.persist(); return this.describe(tab);
       }
-      case 'storage.info': return { workspaceId, isolated: true, persistent: true, coverage: {
+      case 'storage.info': return { workspaceId, isolated: true, persistent: true, defaults: this.siteStorage?.defaults(workspaceId) ?? null, coverage: {
         workspaceIsolation: 'Separate Chromium session partition, cookies, localStorage, IndexedDB, caches and service workers.',
         clearSite: 'Origin-scoped Chromium storage; cookies for the hostname are removed. Domain cookies shared with subdomains may also be removed.',
-        blocking: 'Per-site storage denial and temporary lifetime policies are not implemented.',
+        blocking: 'Site storage modes (block, session, remember) are available through storage.policy, storage.setSiteMode and storage.setDefaultMode; see the coverage matrix.',
+        matrix: STORAGE_COVERAGE,
         limitations: 'Clearing does not revoke server-side sessions, delete downloaded files, or prevent fingerprinting.' } };
       case 'storage.clear': {
         const origin = args.url ? new URL(safeUrl(args.url)).origin : undefined;
@@ -709,6 +963,7 @@ export class Browser {
             const domain = cookie.domain.replace(/^\./, '');
             if (hostname === domain || hostname.endsWith(`.${domain}`)) await session().cookies.remove(`${cookie.secure ? 'https' : 'http'}://${hostname}${cookie.path}`, cookie.name);
           }
+          await session().clearData?.({ dataTypes: ['cache'], origins: [origin] }).catch(() => {});
         } else await session().clearCache();
         return { success: true, workspaceId, origin: origin ?? null, notice: 'Site data cleared. Existing pages may recreate data; reload or close them. Server sessions are not revoked.' };
       }
@@ -739,8 +994,11 @@ export class Browser {
       case 'page.allowOnce': {
         if (!human) throw new Error('Site exceptions require the trusted browser interface');
         if (!tab.blocked) throw new Error('This tab has no blocked destination');
+        // Security findings are not ordinary preferences: proceeding needs an explicit acknowledgement.
+        if (tab.blocked.kind === 'security' && args.acknowledgeSecurityRisk !== true) throw Object.assign(new Error('This destination is a security finding; proceeding requires acknowledgeSecurityRisk: true'), { code: 'human_required' });
         const target = tab.blocked.url;
         tab.allowUrl = this.overrideKey(target);
+        tab.allowSecurity = tab.blocked.kind === 'security';
         tab.blocked = null;
         tab.error = null;
         this.layout();
@@ -813,7 +1071,7 @@ export class Browser {
       }
       case 'page.click':
       case 'page.fill': {
-        if (human && name === 'page.click') this.downloadGrants.set(tab.id, Date.now() + 2000);
+        if (human && name === 'page.click') { this.downloadGrants.set(tab.id, Date.now() + HUMAN_GESTURE_MS); tab.lastHumanInput = Date.now(); }
         const navigation = this.watchNavigation(tab, tab.blocked);
         let result;
         try { result = await this.observe(contents, name === 'page.click' ? 'click' : 'fill', { ref: args.ref, selector: args.selector, value: args.value }); }
@@ -949,15 +1207,22 @@ export class Browser {
   }
 
   close() {
-    if (this.closing) return;
+    if (this.closing) return null;
     this.persist();
     this.closing = true;
     this.window?.removeListener('resize', this.onResize);
     for (const id of [...this.tabs.keys()]) this.closeTab(id);
     for (const { item } of this.downloads.values()) item?.cancel();
-    for (const { session, onDownload } of this.sessions.values()) {
+    for (const { session, onDownload, detachStorage } of this.sessions.values()) {
       session.removeListener('will-download', onDownload);
       session.webRequest?.onBeforeRequest(null);
+      session.webRequest?.onBeforeSendHeaders?.(null);
+      session.webRequest?.onHeadersReceived?.(null);
+      detachStorage?.();
     }
+    // Clean exit erases temporary site data; if the process dies first, the
+    // durable journal makes the next startup erase it before restoring tabs.
+    if (!this.siteStorage?.journal.entries.length) return null;
+    return this.siteStorage.cleanup('exit').catch(() => null);
   }
 }

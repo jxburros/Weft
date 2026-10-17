@@ -290,6 +290,12 @@ function renderShell() {
   }
   $("item-count").textContent =
     `${visibleTabs().length} tab${visibleTabs().length !== 1 ? "s" : ""} · ${records("materials").length} materials`;
+  // Quiet browser-owned indicator: blocked storage, popups and launch requests on this page.
+  const protection = section === "browse" ? active()?.protection : null;
+  const stopped = protection ? Object.values(protection.storageActivity || {}).reduce((sum, n) => sum + n, 0) + (protection.blockedPopups || []).length + (protection.pendingLaunches || 0) : 0;
+  $("site-controls").classList.toggle("has-activity", stopped > 0);
+  $("site-controls").setAttribute("aria-label", stopped ? `Site controls: ${stopped} blocked on this page` : "Site controls");
+  $("site-controls").title = stopped ? `${stopped} blocked on this page` : "Site controls";
   $("back").disabled = !active()?.blocked && !active()?.canGoBack;
   $("forward").disabled = !active()?.canGoForward;
   $("stop").hidden = !active()?.loading;
@@ -361,7 +367,7 @@ function renderContent() {
   if (section === "browse") {
     const tab = active();
     $("content").innerHTML =
-      `${tab?.loading ? '<div class="loading-line"></div>' : ""}<div class="browser-placeholder"><img src="../assets/logo/svg/mark-full-color.svg" alt="Weft"><h2>${tab?.blocked ? "This destination is restricted" : tab?.url === "about:blank" ? "Where would you like to go?" : "Your live page"}</h2><p>${tab?.blocked ? esc(tab.blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.") : "Enter a website or a search in the address bar above."}</p>${tab?.blocked?.provenance ? (tab.blocked.provenance.signed ? `<p>Signed community list (untrusted claim; ${esc(tab.blocked.provenance.claimKind)}): ${esc(tab.blocked.provenance.listName)} sequence ${esc(tab.blocked.provenance.sequence)}, entry ${esc(tab.blocked.provenance.entryId)} revision ${esc(tab.blocked.provenance.entryRevision)}. Review it with lists.matches.</p>` : `<p>Community list provenance (untrusted): ${esc(tab.blocked.provenance.sourceRepo)} @ ${esc(tab.blocked.provenance.commit)}</p>`) : ""}${tab?.blocked ? '<div class="inline-actions">' + action("blocked-back", "Go back", "back") + action("allow-once", "Allow this visit", "globe") + action("section", "Change rule", "shield", 'data-section="privacy"') + "</div>" : ""}${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+      `${tab?.loading ? '<div class="loading-line"></div>' : ""}<div class="browser-placeholder"><img src="../assets/logo/svg/mark-full-color.svg" alt="Weft"><h2>${tab?.blocked?.kind === "security" ? "Known harmful destination" : tab?.blocked ? "This destination is restricted" : tab?.url === "about:blank" ? "Where would you like to go?" : "Your live page"}</h2><p>${tab?.blocked ? esc(tab.blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.") : "Enter a website or a search in the address bar above."}</p>${tab?.blocked ? `<p>${esc(tab.blocked.url)}</p>` : ""}${tab?.blocked?.kind === "security" ? `<p>Security intelligence from ${esc(tab.blocked.publisher || tab.blocked.source)}${tab.blocked.stale ? " (stale list)" : ""}. This is not a personal preference rule.</p>` : ""}${tab?.blocked?.provenance ? (tab.blocked.provenance.signed ? `<p>Signed community list (untrusted claim; ${esc(tab.blocked.provenance.claimKind)}): ${esc(tab.blocked.provenance.listName)} sequence ${esc(tab.blocked.provenance.sequence)}, entry ${esc(tab.blocked.provenance.entryId)} revision ${esc(tab.blocked.provenance.entryRevision)}. Review it with lists.matches.</p>` : `<p>Community list provenance (untrusted): ${esc(tab.blocked.provenance.sourceRepo)} @ ${esc(tab.blocked.provenance.commit)}</p>`) : ""}${tab?.blocked ? '<div class="inline-actions">' + action("blocked-back", "Go back", "back") + action("allow-once", tab.blocked.kind === "security" ? "Proceed anyway…" : "Allow this visit", "globe") + action("explain-url", "Why?", "search", `data-url="${esc(tab.blocked.url)}"`) + action("section", "Change rule", "shield", 'data-section="privacy"') + "</div>" : ""}${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
     layout();
     return;
   }
@@ -462,6 +468,7 @@ function renderContent() {
   if (section === "downloads") loadDownloads();
   if (section === "activity") void loadActivity();
   if (section === "approvals") void loadApprovals();
+  if (section === "privacy") loadPrivacyPanels();
   const search = $("collection-search");
   if (search) {
     search.value = filter;
@@ -611,6 +618,7 @@ function privacyView() {
   const rules = (state.siteRules || []).filter(
     (r) => r.workspaceId === ws().id || r.scope === "global",
   );
+  const today = new Date().toISOString().slice(0, 10);
   return (
     heading(
       "Privacy & site rules",
@@ -623,8 +631,37 @@ function privacyView() {
         "primary",
       ),
     ) +
-    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents.</div><div class="settings-row"><div><strong>Clear site storage</strong><small>Remove cookies and stored data for a specific site in this workspace.</small></div>${action("clear-storage", "Choose a site", "trash")}</div><div class="settings-section"><h2>Personal site rules</h2><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)}${r.provenance?.signed ? " · " + esc(r.provenance.claimKind) + " from community list " + esc(r.provenance.listName) + " (entry " + esc(r.provenance.entryId) + ")" : ""}</small><div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests and external application launches are denied. Model chat cannot interact with pages or change your policy. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Credential vault operations, payment approval, malware feeds, and comprehensive storage blocking are not available in this build. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
+    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents. Weft never clicks consent banners; these controls apply whether or not a site asks.</div><section class="settings-section"><div class="section-heading"><h2>Site storage</h2>${action("storage-defaults", "Change defaults", "", "", "text-button")}</div><div id="storage-policy"><p>Loading storage policy…</p></div><div class="settings-row"><div><strong>Clear this site</strong><small>Remove cookies and stored data for a specific site in this workspace. Server-side account records are not deleted.</small></div>${action("clear-storage", "Choose a site", "trash")}</div></section><div class="settings-section"><div class="section-heading"><h2>Personal site rules</h2>${action("explain-url", "Explain a web address", "search", "", "text-button")}</div><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}${r.provenance?.kind === "community-list" ? " · community list" : ""}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)} · created by ${esc(r.createdBy || "unknown")} · revision ${esc(r.revision)}${r.provenance?.signed ? " · " + esc(r.provenance.claimKind) + " from community list " + esc(r.provenance.listName) + " (entry " + esc(r.provenance.entryId) + ")" : ""}</small>${r.evidence?.length ? `<small>Evidence: ${r.evidence.map((e) => esc(host(e))).join(", ")}</small>` : ""}${r.reviewBy ? `<small>${r.reviewBy < today ? "Review overdue" : "Review by"} ${esc(r.reviewBy)}${r.lastReviewedAt ? " · last reviewed " + esc(new Date(r.lastReviewedAt).toLocaleDateString()) : ""}</small>` : ""}<div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("review-rule", "Mark reviewed", "", 'data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><section class="settings-section"><div class="section-heading"><h2>Security intelligence</h2>${action("install-threats", "Install threat list", "upload", "", "text-button")}</div><p>Known malicious destinations come from lists or a provider you choose. Security findings are kept separate from your personal preferences.</p><div id="threat-status"><p>Loading…</p></div></section><section class="settings-section"><div class="section-heading"><h2>Download scanning</h2>${action("configure-scanner", "Configure scanner", "", "", "text-button")}</div><div id="scanner-status"><p>Loading…</p></div></section><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests are denied, and external application launches wait for your approval in Downloads. Popups need a click in their tab. Model chat cannot interact with pages or change your policy. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Threat lists and scanners reduce exposure to known threats only; they cannot prevent browser exploits or detect new malware. Credential vault operations and payment approval are not available in this build. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
   );
+}
+const storageModeLabel = { block: "Blocked", session: "This session only", remember: "Remembered", default: "Workspace default" };
+async function loadPrivacyPanels() {
+  try {
+    const policy = await execute("storage.policy", { workspaceId: ws().id }, true);
+    if ($("storage-policy"))
+      $("storage-policy").innerHTML =
+        `<div class="settings-row"><div><strong>Workspace default</strong><small>${esc(storageModeLabel[policy.defaults.mode])} · cross-site cookies ${policy.defaults.crossSiteCookies === "block" ? "blocked" : "allowed"}</small><small>${esc(policy.sessionLifetime)}</small></div>${action("storage-coverage", "What is covered", "")}</div>` +
+        (policy.exceptions.length
+          ? policy.exceptions.map((e) => `<div class="settings-row"><div><strong>${esc(e.hostname)}</strong><small>${esc(storageModeLabel[e.mode])}${e.includeSubdomains ? " · includes subdomains" : ""} · set ${esc(new Date(e.updatedAt).toLocaleDateString())}</small></div>${action("storage-mode", "Revoke exception", "", `data-host="${esc(e.hostname)}" data-mode="default"`, "secondary danger")}</div>`).join("")
+          : "<p>No site exceptions. Use the shield in the address bar to set one for the current site.</p>") +
+        (policy.temporaryData.pendingEntries ? `<small>${policy.temporaryData.pendingEntries} temporary site origin(s) will be erased at exit.</small>` : "");
+  } catch (error) {
+    if ($("storage-policy")) $("storage-policy").textContent = errorMessage(error);
+  }
+  try {
+    const threats = await execute("threats.status", {}, true);
+    if ($("threat-status"))
+      $("threat-status").innerHTML =
+        (threats.lists.length
+          ? threats.lists.map((l) => `<div class="settings-row"><div><strong>${esc(l.publisher)}</strong><small>${esc(l.entryCount)} entries · generated ${esc(new Date(l.generatedAt).toLocaleString())} · ${l.freshness === "fresh" ? "current" : l.freshness === "stale" ? `stale (${esc(l.ageHours)} h old; newer threats are missed)` : "age unknown"}</small><small>SHA-256 ${esc(l.sha256.slice(0, 16))}… · ${esc(l.source)}</small></div>${action("remove-threats", "Remove", "", `data-id="${esc(l.id)}"`, "secondary danger")}</div>`).join("")
+          : "<p>No threat list installed. Security findings are unavailable until you install one.</p>") +
+        `<div class="settings-row"><div><strong>Reputation provider</strong><small>${threats.provider.enabled ? `On · ${esc(threats.provider.endpoint)} · ${esc(threats.provider.freshness)}${threats.provider.lastError ? " · last error: " + esc(threats.provider.lastError) : ""}` : "Off. Nothing is sent to any provider."}</small><small>${esc(threats.provider.egress)}</small></div><div class="inline-actions">${threats.provider.enabled ? action("update-threats", "Update now", "") : ""}${action("configure-provider", threats.provider.enabled ? "Change" : "Set up", "")}</div></div>`;
+    const scanner = threats.downloadScanner?.scanner;
+    if ($("scanner-status"))
+      $("scanner-status").innerHTML = `<p>Files are saved to a separate Weft downloads folder, marked with their origin where the operating system supports it, and never opened or run by Weft.</p><div class="settings-row"><div><strong>${scanner ? "Scanner configured" : "No scanner"}</strong><small>${scanner ? esc(scanner.command + " " + scanner.args.join(" ")) : "Completed downloads are shown as not scanned."}</small></div></div>`;
+  } catch (error) {
+    if ($("threat-status")) $("threat-status").textContent = errorMessage(error);
+  }
 }
 function settingsView() {
   return (
@@ -737,23 +774,64 @@ async function editClient(id) {
     setTimeout(() => void manageClients().catch(() => {}), 0);
   }, { save: "Save access", wide: true });
 }
+const scanLabel = {
+  pending: "Waiting to check",
+  scanning: "Scanning",
+  unscanned: "Not scanned",
+  clean: "Scanner found nothing (not a guarantee)",
+  infected: "Scanner detection · quarantined",
+  "known-malicious": "Known harmful file · quarantined",
+  "scan-failed": "Scan failed · safety unknown",
+};
 async function loadDownloads() {
   try {
     const rows = await execute("downloads.list", {}, true);
+    const launches = await execute("launches.list", {}, true);
     if (!$("download-list")) return;
-    $("download-list").innerHTML = rows.length
-      ? rows
-          .map(
-            (r) =>
-              `<div class="activity-row"><span class="activity-dot icon">${icon("download")}</span><div><strong>${esc(r.filename)}</strong><p>${esc(host(r.url))} · ${esc(r.state)} · ${Math.round(r.receivedBytes / 1024)} KB${r.reason ? " · " + esc(r.reason) : ""} · Not scanned</p></div>${r.state === "blocked" ? action("approve-download", "Allow download", "download", 'data-id="' + r.id + '"') : r.state === "progressing" ? action("cancel-download", "Cancel", "", 'data-id="' + r.id + '"') : ""}</div>`,
-          )
-          .join("")
-      : empty(
-          "Nothing downloaded yet",
-          "Files you download will appear here with their source and status.",
-          "download",
-        );
+    $("download-list").innerHTML =
+      (launches.length
+        ? `<section class="settings-section"><h2>External application requests</h2><p>Pages cannot open other applications on their own. Approve only requests you started and recognize.</p>${launches.map((l) => `<div class="activity-row"><span class="activity-dot icon">${icon("external")}</span><div><strong>${esc(l.scheme)}: link</strong><p>${esc(l.targetUrl.slice(0, 200))}</p><p>From ${esc(l.sourceTitle || host(l.sourceUrl))} (${esc(l.sourceUrl || "unknown page")}) · ${esc(l.frame)} · ${l.recentHumanInput ? "after your input" : "no recent input"} · ${esc(l.state)}${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}</p>${l.state === "refused" ? `<p>${esc(l.reason)}</p>` : ""}</div>${l.state === "pending" ? action("approve-launch", "Open application", "", 'data-id="' + l.id + '"') + action("deny-launch", "Dismiss", "", 'data-id="' + l.id + '"') : ""}</div>`).join("")}</section>`
+        : "") +
+      (rows.length
+        ? rows
+            .map(
+              (r) =>
+                `<div class="activity-row"><span class="activity-dot icon">${icon("download")}</span><div><strong>${esc(r.filename)}</strong><p>${esc(host(r.url))} · ${esc(r.state)} · ${Math.round(r.receivedBytes / 1024)} KB · ${esc(r.category || "unknown")}${r.risky ? " (can run code; never opened automatically)" : ""}${r.attempts > 1 ? ` · ${r.attempts} attempts` : ""}${r.suppressedAttempts ? ` · ${r.suppressedAttempts} more suppressed` : ""}</p><p>From ${esc(r.sourceTitle || host(r.sourcePage) || "unknown page")}${r.sourcePage ? " (" + esc(r.sourcePage) + ")" : ""}${r.reason ? " · " + esc(r.reason) : ""}</p><p>${esc(scanLabel[r.scanStatus] || "Not scanned")}${r.scanDetail ? " · " + esc(r.scanDetail) : ""}${r.originMetadata ? " · origin marker " + esc(r.originMetadata.status) : ""}${r.sha256 ? " · SHA-256 " + esc(r.sha256.slice(0, 12)) + "…" : ""}</p></div>${r.state === "blocked" ? action("approve-download", "Allow download", "download", 'data-id="' + r.id + '"') : r.state === "progressing" ? action("cancel-download", "Cancel", "", 'data-id="' + r.id + '"') : ""}</div>`,
+            )
+            .join("")
+        : empty(
+            "Nothing downloaded yet",
+            "Files you download will appear here with their source and status.",
+            "download",
+          ));
   } catch {}
+}
+async function siteProtection() {
+  const tab = active();
+  if (!tab || tab.url === "about:blank") { navigateSection("privacy"); return; }
+  const hostname = host(tab.url);
+  const p = tab.protection || {};
+  const activity = p.storageActivity || {};
+  const current = p.storageMode?.source === "site" ? p.storageMode.mode : "default";
+  const blockedCount = (activity.cookieHeadersRemoved || 0) + (activity.setCookieRemoved || 0) + (activity.crossSiteCookiesBlocked || 0) + (activity.speculativeLoadsCancelled || 0);
+  openDialog(
+    `Site controls · ${hostname}`,
+    `<p>Storage for this site: <strong>${esc(storageModeLabel[current])}</strong>${current === "default" ? ` (${esc(storageModeLabel[p.storageMode?.mode] || "Remembered")})` : ""}. Changes apply after reload. Sites and agents cannot change this.</p><div class="inline-actions">${["block", "session", "remember", "default"].map((m) => action("storage-mode", m === "block" ? "Block site storage" : m === "session" ? "Allow for this session" : m === "remember" ? "Remember this site" : "Use workspace default", "", `data-host="${esc(hostname)}" data-mode="${m}"`, m === current ? "primary" : "secondary")).join("")}${action("clear-storage", "Clear this site", "trash")}</div><p>On this page: ${blockedCount} cookie or speculative request(s) stopped${activity.documentsSandboxed ? `, ${activity.documentsSandboxed} document(s) loaded without storage` : ""}, ${(p.blockedPopups || []).length} popup(s) blocked, ${Object.values(p.permissionDenials || {}).reduce((a, b) => a + b, 0)} permission request(s) denied, ${p.pendingLaunches || 0} application launch request(s) waiting.</p>${(p.blockedPopups || []).slice(-3).map((b) => `<div class="settings-row"><div><strong>Blocked popup</strong><small>${esc(b.url)}</small></div>${action("open-url", "Open in new tab", "external", `data-url="${esc(b.url)}"`)}</div>`).join("")}${p.securityWarning ? `<div class="notice">${esc(p.securityWarning)}</div>` : ""}${action("explain-url", "Why is this site allowed or blocked?", "search", `data-url="${esc(tab.url)}"`, "text-button")}`,
+    action("close-dialog", "Close"),
+  );
+}
+async function explainUrl(url) {
+  const r = await execute("siteRules.explain", { url, workspaceId: ws().id, ...(active() ? { tabId: active().id } : {}) }, true);
+  openDialog(
+    "Why this outcome",
+    `<p><strong>${esc(r.decision === "allow-exception" ? "Allowed for this visit by your exception" : r.decision === "block" ? "Blocked" : r.decision === "warn" ? "Allowed with a warning" : "Allowed")}</strong> · decided by ${esc(r.decidedBy)}</p><p>Address host: ${esc(r.hostname.unicode)}${r.hostname.punycode ? ` (${esc(r.hostname.ascii)})` : ""}</p>${r.hostname.notice ? `<div class="notice">${esc(r.hostname.notice)}${r.hostname.mixedScript ? " This name mixes writing systems." : ""}</div>` : ""}${r.security.map((f) => `<div class="notice"><strong>Security finding</strong>: ${esc(f.category)} from ${esc(f.publisher || f.source)}${f.stale ? " · intelligence is stale" : ""}</div>`).join("")}${r.exception ? `<p>Exception: ${esc(r.exception.expires)}</p>` : ""}${r.matches.length ? r.matches.map((m) => `<article class="record-card"><span class="tag">${m.order}. ${esc(m.precedence)}${m.effective ? " · decides" : ""}${m.applies ? "" : " · not applied"}</span><h3>${esc(m.hostname)}${m.path !== "/" ? esc(m.path) : ""}</h3><p>${esc(m.why)}</p><small>${esc(m.source)} · ${esc(m.reason)} · created by ${esc(m.createdBy)} · revision ${esc(m.revision)}${m.reviewStatus === "due" ? " · review overdue" : ""}</small>${m.evidence.length ? `<small>Evidence: ${m.evidence.map((e) => esc(e)).join(", ")}</small>` : ""}</article>`).join("") : "<p>No site rule matches this address.</p>"}${r.conflicts ? `<div class="notice">${esc(r.conflicts)}</div>` : ""}<details><summary>Precedence order</summary><ol>${r.precedence.map((p) => `<li>${esc(p.description)}</li>`).join("")}</ol></details>`,
+    action("close-dialog", "Close"),
+    true,
+  );
+}
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 function layout() {
   if (!window.weft.layout) return;
@@ -951,7 +1029,9 @@ function editRecord(kind, id) {
       ) +
       field("Path prefix", "path", r?.path || "/") +
       field("Reason", "reason", r?.reason || "Personal preference") +
-      area("Note", "note", r?.note || "");
+      area("Note", "note", r?.note || "") +
+      area("Evidence links (one HTTP(S) URL per line)", "evidence", (r?.evidence || []).join("\n")) +
+      field("Review by (optional)", "reviewBy", r?.reviewBy || "", "date");
   } else {
     fields = field("Title", "title", r?.title || "", "text", true);
     if (kind === "materials")
@@ -1051,6 +1131,13 @@ function editRecord(kind, id) {
       if ("pinned" in values) values.pinned = values.pinned === "true";
       if ("includeSubdomains" in values)
         values.includeSubdomains = values.includeSubdomains === "true";
+      if (kind === "siteRules") {
+        values.evidence = values.evidence.split("\n").map((s) => s.trim()).filter(Boolean);
+        if (!values.reviewBy) {
+          if (r?.reviewBy) values.reviewBy = null;
+          else delete values.reviewBy;
+        }
+      }
       if (kind === "context")
         values.sources = values.sources
           .split("\n")
@@ -1769,7 +1856,97 @@ async function act(button) {
       await execute("page.back");
       break;
     case "allow-once":
-      await execute("page.allowOnce", { tabId: active().id });
+      if (active()?.blocked?.kind === "security") {
+        formDialog(
+          "Proceed to a known harmful destination?",
+          `<p>${esc(active().blocked.url)} is listed as ${esc(active().blocked.category)} by your security intelligence. Continuing allows only this address in this tab, for this visit.</p><label><input type="checkbox" name="acknowledge" required> I understand the risk and want to continue</label>`,
+          async () => { await execute("page.allowOnce", { tabId: active().id, acknowledgeSecurityRisk: true }); },
+          { save: "Proceed for this visit" },
+        );
+      } else await execute("page.allowOnce", { tabId: active().id });
+      break;
+    case "explain-url":
+      if (button.dataset.url) await explainUrl(button.dataset.url);
+      else formDialog("Explain a web address", field("Web address", "url", active()?.url !== "about:blank" ? active()?.url || "" : "", "url", true), async (v) => { setTimeout(() => void explainUrl(v.url).catch((e) => toast(errorMessage(e))), 0); });
+      break;
+    case "storage-mode":
+      await execute("storage.setSiteMode", { workspaceId: ws().id, hostname: button.dataset.host, mode: button.dataset.mode });
+      toast(button.dataset.mode === "block" ? "Site storage blocked and existing data erased. Reload open pages." : button.dataset.mode === "session" ? "This site's data will be erased when Weft exits." : button.dataset.mode === "remember" ? "This site's data will be kept." : "Exception revoked; the workspace default applies.");
+      if ($("dialog").open) closeDialog();
+      if (section === "privacy") await loadPrivacyPanels();
+      break;
+    case "storage-defaults": {
+      const policy = await execute("storage.policy", { workspaceId: ws().id }, true);
+      formDialog(
+        "Site storage defaults",
+        choice("Sites without an exception", "mode", [["remember", "Remember site data"], ["session", "Keep data for this session only"], ["block", "Block site storage"]], policy.defaults.mode) +
+          choice("Cross-site cookies", "crossSiteCookies", [["block", "Block (recommended)"], ["allow", "Allow"]], policy.defaults.crossSiteCookies) +
+          "<p>Blocking storage can break sign-in and site features. Session-only data is erased at exit, or at the next start after a crash.</p>",
+        async (v) => { await execute("storage.setDefaultMode", { workspaceId: ws().id, mode: v.mode, crossSiteCookies: v.crossSiteCookies }); },
+      );
+      break;
+    }
+    case "storage-coverage": {
+      const policy = await execute("storage.policy", { workspaceId: ws().id }, true);
+      openDialog("Storage coverage", `<p>${esc(policy.sessionLifetime)}</p><table class="coverage-table"><thead><tr><th>Path</th><th>Block</th><th>This session</th><th>Remember</th></tr></thead><tbody>${policy.coverage.map((row) => `<tr><th>${esc(row.path)}</th><td>${esc(row.block)}</td><td>${esc(row.session)}</td><td>${esc(row.remember)}</td></tr>`).join("")}</tbody></table><ul>${policy.limitations.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`, action("close-dialog", "Close"), true);
+      break;
+    }
+    case "review-rule":
+      formDialog("Mark rule reviewed", field("Next review (optional)", "reviewBy", "", "date") + area("Review note (optional)", "note", ""), async (v) => {
+        await execute("siteRules.review", { id, ...(v.reviewBy ? { reviewBy: v.reviewBy } : {}), ...(v.note ? { note: v.note } : {}) });
+      });
+      break;
+    case "install-threats":
+      formDialog(
+        "Install a threat list",
+        '<p>Use a list from a publisher you trust. Paste the SHA-256 published by that source; the file must match it exactly. Lists never update in the background.</p><label>Threat list file (weft-threat-list JSON)<input id="threat-file" type="file" accept="application/json,.json" required></label>' + field("List name", "id", "", "text", true) + field("Published SHA-256", "sha256", "", "text", true) + field("Source (publisher URL or description)", "source", "", "text", true) + field("Stale after (hours)", "maxAgeHours", "72", "number"),
+        async (v) => {
+          const f = $("threat-file").files[0];
+          if (!f || f.size > 4000000) throw new Error("Choose a list under 4 MB.");
+          const data = await f.text();
+          if ((await sha256Hex(data)) !== v.sha256.trim().toLowerCase()) throw new Error("The file does not match the published SHA-256.");
+          await execute("threats.install", { id: v.id, sha256: v.sha256.trim(), bytes: new TextEncoder().encode(data).length, source: v.source, maxAgeHours: Number(v.maxAgeHours) || 72, data });
+          toast("Threat list installed.");
+        },
+        { save: "Verify and install" },
+      );
+      break;
+    case "remove-threats":
+      await execute("threats.remove", { id });
+      await loadPrivacyPanels();
+      break;
+    case "update-threats":
+      await execute("threats.update", {});
+      await loadPrivacyPanels();
+      break;
+    case "configure-provider": {
+      const status = await execute("threats.status", {}, true);
+      formDialog(
+        "Reputation provider",
+        `<p>Optional. When on, Weft downloads hash-prefix lists and, only when a page matches a prefix locally, sends that short hash prefix to the provider to confirm. Full addresses are never sent, but the provider sees your IP address. Check the provider's terms (some free services are non-commercial only).</p>${choice("Status", "enabled", [["false", "Off"], ["true", "On"]], String(status.provider.enabled))}${field("Endpoint (Safe Browsing v4 Update API compatible)", "endpoint", status.provider.endpoint || "https://safebrowsing.googleapis.com", "url")}${field("Environment variable holding the API key", "apiKeyEnv", status.provider.apiKeyEnv || "WEFT_SAFE_BROWSING_KEY")}<label><input type="checkbox" name="acknowledgeEgress"> I understand what is sent to this provider</label>`,
+        async (v) => {
+          await execute("threats.configureProvider", v.enabled === "true" ? { enabled: true, endpoint: v.endpoint, apiKeyEnv: v.apiKeyEnv, acknowledgeEgress: v.acknowledgeEgress === "on" } : { enabled: false });
+        },
+      );
+      break;
+    }
+    case "configure-scanner":
+      formDialog(
+        "Download scanner",
+        "<p>Optional. Weft runs this local program with the downloaded file path as the last argument after each completed download. Without a scanner, downloads are shown as not scanned. A clean result is not a guarantee.</p>" + field("Scanner program (absolute path; leave empty to remove)", "command", "", "text") + field("Arguments (space separated)", "args", "") + field("Exit code meaning clean", "clean", "0", "number") + field("Exit code meaning infected", "infected", "1", "number"),
+        async (v) => {
+          await execute("downloads.configureScanner", v.command.trim() ? { command: v.command.trim(), args: v.args.split(" ").filter(Boolean), cleanExitCodes: [Number(v.clean)], infectedExitCodes: [Number(v.infected)] } : { command: null });
+          toast(v.command.trim() ? "Scanner configured." : "Scanner removed. Downloads will show as not scanned.");
+        },
+      );
+      break;
+    case "approve-launch":
+      await execute("launches.approve", { launchId: Number(id) });
+      await loadDownloads();
+      break;
+    case "deny-launch":
+      await execute("launches.deny", { launchId: Number(id) });
+      await loadDownloads();
       break;
     case "section":
       if ($("dialog").open) closeDialog();
@@ -2142,7 +2319,7 @@ $("settings-button").onclick = () => navigateSection("settings");
 $("downloads-button").onclick = () => navigateSection("downloads");
 $("privacy-button").onclick = () => navigateSection("privacy");
 $("site-controls").onclick = () => {
-  navigateSection("privacy");
+  void siteProtection().catch((e) => toast(errorMessage(e)));
 };
 $("save-page").onclick = () =>
   void capture().catch((e) => toast(errorMessage(e)));

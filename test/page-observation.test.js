@@ -151,7 +151,7 @@ if (process.argv.includes('--observation-smoke')) {
       // #41: a blocked click is reported as blocked, never as done.
       await workspace.execute('siteRules.create', { hostname: '127.0.0.1', path: '/blocked', behavior: 'block' });
       view = await run('page.snapshot', {});
-      await fails(run('page.click', { expectedVersion: view.navigationVersion, ref: node(view, 'link', 'Restricted').ref }), error => assert.equal(error.code, 'site_blocked'), 'blocked link');
+      await fails(run('page.click', { expectedVersion: view.navigationVersion, ref: node(view, 'link', 'Restricted').ref }), error => { assert.equal(error.code, 'site_blocked'); assert.deepEqual([error.details.kind, error.details.explain], ['preference', 'siteRules.explain'], 'input and navigation share one blocked-details structure'); }, 'blocked link');
       assert.equal(hits.includes('/blocked/target'), false);
       await run('tabs.release', {});
       await run('page.back', {}, { actor: 'human' });

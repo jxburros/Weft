@@ -181,3 +181,25 @@ workspace scope as live delivery. Event types are registered in
 `handoff`, `policy`, `artifact`, `turn`, `approval`, plus `registerEventType`);
 `turn` events report `started`, `completed`, `partial`, `interrupted` or
 `failed` with turn and conversation IDs, never model text.
+
+## Blocked destinations and browser-owned policy
+
+When a site rule or installed security intelligence stops a browser-mediated
+navigation, the outcome fails with `error.code: "site_blocked"` (REST 403, CLI
+exit 4) and `error.details.blocked` describing the URL, `kind` (`security` or
+`preference`), rule ID, source, mode, reason and staleness. It is never
+reported as success. Ask for every matching rule, any exact-visit exception and
+security findings in precedence order with:
+
+```json
+{"command":"siteRules.explain","args":{"url":"https://example.com/"}}
+```
+
+Then choose another source or ask the person. Exceptions (`page.allowOnce`),
+storage modes (`storage.setSiteMode`, `storage.setDefaultMode`), threat lists,
+the optional reputation provider, the download scanner and external
+application launches (`launches.approve`) are human-only. Agents may read
+`storage.policy`, `threats.status` and `launches.list`. Speculative
+prefetch/prerender requests are cancelled for every destination. Browser
+enforcement covers requests made by Weft's Chromium sessions only; your own
+HTTP clients, shells and tools are outside it and need their own controls.

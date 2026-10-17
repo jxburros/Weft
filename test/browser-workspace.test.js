@@ -101,13 +101,13 @@ if (smoke) {
       await browser.execute('page.navigate', { url: origin });
       await assert.rejects(browser.execute('page.navigate', { url: `${origin}/blocked/direct` }), /Blocked/, 'override expires after leaving the destination');
       await assert.rejects(browser.execute('page.navigate', { url: `${origin}/blocked/redirect` }), /Blocked/);
-      await assert.rejects(browser.execute('page.allowOnce', { tabId: firstTab }), /BLOCKED|ERR_ABORTED|ERR_FAILED/);
+      await assert.rejects(browser.execute('page.allowOnce', { tabId: firstTab }), { code: 'site_blocked' }, 'a redirect from the excepted destination is reported as a structured block');
       assert.equal(hits.includes('/blocked/next'), false, 'override does not permit a redirect chain');
       assert.equal(browser.describe(browser.tab()).blocked.url, `${origin}/blocked/next`);
       await browser.execute('page.back');
       assert.equal(browser.describe(browser.tab()).blocked, null);
 
-      await assert.rejects(browser.execute('page.navigate', { url: `${origin}/redirect` }), /BLOCKED|ERR_ABORTED|ERR_FAILED/);
+      await assert.rejects(browser.execute('page.navigate', { url: `${origin}/redirect` }), error => error.code === 'site_blocked' && error.details.url === `${origin}/blocked/destination`);
       assert.equal(hits.includes('/blocked/destination'), false, 'redirect target is blocked before contact');
       await browser.execute('page.navigate', { url: origin });
       assert.equal(await browser.execute('page.evaluate', { expression: `fetch(${JSON.stringify(`${origin}/blocked/background`)}).then(()=>true,()=>false)` }), false);
