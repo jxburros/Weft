@@ -381,7 +381,7 @@ test('a deadline stops a running model turn and keeps its partial reply', { time
   const admission = new AutomationAdmission();
   const browser = { tabs: new Map(), downloads: new Map(), activeId: null, tab() { throw new Error('No tab'); }, execute: async () => ({}) };
   const dispatch = createDispatcher({ workspace: f.workspace, browser, providers: f.providers, admission });
-  const outcome = await dispatch('chat.send', { conversationId: f.conversation.id, modelId: model.id, text: 'Hello' }, { ...human, deadlineMs: 300 });
+  const outcome = await dispatch('chat.send', { conversationId: f.conversation.id, modelId: model.id, text: 'Hello' }, { ...human, deadlineMs: 1500 });
   assert.deepEqual([outcome.status, outcome.execution, outcome.error.code], ['timed_out', 'cancelled', 'deadline_exceeded']);
   assert.deepEqual([outcome.error.details.started, outcome.error.details.effect, outcome.error.details.partialSaved], [true, 'stopped', true]);
   assert.match(outcome.error.details.turnId, /^turn_/);

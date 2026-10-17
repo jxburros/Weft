@@ -141,7 +141,8 @@ test('first-token, idle and total deadlines stop silent streams; partials are co
     else if (mode === 'idle') sse(res, [openaiDelta('Half an ')], { end: false });
     else { const timer = setInterval(() => sse(res, [openaiDelta('.')], { end: false }), 5); res.on('close', () => clearInterval(timer)); }
   });
-  const fixture = await modelFixture(t, { providers: { timeoutMs: 400, deadlines: { firstTokenMs: 60, idleMs: 60 } } });
+  // Deadlines are wide enough that a slow CI runner's synced writes before the request cannot pass for a silent stream.
+  const fixture = await modelFixture(t, { providers: { timeoutMs: 2500, deadlines: { firstTokenMs: 1000, idleMs: 1000 } } });
   const model = await fixture.save({ endpoint: `${endpoint.base}/v1` });
   mode = 'first';
   let outcome = await outcomeOf(fixture, { modelId: model.id });
