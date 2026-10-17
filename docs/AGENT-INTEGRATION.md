@@ -264,6 +264,54 @@ independent security review; see
 [ADR-017](decisions/017-credential-broker-and-protected-login.md) for its limits.
 
 
+## Durable tasks, uncertain work and workflows
+
+A task with a `plan` runs only after it is started. Create it, then start it as
+yourself (agents can bind only their own identity; a person chooses any other,
+including the built-in Weft task runner at a chosen autonomy level):
+
+```json
+{"command":"tasks.create","args":{"workspaceId":"ws_00000000-0000-4000-8000-000000000000","title":"Collect supplier prices","plan":[{"kind":"command","title":"Record the price","command":"context.create","args":{"title":"Price","category":"findings","content":"12.50"}},{"kind":"review","title":"Check the price"}]}}
+```
+
+```json
+{"command":"tasks.start","args":{"id":"task_00000000-0000-4000-8000-000000000000"}}
+```
+
+Each step re-enters the dispatcher as the task identity, so your grants,
+approvals and the emergency stop apply to every step. Read `tasks.get` for the
+phase (`queued`, `running`, `waiting_on_human`, `paused`, `completed`,
+`failed`, `cancelled`, `uncertain`), the step timeline, `run.blocker`, the
+operation records and `staleness`. `approval_required` leaves the task waiting
+until a person decides; an expired grant pauses it with a `grant` blocker.
+Steer only your own tasks (`tasks.pause`, `tasks.continue`, `tasks.redirect`,
+`tasks.cancel`); a task a person paused or stopped is continued by a person.
+
+`uncertain` means a step with an external effect (a click, fill, sign-in or
+model request) started and its outcome is unknown, for example after a crash.
+Do not repeat it through another command. `tasks.continue` returns
+`duplicate_risk` (exit code 3) until a person records what happened with
+`tasks.reconcile` or explicitly accepts the duplicate risk with
+`tasks.retryStep` and `confirmDuplicateRisk: true`; both are human-only.
+
+Enabled workflows run with typed parameters as runtime tasks; validate first:
+
+```json
+{"command":"workflows.validate","args":{"id":"work_00000000-0000-4000-8000-000000000000","parameters":{"item":"paper","quantity":2}}}
+```
+
+```json
+{"command":"workflows.run","args":{"id":"work_00000000-0000-4000-8000-000000000000","parameters":{"item":"paper","quantity":2},"tabId":1}}
+```
+
+A run may act only on the workflow's allowed sites. A step whose selector, ref
+or expected URL no longer matches pauses as an invalidated step before any
+input. Inactive workflows (imported, written or changed by automation) refuse
+to run until a person reviews and enables them. Credential parameters are
+opaque ids from `credentials.list`, usable only as the `id` of a
+`credentials.fill` step. See
+[ADR-016](decisions/016-durable-task-runtime.md).
+
 ## Safe retries, atomic batches, previews and search
 
 Mutating record commands accept an optional `requestId` chosen by the agent.
