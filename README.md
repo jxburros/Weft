@@ -271,8 +271,9 @@ This is a working browser build, **not every requirement in the full product
 specification**. The exact section-by-section and acceptance-criteria assessment
 is in [implementation coverage](docs/IMPLEMENTATION.md).
 
-The largest remaining capabilities are the isolated credential/payment broker,
-fine-grained agent grants and autonomous execution, comprehensive storage
+The largest remaining capabilities are independent review of the credential
+broker, validation of payment authorization with real merchants and card issuers
+([ADR-019](docs/decisions/019-payment-authorization.md)), fine-grained agent grants and autonomous execution, comprehensive storage
 block/session modes, a community-list management screen and any hosted moderation service, synchronization,
 and signed (rather than labelled-unsigned) installers verified on real machines. Browser extension support is limited to unpacked
 Manifest V3 extensions installed per workspace with audited permissions

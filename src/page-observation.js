@@ -297,13 +297,67 @@ async function weftCredential(op, args) {
   }
   if (op === 'revealed') {
     // A brokered secret now readable as plain text: a revealed (type changed) or copied field value.
+    // Card fields Weft filled are plain text by nature; they stay redacted and masked, so only copies elsewhere count.
     const digests = state?.credentialDigests;
     if (!digests?.size) return false;
     for (const el of document.querySelectorAll('input, textarea')) {
-      if (isPassword(el) || !el.value || el.value.length > 4096) continue;
+      if (isPassword(el) || el.getAttribute('data-weft-credential') === 'card' || !el.value || el.value.length > 4096) continue;
       if (digests.has(await digest(el.value))) return true;
     }
     return false;
+  }
+  // Payment-card fields (ADR 019): autocomplete tokens first, then conservative name/label hints.
+  const CARD_TOKENS = { 'cc-number': 'number', 'cc-exp': 'expiry', 'cc-exp-month': 'expMonth', 'cc-exp-year': 'expYear', 'cc-csc': 'cvc', 'cc-name': 'name' };
+  const cardKind = el => {
+    if (!['input', 'select'].includes(el.localName) || !usable(el) || isPassword(el) || (el.localName === 'input' && ['hidden', 'checkbox', 'radio', 'submit', 'button'].includes(el.type))) return null;
+    const tokens = (el.getAttribute('autocomplete') || '').toLowerCase().split(/\s+/);
+    for (const token of tokens) if (CARD_TOKENS[token]) return CARD_TOKENS[token];
+    const hint = [el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder')].filter(Boolean).join(' ').toLowerCase();
+    if (/card.?(number|num|no)\b|cardnumber|\bcc.?num/.test(hint)) return 'number';
+    if (/\bcvc\b|\bcvv\b|\bcsc\b|security.?code/.test(hint)) return 'cvc';
+    if (/name.?on.?card|card.?holder/.test(hint)) return 'name';
+    if (/mm\s*\/\s*yy/.test(hint)) return 'expiry';
+    if (/exp\w*.?(month|mm)\b/.test(hint)) return 'expMonth';
+    if (/exp\w*.?(year|yy)/.test(hint)) return 'expYear';
+    if (/expir|\bexp\b/.test(hint)) return 'expiry';
+    return null;
+  };
+  const cardFields = () => {
+    const found = {};
+    for (const el of document.querySelectorAll('input, select')) { const kind = cardKind(el); if (kind) (found[kind] ??= []).push(el); }
+    return found;
+  };
+  if (op === 'cardProbe') return { ok: true, fields: Object.fromEntries(Object.entries(cardFields()).map(([kind, list]) => [kind, list.length])) };
+  if (op === 'cardFill') {
+    if (location.origin !== args.origin) return { ok: false, reason: 'navigated' };
+    const found = cardFields();
+    if (!found.number && !Object.keys(found).length) return { ok: false, reason: 'no_card_form' };
+    if (Object.values(found).some(list => list.length > 1)) return { ok: false, reason: 'ambiguous_card_form' };
+    const view = document.defaultView;
+    const month = String(args.expMonth || '').padStart(2, '0');
+    const year4 = String(args.expYear || '');
+    const year2 = year4.slice(-2);
+    const set = (el, value) => {
+      if (el.localName === 'select') {
+        const option = [...el.options].find(item => [item.value, item.textContent.trim()].some(text => [value, String(Number(value)), year4, year2].includes(text)));
+        if (!option) return false;
+        Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, 'value').set.call(el, option.value);
+      } else Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value').set.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.setAttribute('data-weft-credential', 'card');
+      if (state) (state.credentialFields ??= new WeakSet()).add(el);
+      return true;
+    };
+    const values = { number: args.number, cvc: args.cvc, name: args.name, expiry: month && year2 ? `${month}/${year2}` : '', expMonth: month,
+      expYear: (found.expYear?.[0]?.maxLength > 0 && found.expYear[0].maxLength <= 2) ? year2 : year4 };
+    const filled = [];
+    for (const [kind, [el]] of Object.entries(found)) {
+      if (!values[kind]) continue;
+      if (set(el, values[kind])) filled.push(kind);
+    }
+    if (state && globalThis.crypto?.subtle) for (const value of [args.number, args.cvc].filter(Boolean)) (state.credentialDigests ??= new Set()).add(await digest(value));
+    return { ok: true, filled, submitted: 'not_requested' };
   }
   if (op !== 'fill') return { ok: false, reason: 'unsupported' };
   // The browser process checked this frame's origin; a navigation since then must not receive the secret.
@@ -342,4 +396,66 @@ async function weftCredential(op, args) {
 
 export function credentialScript(op, args = {}) {
   return `(${weftCredential.toString()})(${JSON.stringify(op)}, ${JSON.stringify(args)})`;
+}
+
+/* eslint-disable no-undef -- executed in the checkout frame (isolated world for the top frame). */
+function weftPayment(op, args) {
+  const clean = (value, limit = 300) => String(value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  const visible = el => el.isConnected && el.getClientRects().length > 0
+    && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ visibilityProperty: true, opacityProperty: true }));
+  // Rendered text only (innerText), so text hidden by the page is not read as a term.
+  const textOf = el => el.localName === 'select' ? el.selectedOptions?.[0]?.textContent : ['input', 'textarea'].includes(el.localName) ? el.value : (el.innerText ?? el.textContent);
+  const label = el => clean(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title'), 200);
+  const escape = value => (globalThis.CSS?.escape ? CSS.escape(value) : String(value).replace(/[^\w-]/g, ch => `\\${ch}`));
+  const unique = selector => { try { return document.querySelectorAll(selector).length === 1; } catch { return false; } };
+  const cssPath = el => {
+    if (el.id && unique(`#${escape(el.id)}`)) return `#${escape(el.id)}`;
+    const parts = [];
+    for (let node = el; node && node.nodeType === 1 && node !== document.documentElement; node = node.parentElement) {
+      if (node !== el && node.id && unique(`#${escape(node.id)}`)) { parts.unshift(`#${escape(node.id)}`); break; }
+      const same = [...(node.parentElement?.children ?? [])].filter(item => item.localName === node.localName);
+      parts.unshift(same.length > 1 ? `${node.localName}:nth-of-type(${same.indexOf(node) + 1})` : node.localName);
+    }
+    return parts.join(' > ');
+  };
+  if (op === 'resolve') {
+    // Snapshot refs live in the observation world; a ref becomes a structural selector re-read before submission.
+    const refs = globalThis.__weftObservation?.refs;
+    const selectors = {};
+    for (const [field, ref] of Object.entries(args.refs || {})) {
+      const el = refs?.get(ref)?.el.deref();
+      selectors[field] = el && el.isConnected && el.ownerDocument === document && el.getRootNode() === document ? cssPath(el) : null;
+    }
+    return { ok: true, selectors };
+  }
+  if (op === 'read') {
+    const fields = {};
+    for (const [field, selector] of Object.entries(args.selectors || {})) {
+      let list;
+      try { list = [...document.querySelectorAll(selector)].filter(visible); } catch { fields[field] = { count: -1, text: '' }; continue; }
+      const el = list.length === 1 ? list[0] : null;
+      // The surrounding text (for example the label beside an amount) is shown to the person so a mislabelled target is visible.
+      fields[field] = { count: list.length, text: el ? clean(textOf(el)) : '', ...(el && field !== 'submit' ? { context: clean(el.parentElement?.innerText ?? '', 160) } : {}),
+        ...(field === 'submit' && el ? { label: label(el), enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true' } : {}) };
+    }
+    return { ok: true, origin: location.origin, href: clean(location.href, 16384), fields };
+  }
+  if (op === 'click') {
+    // The browser process verified this frame's origin; a navigation since then must not receive the click.
+    if (location.origin !== args.origin) return { ok: false, reason: 'navigated' };
+    let list;
+    try { list = [...document.querySelectorAll(args.selector)].filter(visible); } catch { return { ok: false, reason: 'missing' }; }
+    if (list.length !== 1) return { ok: false, reason: list.length ? 'ambiguous' : 'missing' };
+    const el = list[0];
+    if (el.disabled || el.getAttribute('aria-disabled') === 'true') return { ok: false, reason: 'disabled' };
+    el.scrollIntoView?.({ block: 'center' });
+    HTMLElement.prototype.click.call(el);
+    return { ok: true };
+  }
+  return { ok: false, reason: 'unsupported' };
+}
+/* eslint-enable no-undef */
+
+export function paymentScript(op, args = {}) {
+  return `(${weftPayment.toString()})(${JSON.stringify(op)}, ${JSON.stringify(args)})`;
 }

@@ -6,12 +6,12 @@ import { WEFT_VERSION } from './version.js';
 import { GUIDANCE, getGuidance, guidanceTopics } from './guidance.js';
 
 const groups = {
-  tabs: ['tabs', 'tabGroups'], page: ['page'],
-  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'encryption', 'resume', 'resources'],
+  tabs: ['tabs', 'tabGroups', 'display'], page: ['page'],
+  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'encryption', 'resume', 'resources', 'browsingData'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],
   // Shared context, linked sources, services, citations, freshness and conflicts (ADR 013): split out so every tool stays under the size budget.
   knowledge: ['collections', 'sources', 'services', 'citations', 'freshness', 'conflicts'],
-  artifacts: ['artifacts', 'captures'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials', 'display', 'browsingData'], models: ['models', 'chat'],
+  artifacts: ['artifacts', 'captures'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials', 'payments'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {
   const actions = Object.keys(commands).filter(name => namespaces.includes(name.split('.')[0]));

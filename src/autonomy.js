@@ -87,6 +87,13 @@ add('administration', 'encryption.enable encryption.lock encryption.unlock encry
 add('local_read', 'resume.get tabGroups.list tabs.search resources.status captures.list display.status');
 add('local_write', 'resume.save tabGroups.create tabGroups.update tabGroups.delete tabs.group tabs.suspend captures.cancel display.show');
 add('administration', 'display.hide browsingData.sources browsingData.preview browsingData.import');
+// Payment authorization (#7, ADR 019): proposing records terms and queues an approval (local work); submitting is the once-only
+// payment class; reading a virtual card's transactions is an external read; reconciliation, retries and card issuance are human-only.
+add('local_read', 'payments.status payments.list payments.get');
+add('local_write', 'payments.propose payments.cancel');
+add('external_read', 'payments.checkCharges');
+add('payment', 'payments.submit');
+add('administration', 'payments.reconcile payments.retry payments.issueCard payments.closeCard payments.configureProvider');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -135,7 +142,7 @@ export function sensitiveCategoriesForCommand(name) {
 /** Resource a command writes: decides which client write scope applies. Derived from namespace so new commands are covered. */
 export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
-  if (['tabs', 'page', 'downloads', 'captures'].includes(namespace) || name === 'credentials.fill') return 'tabs';
+  if (['tabs', 'page', 'downloads', 'captures'].includes(namespace) || ['credentials.fill', 'payments.submit'].includes(name)) return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
   if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions', 'display', 'browsingData'].includes(namespace)) return 'browser';
   return 'records';
@@ -157,6 +164,7 @@ const dataOverrides = {
   'transfers.read': ['workspace_records', 'page_capture'],
   'encryption.status': [],
   'tabs.search': ['workspace_records'], 'display.status': [], 'resources.status': [], 'captures.list': [],
+  'payments.propose': ['page_content'], 'payments.status': [], 'payments.checkCharges': ['workspace_records'],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];

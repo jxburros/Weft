@@ -13,7 +13,7 @@ export const human = { actor: 'human', source: 'gui' };
  * browser whose tabs are scripted fakes. `page.hold(tabId)` makes the next page
  * script on that tab hang until released, to simulate a step in flight.
  */
-export function createRuntimeFixture({ directory, providers = null, credentials, credentialService = null, pages = { 1: 'https://shop.example.com/cart' } } = {}) {
+export function createRuntimeFixture({ directory, providers = null, credentials, credentialService = null, paymentService = null, pages = { 1: 'https://shop.example.com/cart' } } = {}) {
   const workspace = new WorkspaceService({ directory });
   const workspaceId = workspace.activeWorkspaceId;
   const session = new EventEmitter();
@@ -61,8 +61,10 @@ export function createRuntimeFixture({ directory, providers = null, credentials,
   // A factory receives the workspace and browser, so a real credential broker service can be wired in.
   const service = typeof credentialService === 'function' ? credentialService({ workspace, browser }) : credentialService;
   const tasks = new TaskRuntime({ workspace, browser, admission, clients, providers, ...(credentials || service ? { credentials: credentials ?? service } : {}) });
+  // A factory receives the workspace, browser and credential service, so a real payment service can be wired in (ADR 019).
+  const payments = typeof paymentService === 'function' ? paymentService({ workspace, browser, credentials: service }) : paymentService;
   const events = [];
-  const dispatch = createDispatcher({ workspace, browser, clients, providers: providers ?? { close() {}, stopAll() {}, execute() { throw new Error('No model provider in this fixture'); } }, admission, tasks, credentials: service, onEvent: event => events.push(event) });
+  const dispatch = createDispatcher({ workspace, browser, clients, providers: providers ?? { close() {}, stopAll() {}, execute() { throw new Error('No model provider in this fixture'); } }, admission, tasks, credentials: service, payments, onEvent: event => events.push(event) });
   const run = async (command, args = {}, context = human) => {
     const outcome = await dispatch(command, args, context);
     if (outcome.error) throw Object.assign(new Error(`${command}: ${outcome.error.code}: ${outcome.error.message}`), { outcome });
@@ -73,5 +75,5 @@ export function createRuntimeFixture({ directory, providers = null, credentials,
   const settle = async id => { for (let i = 0; i < 50; i++) { await tasks.idle(id); await new Promise(resolve => setImmediate(resolve)); if (!tasks.active.has(id)) return task(id); } return task(id); };
   let closed = false;
   const close = () => { if (closed) return; closed = true; tasks.close(); service?.close?.(); browser.close(); workspace.close(); };
-  return { credentialService: service, workspace, workspaceId, browser, admission, clients, tasks, dispatch, run, attempt, task, settle, scripts, page, addTab, events, close, authority: dispatch.authority };
+  return { credentialService: service, payments, workspace, workspaceId, browser, admission, clients, tasks, dispatch, run, attempt, task, settle, scripts, page, addTab, events, close, authority: dispatch.authority };
 }

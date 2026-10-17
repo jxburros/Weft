@@ -19,14 +19,14 @@ import { ResourceScheduler } from './resources.js';
 import { ResumeService } from './resume.js';
 import { executeBrowsingCommand } from './browsing-import.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'captures.cancel'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'captures.cancel', 'payments.status'];
 // Commands that page natively; every other pageable command is paged here from its full list.
 const NATIVE_PAGED = new Set(['search.query', 'conversations.messages', 'artifacts.versions', 'transfers.list']);
 const DEADLINE = Symbol('deadline');
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
   // Agent concurrency, capture queue and budgets apply to every caller (#30), including task-runtime steps.
   // A locked encrypted profile has no settings to read; the defaults apply until unlock.
@@ -42,6 +42,16 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   // Durable task runtime (ADR 016): task steps re-enter this dispatcher as the task's bound identity.
   tasks ??= new TaskRuntime({ workspace, browser, admission, clients, providers, credentials, onEvent });
   const runtimeCommands = new Set(RUNTIME_COMMANDS);
+  // Payments (ADR 019) bind payments.submit approvals to the payment's terms, reconcile uncertain submissions for the
+  // task runtime, and void unsubmitted payments when their task closes.
+  if (payments) {
+    authority.approvalBinding ??= (...input) => payments.approvalBinding(...input);
+    payments.attach({ authority, tasks, clients });
+    const previous = workspace?.onTaskTransition;
+    if (workspace) workspace.onTaskTransition = notice => { previous?.(notice); payments.onTaskTransition(notice); };
+    // A checkout tab with a payment awaiting approval or being submitted is never suspended (#30).
+    if (browser) browser.paymentHold ??= tabId => payments.holdsTab(tabId);
+  }
 
   /** Catalog metadata, with plugins.invoke raised to the invoked plugin operation's manifest-derived class. */
   const specFor = (command, args) => {
@@ -244,6 +254,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (hookCommands.has(command)) return executeHookCommand(command, args, context, { plugins, call });
     if (command.startsWith('plugin.') || Object.hasOwn(pluginCommandAdminDefinitions, command)) {
       return plugins.execute(command, command.startsWith('plugin.') ? { ...args, workspaceId: target.workspaceId ?? args.workspaceId } : args, context, { call });
+    }
+    if (command.startsWith('payments.')) {
+      if (!payments) throw Object.assign(new Error('Payments are not available in this process'), { code: 'unavailable' });
+      return payments.execute(command, args, context);
     }
     if (command.startsWith('credentials.')) {
       if (!credentials) throw Object.assign(new Error('The credential broker is not available in this process'), { code: 'unavailable' });

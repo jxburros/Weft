@@ -42,6 +42,10 @@ function derive(command, result, base) {
   }
   // Evidence conflicts (#66): opened and resolved, never their subjects' text.
   if (/^conflicts\.(create|resolve)$/.test(command) && result?.id) events.push({ ...base, type: 'conflict', command, conflictId: result.id, status: status(result.status), workspaceId: result.workspaceId ?? base.workspaceId });
+  // Payments (#7, ADR 019): payment id and status only; never merchant, amounts, page text or card details.
+  if (/^payments\.(propose|submit|cancel|reconcile|retry)$/.test(command) && typeof result?.id === 'string') {
+    events.push({ ...base, type: 'payment', command, paymentId: result.id, status: status(result.status), workspaceId: result.workspaceId ?? base.workspaceId, ...(Number.isSafeInteger(result.tabId) && { tabId: result.tabId }) });
+  }
   // Credential fills (#6): the sanitized fill status only; never the credential, origins, fields or page.
   if (command === 'credentials.fill' && result) events.push({ ...base, type: 'credential', command, status: status(result.status), ...(Number.isSafeInteger(result.tabId) && { tabId: result.tabId }) });
   if (POLICY_COMMANDS.has(command)) events.push({ ...base, type: 'policy', command, status: 'changed', ...(typeof result?.id === 'string' && { targetId: result.id }) });

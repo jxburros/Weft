@@ -7,7 +7,7 @@ import { standingAllowed } from './autonomy.js';
 import { summarizeArgs, minimizeUrl } from './activity-log.js';
 
 /** The single approval queue for every surface. Approvals are created only by the gate and resolved only in the trusted GUI. */
-export const APPROVAL_STATUSES = Object.freeze(['pending', 'approved', 'rejected', 'expired', 'consumed']);
+export const APPROVAL_STATUSES = Object.freeze(['pending', 'approved', 'rejected', 'expired', 'consumed', 'invalidated']);
 const PENDING_MS = 15 * 60000;
 const APPROVED_ONCE_MS = 15 * 60000;
 const MAX_PENDING_PER_ACTOR = 25;
@@ -130,6 +130,23 @@ export class ApprovalQueue {
     this.save();
     this.onChange();
     return structuredClone(item);
+  }
+  /**
+   * Void requests that no longer describe what would happen (ADR 019: payment terms changed, the
+   * payment was cancelled or its task closed). Pending, approved and consumed one-time items become
+   * `invalidated`; a consumed item can then never be given back.
+   */
+  invalidate(match, reason) {
+    const now = new Date(this.clock()).toISOString();
+    const changed = [];
+    for (const item of this.items) {
+      if (!['pending', 'approved', 'consumed'].includes(item.status) || !match(item)) continue;
+      Object.assign(item, { status: 'invalidated', invalidatedAt: now, invalidationReason: String(reason ?? 'invalidated').slice(0, 64) });
+      delete item.preview;
+      changed.push(item.id);
+    }
+    if (changed.length) { this.save(); this.onChange(); }
+    return changed;
   }
   pendingCount() { this.expire(); return this.items.filter(item => item.status === 'pending').length; }
   describe(item, human) {

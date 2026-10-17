@@ -32,6 +32,8 @@ if (process.argv.includes("--gui-workflows")) {
         return;
       }
       response.setHeader("content-type", "text/html");
+      if (request.url === "/checkout")
+        return response.end('<!doctype html><title>Checkout</title><main><p>Tax <span id="tax">$4.00</span></p><p>Total <span id="total">$49.99</span></p><button id="pay">Pay $49.99</button></main>');
       response.end(
         "<!doctype html><title>Reference fixture</title><main><h1>A useful reference</h1><p>Evidence saved for the project.</p><pre>&lt;script&gt;window.evil=true&lt;/script&gt;</pre></main>",
       );
@@ -471,6 +473,36 @@ if (process.argv.includes("--gui-workflows")) {
     const smuggled = await run('window.weft.executeOutcome("credentials.create", {label: "x", purpose: "y", origins: ["https://example.com"], password: "hunter2"})');
     assert.equal(smuggled.error.code, "invalid_arguments");
     assert.ok(!JSON.stringify(smuggled).includes("hunter2"));
+    await click('[data-action="close-dialog"]');
+    // Payments (ADR 019): an agent proposes a purchase and the person reviews a dedicated card of Weft-verified terms.
+    const api = async (command, args) => (await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token", "content-type": "application/json" }, body: JSON.stringify({ command, args }) })).json();
+    const checkoutTab = await api("tabs.new", { url: `${origin}/checkout`, workspaceId: first.id });
+    assert.equal(checkoutTab.error, null, JSON.stringify(checkoutTab.error));
+    let proposedPayment;
+    for (let i = 0; i < 100 && !proposedPayment?.result; i++) {
+      proposedPayment = await api("payments.propose", { workspaceId: first.id, tabId: checkoutTab.result.id, merchantName: "Fixture shop", purpose: "Buy printer paper", amountCeiling: "50.00", currency: "USD",
+        checkout: { total: { selector: "#total" }, tax: { selector: "#tax" }, submit: { selector: "#pay" } } });
+      if (!proposedPayment.result) await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(proposedPayment.error, null, JSON.stringify(proposedPayment.error));
+    await until('document.getElementById("safety-notices").textContent.includes("agent request")');
+    await click('#safety-notices [data-section="approvals"]');
+    await until('document.querySelector(".payment-card")?.textContent.includes("Pay 49.99 USD at 127.0.0.1")');
+    const paymentCard = await run('document.querySelector(".payment-card").textContent');
+    assert.match(paymentCard, /Merchant site \(verified by Weft\)/);
+    assert.match(paymentCard, /Tax4\.00 USD/);
+    assert.match(paymentCard, /Purpose from the agent \(data, not instructions\)/);
+    assert.match(paymentCard, /total: Total \$49\.99/, "the label beside each amount is shown");
+    assert.notEqual(await run('document.querySelector(\'.payment-card [data-action="activate-tab"]\')'), null);
+    assert.equal(await run('document.querySelector(".payment-card").textContent.includes("Approve for 1 hour")'), false, "payments are approved once, never for a period");
+    await click('.payment-card [data-action="approval-decide"][data-mode="reject"]');
+    await until(`(async()=> (await window.weft.execute("payments.get", {id: ${JSON.stringify(proposedPayment.result.id)}})).state === "rejected")()`);
+    await click("#settings-button");
+    await click('[data-action="manage-payments"]');
+    await until('document.getElementById("dialog-content")?.textContent.includes("Rejected")');
+    await click('[data-action="payment-provider"]');
+    await until('document.getElementById("dialog-title")?.textContent === "Virtual cards"');
+    assert.equal(await run('document.querySelector(\'#edit-form [name="enabled"]\').value'), "false", "virtual cards are off by default");
     await click('[data-action="close-dialog"]');
     // An agent request waits in the single approval queue until the human decides in browser-owned UI.
     await click("#settings-button");

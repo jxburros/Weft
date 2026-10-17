@@ -31,6 +31,12 @@ alone is not a shipped capability.
   FTS5 secure-delete. GUI: archive coverage, offline preview banner, version
   comparison, redaction editor and export capture policy. Limits: no archived
   HTML redaction, OCR, note/annotation rewriting or erasure of earlier backups.
+- Integrated payment authorization (#7, ADR 019) with restricted originals,
+  trusted context, integration contracts, scheduling and encryption:
+  `terms_changed`/`merchant_changed` join the outcome tables; a submit past its
+  deadline never clicks; payment events are metadata-only; checkout tabs with a
+  pending or submitting payment are never suspended; payment records are
+  documented as outside workspace encryption.
 - Integrated headless sessions, resume state, tab groups, browsing-data import
   and resource scheduling (#11, #24, #30, ADR 015) with the credential broker,
   archives, task runtime, encryption and integration contracts: tabs are never
@@ -482,6 +488,36 @@ alone is not a shipped capability.
   `perf/responsiveness.js` measures GUI first render, agent navigation, input and
   scroll latency, memory and CPU in real Electron with concurrent agents;
   `test/responsiveness.test.js` enforces generous budgets in the Linux job.
+- Added payment authorization (#7, ADR-019): `payments.propose` has Weft read
+  the checkout (browser-verified merchant origin and checkout frame, destination,
+  rendered total, subtotal, tax, shipping, ISO 4217 currency, recurrence wording,
+  pay-control label) and queues one approval bound to a fingerprint of every
+  term plus ceiling, recurrence cap, actor, purpose and task, shown on a
+  dedicated payment card in Agent requests. `payments.submit` (once-only
+  `payment`) re-reads the checkout immediately before the click and refuses
+  `terms_changed` or `merchant_changed` (new error codes, HTTP 409, CLI exit 3,
+  fixed `details.changed` words), voiding the approval (new approval status
+  `invalidated`). Attempts are committed before the click, one approval allows
+  one attempt, and interrupted attempts become `uncertain` until a person
+  reconciles them (`payments.reconcile`, `payments.retry`, or the task runtime
+  with a registered payment reconciler). New commands `payments.status/list/
+  get/propose/submit/cancel/checkCharges` and human-only `payments.reconcile/
+  retry/issueCard/closeCard/configureProvider`; MCP `weft_browser` grows
+  accordingly (reviewed baseline update) and a `payments` guidance topic was
+  added.
+- Saved payment cards: `credentials.create` takes `kind: "payment_card"` (card
+  details typed into the browser-owned entry window, Luhn/expiry checked by the
+  broker, brand and last four digits authenticated with the entry);
+  `credentials.fill` fills card fields across the top frame and authorized
+  processor frames inside the protected operation and never submits
+  (`card_submit_separate`).
+- Optional virtual cards (off by default): a provider interface and an
+  issuer adapter in the style of Lithic/Privacy.com create single-use or
+  merchant-locked cards limited to the approved ceiling, store them directly in
+  the vault, close them, and list transactions for reconciliation and for
+  checking later charges against an approved recurrence; clear `unsupported`
+  outcomes without a provider, for unsupported currencies or issuer refusals.
+  Settings gain a Payments section (payment list, virtual-card configuration).
 
 ### Not completed
 
@@ -505,6 +541,11 @@ alone is not a shipped capability.
   test-only key protector), the broker in packaged asar builds, and the Settings
   golden with the new Saved sign-ins section (the local visual run already
   differs from the goldens before reaching it).
+- Payments (#7) are tested with fixture pages in real Chromium, scripted
+  checkouts, a process kill and a fake card-issuer server only: not validated
+  with real merchants, payment processors (3-D Secure, wallets, per-field card
+  frames) or a real Lithic/Privacy.com account. Payment records are outside
+  workspace exports and backups.
 - Task runtime and workflows (#8, #58, #10) are fixture-, process-kill-, GUI- and
   real-Chromium-tested only: not validated with real external accounts, payment
   providers or long runs. No recorded lookup exists for page clicks, fills or

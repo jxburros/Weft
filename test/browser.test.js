@@ -18,8 +18,8 @@ const smoke = process.argv.includes('--weft-browser-smoke');
 const mainSmoke = process.argv.includes('--weft-main-smoke');
 const profile = process.env.WEFT_TEST_PROFILE;
 
-async function until(predicate) {
-  for (let attempt = 0; attempt < 200; attempt++) {
+async function until(predicate, timeoutMs = 4000) {
+  for (let attempt = 0; attempt < timeoutMs / 20; attempt++) {
     const result = await predicate();
     if (result) return result;
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -213,10 +213,12 @@ if (mainSmoke) {
           await assert.rejects(window.webContents.executeJavaScript('window.weft.commands()'));
           await assert.rejects(window.webContents.executeJavaScript('window.weft.execute("tabs.list")'));
           await window.loadURL(guiUrl);
-          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("command").options.length')) === Object.keys(commands).length);
+          // First render of the trusted GUI under a loaded test run: wait up to the documented
+          // GUI first-render budget (ADR 015, 15 s) rather than a fixed 4 s.
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("command").options.length')) === Object.keys(commands).length, 15000);
           // Restoring the application opens its workspace overview. Use the actual
           // browser controls to show a live page before exercising MCP capture.
-          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready');
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready', 15000);
           await window.webContents.executeJavaScript(`document.getElementById('address').value = ${JSON.stringify(fixtureUrl)}; document.getElementById('navigation').requestSubmit()`);
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("page.title")')) === 'GUI fixture');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');

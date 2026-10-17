@@ -21,6 +21,7 @@ export const ENCRYPTION_COVERAGE = Object.freeze({
     'Record identifiers, collection names, workspace identifiers, record counts and order, component sizes and file timestamps',
     'The full-text search index is never written to disk; it is rebuilt in memory after unlock',
     'Chromium sessions, cookies, caches, site storage and downloads (Chromium encrypts cookies with the OS key store on some platforms; Weft does not claim it)',
+    'Payment records (merchant origin, checkout path, amounts, currency, recurrence, approval and attempt history; never card numbers), kept outside workspace data like the credential vault',
     'Durable activity log (command names, actors, identifiers, URL origins and paths, character counts; no record content), approval previews, agent grants, autonomy policy, model connection settings, plugin and extension state, threat-intelligence and download-safety files',
     'Plaintext copies made before encryption was turned on (older backups, recovery copies, export packages) until you remove them',
     'Exports you confirm as plaintext, OS swap/hibernation files, crash dumps and anything another program copies while Weft is unlocked',
