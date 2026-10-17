@@ -93,8 +93,9 @@ export function knowledgeUI(ui) {
     const incoming = (c) => `<article class="record-card"><div class="card-top"><span class="tag ${role(c) === "write" ? "sage" : ""}">${esc(roleLabel[role(c)])}</span><span class="muted">${(c.items || []).length} items</span></div><h3>${esc(c.name)}</h3><p>Shared by ${esc(workspaceName(c.workspaceId))}${c.description ? "\n" + esc(c.description) : ""}</p><div class="inline-actions">${action("collection-open", "Open", "folder", `data-id="${esc(c.id)}"`, "primary")}${role(c) === "write" ? action("collection-add-finding", "Add a finding", "plus", `data-id="${esc(c.id)}"`) : ""}</div></article>`;
     return `${ui.heading("Shared context", "Collections of project context shared between your workspaces, with explicit read or write access.", action("collection-create", "New collection", "plus", "", "primary"))}<div class="notice">Sharing context never shares browser sign-ins, cookies or site storage: every workspace keeps its own browser session. Revoking access applies to the next request from you, agents and models. Agent connections still need their own workspace grants.</div><section class="settings-section"><h2>Shared from this workspace</h2>${mine.length ? `<div class="record-grid">${mine.map(owned).join("")}</div>` : ui.empty("Nothing shared yet", "Create a collection, add context or materials to it, then choose which workspaces may read or write it.", "tabs")}</section><section class="settings-section"><h2>Shared with this workspace</h2>${shared.length ? `<div class="record-grid">${shared.map(incoming).join("")}</div>` : "<p>No other workspace shares a collection with this one.</p>"}</section>`;
   }
-  async function manageCollection(id) {
-    const c = await execute("collections.get", { id, workspaceId: ws().id }, true);
+  // workspaceId pins the workspace a just-created collection belongs to, in case the active workspace changes meanwhile.
+  async function manageCollection(id, workspaceId = ws().id) {
+    const c = await execute("collections.get", { id, workspaceId }, true);
     const others = state().workspaces.filter((w) => !w.archived && w.id !== c.ownerWorkspaceId);
     const candidates = [...ui.records("context").map((r) => ["context", r]), ...ui.records("materials").map((r) => ["materials", r]), ...ui.records("artifacts").map((r) => ["artifacts", r])]
       .filter(([type, r]) => !(c.items || []).some((i) => i.type === type && i.id === r.id));
@@ -187,7 +188,7 @@ export function knowledgeUI(ui) {
     switch (name) {
       case "collection-create":
         formDialog("New shared collection", `<p>Create a collection in ${esc(ws().name)}. Nothing is shared until you grant another workspace access.</p>${field("Name", "name", "", "text", true)}${area("What is it for?", "description", "")}`,
-          async (values) => { const created = await execute("collections.create", { workspaceId: ws().id, name: values.name, description: values.description }); setTimeout(() => void manageCollection(created.id).catch((e) => toast(errorMessage(e))), 0); }, { save: "Create collection" });
+          async (values) => { const workspaceId = ws().id; const created = await execute("collections.create", { workspaceId, name: values.name, description: values.description }); setTimeout(() => void manageCollection(created.id, workspaceId).catch((e) => toast(errorMessage(e))), 0); }, { save: "Create collection" });
         return true;
       case "collection-manage": await manageCollection(id); return true;
       case "collection-open": await openCollection(id); return true;

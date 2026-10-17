@@ -1975,6 +1975,8 @@ export class Browser {
     let data, scale = requestedScale;
     try {
       if (mode === 'viewport') {
+        // Let the page produce a frame first (bounded: frames never arrive for an occluded window), as offscreen captures do.
+        await bounded(this.observe(contents, null, {}, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))'), 1000).catch(() => {});
         let image = await bounded(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
         // Right after a navigation or reload Chromium may not have painted a frame yet: ask for one and retry briefly.
         for (let attempt = 1; image.isEmpty() && attempt <= 5; attempt++) {

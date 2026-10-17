@@ -100,6 +100,8 @@ if (process.argv.includes("--gui-knowledge")) {
     // Shared collections: create, share an item, grant a second workspace, revoke.
     const second = await human("workspaces.create", { name: "Partner project" });
     await human("workspaces.switch", { id: home.id });
+    // The switch happened through the API; wait for the window to show it before acting in that workspace.
+    await until(`document.getElementById("workspace-name").textContent === ${JSON.stringify(home.name)}`);
     await click('[data-section="context"]');
     await until('document.querySelector("[data-section=shared]") !== null');
     await click('[data-section="shared"]');

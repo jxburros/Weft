@@ -88,7 +88,7 @@ if (process.argv.includes('--archive-smoke')) {
       assert.equal(v1.capture.complete, false);
       assert.ok(v1.capture.incomplete.includes('resources-not-stored'));
       assert.match(v1.text, /Price 42 today/);
-      assert.ok(v1.pngBase64);
+      assert.ok(v1.pngBase64, `no screenshot in the first capture: ${JSON.stringify({ incomplete: v1.capture?.incomplete, limitations: v1.capture?.limitations ?? v1.limitations ?? null })}`);
       assert.equal((await workspace.execute('artifacts.verify', { id: first.id })).status, 'verified');
 
       // Changed-page recapture is a new immutable version; comparison shows what changed.
