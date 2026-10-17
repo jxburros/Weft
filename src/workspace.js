@@ -7,11 +7,14 @@ import { workspaceSchemas, recordShapes, finishReason } from './workspace-comman
 import { acquireProfileLock, storageWarnings, syncDirectory } from './storage-safety.js';
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
-import { MetadataStore, OMITTED_RESULT, RECOVERY_DIR, canonicalJson } from './store.js';
+import { MetadataStore, OMITTED_RESULT, RECOVERY_DIR, STORE_FILE, canonicalJson } from './store.js';
 import { componentPath, sha256 } from './components.js';
 import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 import { executeHandoffCommand, importHandoffs, recordTakeover } from './handoffs.js';
 import { effectiveRule, explainRules } from './site-rules.js';
+import { createKeyProtector, lockedError } from './encryption.js';
+import { ProfileEncryption } from './profile-encryption.js';
+import { encryptionSchemas } from './encryption-commands.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -38,6 +41,7 @@ const EXPORT_EXCLUDED = Object.freeze(['Browser sessions, tabs, cookies and site
   'Site storage modes and exceptions: browser privacy policy for this profile; set them again after import',
   'Community list subscriptions: signed list state is verified on install; subscribe again to receive and track rules',
   'Approvals, autonomy ceilings and agent connection grants: authority is never transferred with data']);
+const PLAINTEXT_EXPORT = 'Exported from an encrypted profile: this export is NOT encrypted. Store or share it accordingly.';
 // Workspace-scoped profile state that is deliberately not part of the export format (listed above with the reason).
 const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists']);
 
@@ -139,7 +143,7 @@ const packageManifest = z.strictObject({ format: z.literal('weft-package'), form
  * every mutation commits the changed records atomically or rolls back.
  */
 export class WorkspaceService {
-  constructor({ directory, browser, onWarning = warning => console.warn(`Weft storage: ${warning.message}`), backups = null, clock = Date.now } = {}) {
+  constructor({ directory, browser, onWarning = warning => console.warn(`Weft storage: ${warning.message}`), backups = null, clock = Date.now, keyProtector = null, encryption = {} } = {}) {
     if (!directory) throw new Error('Workspace data directory is required');
     this.directory = directory;
     this.lock = acquireProfileLock(directory);
@@ -148,15 +152,24 @@ export class WorkspaceService {
     this.onWarning = onWarning;
     this.warned = new Set();
     this.clock = clock;
+    this.path = join(directory, STORE_FILE);
+    // Workspace encryption (ADR 014). Hooks are set by the app: stop work before lock, restore tabs after unlock.
+    this.encryption = new ProfileEncryption({ directory, protector: keyProtector ?? createKeyProtector(), ...(encryption.kdf && { kdfParams: encryption.kdf }), clock });
+    this.encryptionHooks = { beforeLock: async () => {}, afterUnlock: async () => {} };
+    this.locked = false;
     try {
       this.refreshStorageWarnings();
       this.recoveredRestore = recoverInterruptedRestore(directory);
       cleanupBackupTemporary(directory);
       MetadataStore.cleanupTemporary(directory);
-      this.openStorage();
-      this.path = this.storage.path;
-      this.storage.sweepOrphans();
-    } catch (error) { this.storage?.close(); this.lock.release(); throw error; }
+      this.recoveredEncryption = this.encryption.recoverPending();
+      if (!this.encryption.tryAutoUnlock()) this.locked = true;
+      else {
+        this.openStorage();
+        this.storage.sweepOrphans();
+        if (this.encryption.keyring?.rotation) this.resumeRotation().catch(() => {});
+      }
+    } catch (error) { this.storage?.close(); this.encryption.forget(); this.lock.release(); throw error; }
     const service = this;
     this.store = { get data() { return service.data; }, save: () => service.save() };
     this.backupPolicy = { automatic: Boolean(backups?.automatic), intervalHours: backups?.intervalHours ?? 24, keep: backups?.keep ?? 5, lastRunAt: null, lastError: null };
@@ -166,9 +179,16 @@ export class WorkspaceService {
       setImmediate(() => this.runAutomaticBackup());
     }
   }
-  get data() { return this._data; }
+  get data() { if (this.locked) throw lockedError(this.encryption.lockReason ?? 'locked'); return this._data; }
   // Restoring a structuredClone of state must keep component-backed fields.
   set data(value) { this._data = this.storage ? this.storage.reattach(value) : value; }
+  assertUnlocked() { if (this.locked) throw lockedError(this.encryption.lockReason ?? 'locked'); }
+  /** Run work after every queued workspace operation, alone. */
+  exclusive(work) {
+    const run = this.queue.then(work);
+    this.queue = run.catch(() => {});
+    return run;
+  }
   openStorage() {
     const assertOwned = () => this.lock.assertOwned();
     const legacy = join(this.directory, LEGACY_FILE);
@@ -179,7 +199,7 @@ export class WorkspaceService {
         MetadataStore.create({ directory: this.directory, state: initialState(), assertOwned, verify: false, info: { createdAt: now() } });
       }
     }
-    const storage = new MetadataStore({ directory: this.directory, assertOwned, clock: this.clock }).open();
+    const storage = new MetadataStore({ directory: this.directory, assertOwned, clock: this.clock, keys: this.encryption.keys }).open();
     try {
       if (existsSync(legacy)) this.finishLegacyMigration(storage, legacy);
       let data = storage.load();
@@ -238,6 +258,7 @@ export class WorkspaceService {
     this.closed = true;
     clearInterval(this.backupTimer);
     this.storage?.close();
+    this.encryption.forget();
     this.lock.release();
   }
   refreshStorageWarnings() {
@@ -267,8 +288,10 @@ export class WorkspaceService {
   }
 
   get activeWorkspaceId() { return this.data.activeWorkspaceId; }
+  get encrypted() { return this.encryption.enabled; }
   attachBrowser(browser) { this.browser = browser; }
   save(options = {}) {
+    this.assertUnlocked();
     this.lock.assertOwned();
     return this.storage.commit(this.data, options);
   }
@@ -325,8 +348,10 @@ export class WorkspaceService {
     this.queue = run.catch(() => {});
     return run;
   }
-  matchSiteRule(value, workspaceId = this.activeWorkspaceId) {
-    return clone(effectiveRule(this.data.siteRules, value, workspaceId));
+  matchSiteRule(value, workspaceId) {
+    // While locked, no workspace page may load: fail closed.
+    if (this.locked) return { id: null, hostname: null, behavior: 'block', mode: 'connection', reason: 'Weft is locked', source: 'encryption' };
+    return clone(effectiveRule(this.data.siteRules, value, workspaceId ?? this.activeWorkspaceId));
   }
   /** Every matching rule with explicit precedence; browser adds exceptions/security findings. */
   explainSiteRules(value, workspaceId = this.activeWorkspaceId, extras = {}) {
@@ -368,6 +393,7 @@ export class WorkspaceService {
   }
   async run(name, input, context) {
     context.assertAuthorized?.();
+    this.assertUnlocked();
     this.storage.assertOpen();
     if (name === 'batch.execute') return this.runBatch(input, context);
     const schema = workspaceSchemas[name];
@@ -376,7 +402,7 @@ export class WorkspaceService {
     const { requestId, dryRun, ...args } = schema.parse(input);
     const scope = this.authorize(name, args, context);
     if (READS.has(name)) return this.read(name, args, context, scope);
-    if (name === 'workspaces.exportPackage') return this.exportPackage(args.id, args.name, args.sensitiveTerms);
+    if (name === 'workspaces.exportPackage') { this.assertPlaintextExport(args); return this.exportPackage(args.id, args.name, args.sensitiveTerms); }
     if (name.startsWith('backups.')) return this.backupCommand(name, args, dryRun);
     const request = requestId && !dryRun ? this.requestIdentity(name, args, context, requestId) : null;
     if (request?.replay) return request.replay;
@@ -424,9 +450,11 @@ export class WorkspaceService {
   requestIdentity(name, args, context, requestId) {
     // Request identities are private to one caller identity: another client never receives this caller's stored result.
     const scope = `${String(context.actor || 'human')}${context.clientId ? `:${context.clientId}` : ''}`;
-    const fingerprint = digest(canonicalJson({ command: name, args, workspaceId: context.workspaceId ?? null }));
+    const fingerprint = this.storage.requestFingerprint(digest(canonicalJson({ command: name, args, workspaceId: context.workspaceId ?? null })));
     const existing = this.storage.request(scope, requestId);
     if (!existing) return { record: { scope, requestId, command: name, fingerprint, workspaceId: args.workspaceId ?? context.workspaceId ?? null } };
+    // Identities committed before encryption was turned off cannot be re-fingerprinted: never apply them twice.
+    if (existing.fingerprint === 'rekeyed') throw fail('already_committed', 'requestId was committed before workspace encryption was turned off; its arguments can no longer be compared. Read current state instead of retrying.', { notStarted: true });
     if (existing.fingerprint !== fingerprint || existing.command !== name) throw fail('idempotency_conflict', 'requestId was already used with a different command or arguments; nothing was applied. Use a new requestId for a different request.', { notStarted: true });
     if (existing.result === null) throw fail('already_committed', 'requestId was already committed, but its result is no longer retained. Read current state instead of retrying.', { notStarted: true });
     if (existing.result === OMITTED_RESULT) throw fail('already_committed', 'requestId was already committed; its result exceeded the 1 MiB retention limit. Read current state instead of retrying.', { notStarted: true });
@@ -485,7 +513,7 @@ export class WorkspaceService {
     if (name === 'search.query') return this.search(args.query, workspaceId, args.limit || 50);
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
-    if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms);
+    if (name === 'workspaces.export') { this.assertPlaintextExport(args); return this.exportWorkspace(args.id, args.sensitiveTerms); }
     if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? withoutFile(item) : clone(item));
     const record = this.record(collection, args.id, context);
     if (collection === 'artifacts' && args.versionId) {
@@ -698,6 +726,12 @@ export class WorkspaceService {
   }
 
   // ---- Export and import -------------------------------------------------------------
+  /** Exports leave the encrypted store as plaintext: only after a person confirms, never silently. */
+  assertPlaintextExport(args) {
+    if (this.storage.encrypted && args.acknowledgePlaintext !== true) {
+      throw fail('invalid_arguments', 'ENCRYPTED_EXPORT: This profile is encrypted at rest, but exports are plaintext. Pass acknowledgePlaintext: true after the person confirms the warning.', { field: 'acknowledgePlaintext', notStarted: true });
+    }
+  }
   /**
    * Format 2 exports keep revisions, revision history, conversations, turn
    * manifests, exact artifact versions with component hashes and annotations,
@@ -713,7 +747,7 @@ export class WorkspaceService {
       ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global')).map(item => plain(name, item))])),
       handoffs: (this.data.handoffs ?? []).filter(item => item.workspaceId === id).map(item => clone(item)),
       excluded: [...EXPORT_EXCLUDED, ...notExported],
-      limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
+      limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.', ...(this.storage.encrypted ? [PLAINTEXT_EXPORT] : [])] });
     if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(mode === 'inline' ? exported : this.exportWorkspace(id), null, 2), sensitiveTerms);
     return exported;
   }
@@ -738,7 +772,7 @@ export class WorkspaceService {
     mkdirSync(temp, { mode: 0o700 });
     try {
       const files = [];
-      for (const [hash, size] of markers) { this.storage.components.copyTo(hash, join(temp, 'components'), size); files.push({ path: `components/${hash.slice(0, 2)}/${hash}`, size, sha256: hash }); }
+      for (const [hash, size] of markers) { this.storage.components.exportTo(hash, join(temp, 'components'), size); files.push({ path: `components/${hash.slice(0, 2)}/${hash}`, size, sha256: hash }); }
       const records = JSON.stringify(exported, null, 2);
       writeFileSync(join(temp, 'workspace.json'), records, { flag: 'wx', mode: 0o600 });
       fsyncFile(join(temp, 'workspace.json'));
@@ -748,7 +782,7 @@ export class WorkspaceService {
       fsyncFile(join(temp, 'manifest.json'));
       renameSync(temp, target);
       syncDirectory(root);
-      const result = { name, path: target, formatVersion: 1, files: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0), excluded: exported.excluded, limitations: exported.limitations };
+      const result = { name, path: target, formatVersion: 1, files: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0), excluded: exported.excluded, limitations: exported.limitations, ...(this.storage.encrypted && { plaintext: true, warning: PLAINTEXT_EXPORT }) };
       if (sensitiveTerms !== undefined) result.residueScan = inspectExportResidue(JSON.stringify(this.exportWorkspace(id), null, 2), sensitiveTerms);
       return result;
     } catch (error) { rmSync(temp, { recursive: true, force: true }); throw error; }
@@ -1008,7 +1042,7 @@ export class WorkspaceService {
     if (verification.status !== 'verified') throw fail('command_failed', `BACKUP_INVALID: backup failed verification; nothing was changed (${verification.problems.slice(0, 5).map(item => `${item.path}: ${item.problem}`).join('; ')})`);
     if (dryRun) {
       const current = Object.fromEntries(Object.entries(this.data).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.length]));
-      return { dryRun: true, applied: false, result: { backup: verification }, changes: { current, restored: verification.counts } };
+      return { dryRun: true, applied: false, result: { backup: verification }, changes: { current, restored: verification.counts, encryption: { current: this.storage.encrypted ? 'encrypted' : 'plaintext', restored: verification.encrypted ? 'encrypted' : 'plaintext' } } };
     }
     return this.restoreFrom(args.id);
   }
@@ -1019,10 +1053,25 @@ export class WorkspaceService {
     let failure;
     try { result = restoreBackup(this.directory, id, { clock: this.clock }); }
     catch (error) { failure = error; try { recoverInterruptedRestore(this.directory); } catch { /* reported below */ } }
+    // The backup carries its own keyring (or none): reuse the in-memory profile key if it still fits, else lock.
+    const keys = this.encryption.keys;
+    this.encryption.keys = null;
+    const encryption = this.encryption.adoptRestored(keys);
+    if (encryption === 'locked') {
+      this.storage = null; this._data = null; this.locked = true;
+      if (failure) throw failure;
+      return Promise.resolve().then(async () => {
+        await this.encryptionHooks.beforeLock?.({ persist: false });
+        return { ...result, encryption, notice: 'The restored backup is encrypted with keys this session does not hold. Unlock with the recovery key or passphrase that was valid when the backup was made.' };
+      });
+    }
     try { this.openStorage(); }
     catch (error) { throw fail('command_failed', `RESTORE_INCOMPLETE: ${failure?.message || error.message}. Restart Weft to finish recovery; originals are preserved under ${RECOVERY_DIR}/.`); }
     if (failure) throw failure;
     this.storage.sweepOrphans();
+    result.encryption = this.storage.encrypted ? 'encrypted' : 'plaintext';
+    // A backup taken mid-rotation carries both data keys; finish re-encrypting under the newest.
+    if (this.encryption.keyring?.rotation) this.resumeRotation().catch(() => {});
     this.log('backups.restore', this.activeWorkspaceId, this.activeWorkspaceId, 'human', `Restored ${id}; previous data preserved in ${result.preservedOriginal}`);
     this.save();
     const remaining = new Set(this.data.workspaces.map(item => item.id));
@@ -1034,7 +1083,7 @@ export class WorkspaceService {
   }
   runAutomaticBackup() {
     const run = this.queue.then(() => {
-      if (this.closed || !this.backupPolicy.automatic) return;
+      if (this.closed || this.locked || !this.backupPolicy.automatic) return;
       try {
         const latest = listBackups(this.directory).find(item => item.kind === 'automatic' && item.status !== 'invalid');
         if (latest && this.clock() - Date.parse(latest.createdAt) < this.backupPolicy.intervalHours * 3600 * 1000) return;
@@ -1050,6 +1099,142 @@ export class WorkspaceService {
     });
     this.queue = run.catch(() => {});
     return run;
+  }
+
+  // ---- Workspace encryption (ADR 014) ------------------------------------------------
+  /** encryption.* commands. Status works while locked; everything else is human-only administration. */
+  async executeEncryption(name, input = {}, context = {}) {
+    const schema = encryptionSchemas[name];
+    if (!schema) throw fail('unknown_command', `Unknown encryption command: ${name}`);
+    const args = schema.parse(input);
+    const human = context.actor === 'human';
+    if (name === 'encryption.status') return this.encryption.status({ locked: this.locked, inventory: human && args.inventory === true });
+    if (!human) throw fail('permission_required', 'PERMISSION_REQUIRED: workspace encryption is managed by a person in the Weft window', { notStarted: true });
+    if (name === 'encryption.unlock') return this.unlockProfile(args);
+    if (name === 'encryption.checkRecoveryKey') {
+      if (!this.encryption.enabled) throw fail('invalid_arguments', 'This profile is not encrypted');
+      return { valid: this.encryption.checkRecoveryKey(args.recoveryKey) };
+    }
+    if (name === 'encryption.lock') return this.lockProfile();
+    if (name === 'encryption.enable') return this.enableEncryption(args, context);
+    this.assertUnlocked();
+    if (!this.encryption.enabled) throw fail('invalid_arguments', 'This profile is not encrypted');
+    if (name === 'encryption.disable') return this.disableEncryption(context);
+    if (name === 'encryption.configure') return this.exclusive(() => { this.assertUnlocked(); this.encryption.configure(args); this.logEncryption('encryption.configure', `Unlock: ${this.encryption.keyring.unlockMode}; passphrase ${this.encryption.keyring.wrappers.passphrase ? 'set' : 'not set'}`); return this.encryption.status({ locked: false }); });
+    if (args.target === 'wrapping') {
+      return this.exclusive(() => {
+        this.assertUnlocked();
+        const recoveryKey = this.encryption.rotateWrapping({ passphrase: args.passphrase ?? null });
+        this.logEncryption('encryption.rotate', 'New profile key and recovery key; data keys re-wrapped');
+        return { rotated: 'wrapping', recoveryKey, passphrase: Boolean(this.encryption.keyring.wrappers.passphrase), unlockMode: this.encryption.keyring.unlockMode,
+          notice: 'Store this new recovery key now; it is shown only once. The previous recovery key and passphrase no longer unlock this profile (backups made earlier keep their own keyring and earlier keys). Make a new backup.' };
+      });
+    }
+    await this.exclusive(() => { this.assertUnlocked(); this.encryption.beginDataKeyRotation(); this.logEncryption('encryption.rotate', `Data key rotation to version ${this.encryption.keyring.currentVersion} started`); });
+    return this.resumeRotation();
+  }
+  logEncryption(action, detail) {
+    try { this.commitChange(() => this.log(action, this.activeWorkspaceId, null, 'human', detail)); } catch { /* lifecycle outcome stands; durable activity also records the command */ }
+  }
+  async enableEncryption({ passphrase, unlockMode, removePlaintextCopies }, context = {}) {
+    return this.exclusive(() => {
+      this.assertUnlocked();
+      if (this.encryption.keyring) throw fail('invalid_arguments', 'This profile is already encrypted');
+      const recoveryKey = this.encryption.enable(this.storage, { passphrase: passphrase ?? null, unlockMode, onStep: context.onStep });
+      this.reopenStorage();
+      const removed = removePlaintextCopies ? this.encryption.removePlaintextCopies() : [];
+      const remaining = this.encryption.plaintextCopies();
+      this.log('encryption.enable', this.activeWorkspaceId, null, 'human', `Workspace encryption on; unlock: ${unlockMode}${removed.length ? `; ${removed.length} plaintext copies overwritten and removed` : ''}`);
+      this.save();
+      let backup = null;
+      try { backup = createBackup(this.storage, { kind: 'manual', note: 'First encrypted backup', clock: this.clock }); } catch (error) { backup = { status: 'failed', problem: error.message }; }
+      return { enabled: true, recoveryKey, unlockMode, passphrase: Boolean(passphrase), removedPlaintextCopies: removed, plaintextCopies: remaining, backup: backup && { id: backup.id ?? null, status: backup.status },
+        notice: 'Store the recovery key now; it is shown only once. If the recovery key, the passphrase and the OS key are all lost, the encrypted data cannot be recovered by anyone.',
+        limitations: ['Earlier plaintext blocks may survive on SSDs, copy-on-write filesystems, snapshots and external backups; overwriting is best effort.', 'Chromium sessions, cookies, caches, downloads and the activity log are not covered (see coverage in encryption.status).'] };
+    });
+  }
+  async disableEncryption(context = {}) {
+    return this.exclusive(() => {
+      this.assertUnlocked();
+      if (this.encryption.keyring?.rotation) throw fail('invalid_arguments', 'Finish the data-key rotation before turning encryption off');
+      this.encryption.disable(this.storage, { onStep: context.onStep });
+      this.reopenStorage();
+      this.log('encryption.disable', this.activeWorkspaceId, null, 'human', 'Workspace encryption turned off; data rewritten as plaintext');
+      this.save();
+      return { enabled: false, notice: 'Project data is now stored unencrypted. Backups made while encryption was on stay encrypted and need their recovery key.' };
+    });
+  }
+  /** Close and reopen the store with the current key state (after enable/disable). */
+  reopenStorage() {
+    this.storage.close();
+    this.storage = null;
+    this.openStorage();
+    this.storage.sweepOrphans();
+  }
+  async lockProfile() {
+    if (!this.encryption.enabled) throw fail('invalid_arguments', 'Turn on workspace encryption before locking');
+    if (this.locked) return { locked: true, alreadyLocked: true };
+    await this.encryptionHooks.beforeLock?.({ persist: true });
+    return this.exclusive(() => {
+      if (this.locked) return { locked: true, alreadyLocked: true };
+      try { this.log('encryption.lock', this.activeWorkspaceId, null, 'human', 'Workspace data locked'); this.save(); } catch { /* locking proceeds */ }
+      this.storage.close();
+      this.storage = null;
+      this._data = null;
+      this.encryption.forget();
+      this.encryption.lockReason = 'locked';
+      this.locked = true;
+      return { locked: true };
+    });
+  }
+  async unlockProfile({ method, secret }) {
+    const result = await this.exclusive(() => {
+      if (!this.encryption.enabled) throw fail('invalid_arguments', 'This profile is not encrypted');
+      if (!this.locked) return { unlocked: true, alreadyUnlocked: true };
+      this.encryption.unlock(method, secret);
+      try { this.openStorage(); this.storage.sweepOrphans(); }
+      catch (error) { this.storage?.close(); this.storage = null; this._data = null; this.encryption.forget(); throw error; }
+      this.locked = false;
+      try { this.log('encryption.unlock', this.activeWorkspaceId, null, 'human', `Unlocked with ${method === 'os' ? 'the OS key' : method === 'passphrase' ? 'the passphrase' : 'the recovery key'}`); this.save(); } catch { /* unlocked regardless */ }
+      return { unlocked: true, method };
+    });
+    if (!result.alreadyUnlocked) {
+      if (this.encryption.keyring?.rotation) void this.resumeRotation().catch(() => {});
+      await this.encryptionHooks.afterUnlock?.();
+    }
+    return { ...result, status: this.encryption.status({ locked: this.locked }) };
+  }
+  /**
+   * Re-encrypt everything still under an older data key, one queued batch at a
+   * time so commands interleave; then drop the old key. Resumes after a crash
+   * or lock because each stored value names its key version.
+   */
+  resumeRotation({ batch = 500 } = {}) {
+    if (this.rotationRun) return this.rotationRun;
+    const from = this.encryption.keyring?.rotation?.from;
+    this.rotationRun = (async () => {
+      let reencrypted = 0;
+      for (;;) {
+        const step = await this.exclusive(() => { this.assertUnlocked(); return this.storage.reencryptStep({ limit: batch }); });
+        reencrypted += step.reencrypted;
+        this.rotationProgress = reencrypted;
+        if (step.complete) break;
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      return this.exclusive(() => {
+        this.assertUnlocked();
+        this.encryption.finishDataKeyRotation();
+        this.storage.compact();
+        this.log('encryption.rotate', this.activeWorkspaceId, null, 'human', `Data key rotation complete: ${reencrypted} values and components re-encrypted under version ${this.encryption.keyring.currentVersion}`);
+        this.save();
+        return { rotated: 'dataKey', from, keyVersion: this.encryption.keyring.currentVersion, reencrypted };
+      });
+    })().catch(error => {
+      this.encryption.rotationError = error.message;
+      if (error.code !== 'locked') this.onWarning({ code: 'ENCRYPTION_ROTATION_FAILED', message: `Data key rotation paused: ${error.message}` });
+      throw error;
+    }).finally(() => { this.rotationRun = null; });
+    return this.rotationRun;
   }
 }
 

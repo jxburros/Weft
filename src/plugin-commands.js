@@ -21,6 +21,7 @@ export const pluginCommandAdminDefinitions = {
   }],
   'workspaces.exportAs': ['Human exports workspace records through an export-format plugin (formats in plugins.list)', {
     id, format: handler.describe('Export format id, for example markdown.'), sensitiveTerms: z.array(z.string().min(1).max(200)).max(100).optional(),
+    acknowledgePlaintext: z.boolean().optional().describe('Required when the profile is encrypted: the person confirmed that this export is plaintext.'),
   }],
   'artifacts.render': ['Render one immutable capture version through a capture-format plugin as untrusted derived text', {
     id, versionId: id.optional(), format: handler.describe('Capture format id, for example markdown.'),
@@ -44,7 +45,7 @@ export async function executeHookCommand(name, args, context, { plugins, call })
   if (name === 'workspaces.exportAs') {
     if (!['human', 'admin'].includes(context.actor)) throw Object.assign(new Error('PERMISSION_REQUIRED: workspace export requires human administration'), { code: 'permission_required' });
     const provider = plugins.first('export-format', args.format, context);
-    const snapshot = await call('workspaces.export', { id: args.id });
+    const snapshot = await call('workspaces.export', { id: args.id, ...(args.acknowledgePlaintext === true && { acknowledgePlaintext: true }) });
     const rendered = await provider.run(snapshot);
     const result = { format: args.format, mimeType: rendered.mimeType, extension: rendered.extension, content: rendered.content, workspaceId: args.id,
       exclusions: [...rendered.exclusions, ...snapshot.limitations], provenance: provenance(provider) };

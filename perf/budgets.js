@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { WorkspaceService } from '../src/workspace.js';
 import { commands } from '../src/commands.js';
 import { createOpenApiDocument } from '../src/openapi.js';
+import { createKeyProtector } from '../src/encryption.js';
 
 async function budget(t, name, milliseconds, operation) {
   const start = performance.now();
@@ -66,6 +67,33 @@ test('metadata changes in a capture-heavy store never rewrite capture components
   service.close();
   service = await budget(t, 'reopen capture-heavy store', 5000, () => new WorkspaceService({ directory }));
   assert.equal((await service.execute('artifacts.get', { id: 'capture-heavy-7', versionId: 'version-heavy-7' })).text.startsWith('capture 7 body'), true);
+});
+
+// Workspace encryption (ADR 014): the same fixtures with sealed records and components and an in-memory search index.
+// An injected OS key store stands in for Electron safeStorage; production KDF parameters are used for the recovery key.
+const keyProtector = createKeyProtector({ safeStorage: { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'gnome_libsecret',
+  encryptString: text => Buffer.from(text, 'utf8').reverse(), decryptString: blob => Buffer.from(blob).reverse().toString('utf8') }, platform: 'linux' });
+const human = { actor: 'human', source: 'gui' };
+
+test('encrypted profile: enabling on a 10k-record store, writes, first and repeated search, export and reopen budgets', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-perf-encrypted-'));
+  let service = new WorkspaceService({ directory, keyProtector });
+  t.after(() => { service.close?.(); rmSync(directory, { recursive: true, force: true }); });
+  const note = await service.execute('materials.create', { title: 'Seed note', content: 'Performance fixture' });
+  const capture = await service.execute('artifacts.create', { title: 'Seed capture', text: 'fixture searchable-needle '.repeat(100) });
+  service.data.materials = Array.from({ length: 10000 }, (_, i) => ({ ...structuredClone(note), id: `material-perf-${i}`, title: `Note ${i}` }));
+  service.data.artifacts = Array.from({ length: 1000 }, (_, i) => ({ ...structuredClone(capture), id: `capture-perf-${i}`, versions: [{ ...service.data.artifacts[0].versions[0], id: `version-perf-${i}`, text: `fixture searchable-needle ${i} `.repeat(100) }] }));
+  service.save();
+  await budget(t, 'enable encryption in place (11k records, 1k captures)', 30000, () => service.executeEncryption('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' }, human));
+  await budget(t, 'encrypted write with 10k records', 5000, () => service.execute('materials.update', { id: 'material-perf-9999', changes: { content: 'Updated last record' } }));
+  const first = await budget(t, 'encrypted first search (builds the in-memory index)', 5000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
+  assert.equal(first.length, 200);
+  await budget(t, 'encrypted repeated search across 1k captures', 2000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
+  await budget(t, 'encrypted export (acknowledged plaintext)', 5000, () => service.execute('workspaces.export', { id: service.activeWorkspaceId, acknowledgePlaintext: true }));
+  service.close();
+  service = await budget(t, 'reopen and unlock encrypted store (OS key)', 5000, () => new WorkspaceService({ directory, keyProtector }));
+  assert.equal((await service.execute('materials.get', { id: 'material-perf-9999' })).content, 'Updated last record');
+  await budget(t, 'data-key rotation re-encrypting 11k records and 1k components', 60000, () => service.executeEncryption('encryption.rotate', { target: 'dataKey' }, human));
 });
 
 test('100 catalog and OpenAPI serializations stay within budget', async t => {

@@ -16,6 +16,7 @@ import { storageCommandDefinitions } from './site-storage.js';
 import { threatCommandDefinitions } from './threat-intel.js';
 import { downloadSafetyCommandDefinitions } from './download-safety.js';
 import { updateCommandDefinitions } from './updater.js';
+import { encryptionCommandDefinitions } from './encryption-commands.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -120,6 +121,7 @@ const definitions = {
   ...threatCommandDefinitions,
   ...downloadSafetyCommandDefinitions,
   ...updateCommandDefinitions,
+  ...encryptionCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -133,10 +135,11 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
   'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
-  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+  ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status')]);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
-  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
+  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'encryption.status', 'encryption.checkRecoveryKey', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
@@ -214,7 +217,7 @@ export function toCommandError(error, commandName, input) {
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
     unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
-    command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 };
+    command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422, locked: 423, key_invalid: 422 };
   let code = error?.code === 'SITE_BLOCKED' ? 'site_blocked' : Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
     if (/stale|STALE_STATE/i.test(message)) code = 'stale_state';
@@ -257,6 +260,7 @@ export function toCommandError(error, commandName, input) {
       hostname: text(error.details.hostname, 253), source: text(error.details.source, 50), mode: text(error.details.mode, 30), reason: text(error.details.reason), category: text(error.details.category, 50),
       stale: typeof error.details.stale === 'boolean' ? error.details.stale : null, exception: text(error.details.exception), explain: text(error.details.explain, 50) };
   }
+  if (code === 'locked' && ['locked', 'unlock_required', 'os_key_unavailable'].includes(error.details?.reason)) details.reason = error.details.reason;
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   if (code === 'unsupported_capability') {
     if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback'].includes(error.details?.capability)) details.capability = error.details.capability;
@@ -297,7 +301,7 @@ export function normalizeCommand(name, args = {}) {
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
   stale_state: 3, idempotency_conflict: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
-  emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8 });
+  emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8, locked: 9 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;
 export function errorOutcome(error, command = null, args = {}, normalized = [], validation = 'passed') {

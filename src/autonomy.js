@@ -51,6 +51,9 @@ add('administration', 'update.check update.install update.rollback update.config
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Workspace encryption (#26, ADR 014): status is a metadata read that works while locked; the lifecycle is human-only.
+add('local_read', 'encryption.status');
+add('administration', 'encryption.enable encryption.lock encryption.unlock encryption.configure encryption.rotate encryption.checkRecoveryKey encryption.disable');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -116,6 +119,7 @@ const dataOverrides = {
   'chat.send': ['conversations', 'workspace_records'], 'conversations.message': ['conversations'],
   'workspace.snapshot': ['workspace_records', 'conversations', 'browsing_history', 'activity'],
   'search.query': ['workspace_records', 'conversations'],
+  'encryption.status': [],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];

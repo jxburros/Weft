@@ -7,6 +7,8 @@ import { Authority } from './authority.js';
 import { raiseActionClass } from './autonomy.js';
 import { executeHookCommand, pluginCommandAdminDefinitions } from './plugin-commands.js';
 import { PluginRegistry } from './plugins/registry.js';
+import { LOCK_EXEMPT } from './encryption-commands.js';
+import { lockedError } from './encryption.js';
 
 const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status'];
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
@@ -68,6 +70,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   // through `call`, so every nested read passes the same gate with the caller's own authority.
   const run = async (command, validated, context, target, state) => {
     state.args = validated;
+    // A locked encrypted profile answers every surface with a typed locked error, before any target lookup reads workspace data.
+    if (workspace?.locked && !LOCK_EXEMPT.has(command)) throw lockedError(workspace.encryption?.lockReason ?? 'locked');
     admission.assertAutomationAdmitted(context.actor, command);
     if (context.clientId) {
       const grant = clients.current?.(context.clientId);
@@ -78,6 +82,14 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       validated.workspaceId = context.workspaceIds[0];
     }
     if (command === 'batch.execute') return runBatch(validated, context, target, state);
+    if (command.startsWith('encryption.') || (workspace?.locked && LOCK_EXEMPT.has(command))) {
+      // Profile-level commands have no workspace or tab target and must work while locked.
+      const spec = specFor(command, validated);
+      state.spec = spec;
+      state.decision = authority.authorize(command, validated, context, target, spec);
+      if (command === 'guide.get') return getGuidance(validated.topic);
+      return workspace.executeEncryption(command, validated, context);
+    }
     const resolved = resolveCommandTargets(command, validated, context, { workspace, browser, commands });
     const args = resolved.args;
     Object.assign(target, resolved.target);
