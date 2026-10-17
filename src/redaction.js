@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { Script, createContext } from 'node:vm';
 
 /**
@@ -163,5 +162,3 @@ export function reviewText(value, field) {
   return detectSensitive(value).map(item => ({ field, kind: item.kind, severity: 'high', start: item.start, end: item.end, preview: item.preview, detail: 'Detection assistance match.' }));
 }
 
-/** Stable short digest used to refer to excluded content without revealing it. */
-export const shortDigest = value => createHash('sha256').update(String(value)).digest('hex').slice(0, 16);

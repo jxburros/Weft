@@ -147,6 +147,9 @@ addresses, free-form secrets or text in images.
   must draw regions or omit the image. Artifact notes, tags and annotations are
   human-written history and are not rewritten by redaction; matches there are
   reported.
+- Restriction is not retroactive: text already copied into conversation
+  messages, handoffs or context records, or sent to a model before an original
+  was restricted, is not retracted.
 - Purging deletes files from the profile; Weft cannot guarantee physical erasure
   from storage devices, filesystem snapshots or sync copies, and backups or
   exports made earlier still contain the content.
