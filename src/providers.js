@@ -22,6 +22,21 @@ const DEFAULT_CONTEXT_WINDOW = 32768;
 const DEFAULT_MAX_OUTPUT = 4096;
 const FALLBACK_RESERVE = 1500;
 export const estimateTokens = value => Math.ceil(Buffer.byteLength(String(value ?? '')) / 3);
+/** Retrieved context (search results) may use at most this share of the window left after the reserved reply. */
+export const CONTEXT_SEND_CAP_RATIO = 0.4;
+export const retrievalCapTokens = caps => Math.max(0, Math.floor(CONTEXT_SEND_CAP_RATIO * (caps.contextWindow - caps.maxOutputTokens)));
+/**
+ * Fit ranked search results into a token budget: whole results in rank order, never a cut-off
+ * result. Returns what was kept and how many lower-ranked results were omitted.
+ */
+export function capRetrieved(items, budgetTokens, wrap = kept => kept) {
+  const kept = [];
+  for (const item of items) {
+    if (estimateTokens(JSON.stringify(wrap([...kept, item]))) > budgetTokens) break;
+    kept.push(item);
+  }
+  return { kept, omitted: items.length - kept.length, tokens: estimateTokens(JSON.stringify(wrap(kept))) };
+}
 const digest = value => createHash('sha256').update(value).digest('hex');
 
 export function locality(endpoint) {
@@ -282,7 +297,7 @@ export class Providers {
     } }));
   }
 
-  async runReadTool(call, { workspaceId, tabId, conversationId, signal, cloud = false, manifest, turnId }) {
+  async runReadTool(call, { workspaceId, tabId, conversationId, signal, cloud = false, manifest, turnId, caps = null, retrieval = null }) {
     if (signal.aborted) throw new Error('Cancelled');
     // A conversation cannot change workspace underneath a pending tool run.
     if (this.workspace.getConversation(conversationId).workspaceId !== workspaceId) throw new Error('Conversation workspace changed; read tool refused');
@@ -300,14 +315,30 @@ export class Providers {
     finally { signal.removeEventListener('abort', abort); }
     if (signal.aborted) throw new Error('Cancelled');
     if (this.workspace.getConversation(conversationId).workspaceId !== workspaceId) throw new Error('Conversation workspace changed; read result discarded');
-    const localOnly = Array.isArray(result) ? result.some(item => item?.localOnly) : Boolean(result?.localOnly);
-    if (cloud) result = Array.isArray(result) ? result.filter(item => !item?.localOnly) : result?.localOnly ? { withheld: true, reason: 'local-only reference' } : result;
+    const paged = result && typeof result === 'object' && Array.isArray(result.items);
+    const listed = Array.isArray(result) ? result : paged ? result.items : null;
+    const localOnly = listed ? listed.some(item => item?.localOnly) : Boolean(result?.localOnly);
+    if (cloud) {
+      if (Array.isArray(result)) result = result.filter(item => !item?.localOnly);
+      else if (paged) result = { ...result, items: result.items.filter(item => !item?.localOnly), withheldLocalOnly: result.items.filter(item => item?.localOnly).length };
+      else if (result?.localOnly) result = { withheld: true, reason: 'local-only reference' };
+    }
+    // Retrieved context is capped (CONTEXT_SEND_CAP_RATIO of the window after the reserved reply) across the turn.
+    let capped = null;
+    if (call.function.name === 'workspace_search' && caps && retrieval && (Array.isArray(result) || paged)) {
+      const items = Array.isArray(result) ? result : result.items;
+      const remaining = Math.max(0, retrieval.capTokens - retrieval.usedTokens);
+      const fit = capRetrieved(items, remaining, kept => Array.isArray(result) ? kept : { ...result, items: kept });
+      retrieval.usedTokens += fit.tokens;
+      capped = { capTokens: retrieval.capTokens, sentTokens: fit.tokens, omitted: fit.omitted, ratio: CONTEXT_SEND_CAP_RATIO };
+      result = Array.isArray(result) ? { items: fit.kept, retrievalCap: capped } : { ...result, items: fit.kept, retrievalCap: capped };
+    }
     const serialized = JSON.stringify(result) ?? 'null';
     const record = { tool: call.function.name, source: input, untrusted: true,
       result: frameUntrusted(JSON.stringify(input), serialized, 50000) };
     const content = JSON.stringify(record);
     if (manifest && !cloud && localOnly) manifest.localOnly = true;
-    manifest?.tools.push({ name: call.function.name, source: input, bytes: Buffer.byteLength(content), withheldLocalOnly: cloud && localOnly });
+    manifest?.tools.push({ name: call.function.name, source: input, bytes: Buffer.byteLength(content), withheldLocalOnly: cloud && localOnly, ...(capped ? { retrievalCap: capped } : {}) });
     await this.workspace.appendMessage(conversationId, { role: 'tool', content, ...(turnId ? { turnId } : {}), ...(!cloud && localOnly ? { localOnly: true } : {}) });
     return { role: 'tool', tool_call_id: call.id, content };
   }
@@ -372,6 +403,17 @@ export class Providers {
             entries.push({ ...common, reference: true, text: JSON.stringify({ title: record.title, filename: record.filename, mimeType: record.mimeType || null,
               note: 'Reference only: file contents were not read and no image was attached or inspected.' }) });
           } else entries.push({ ...common, text: [record.content, record.note].filter(Boolean).join('\n\n').slice(0, 100000) });
+        } else if (item.kind === 'search') {
+          // Ranked, cited search results from this conversation's workspace, capped later in prepare().
+          const base = { key: `search:${digest(`${item.query}\n${item.limit ?? 10}`).slice(0, 16)}`, kind: 'search', title: `Search: ${String(item.query).slice(0, 120)}` };
+          if (!this.searchWorkspace) { failure(base, new Error('Workspace search is unavailable here')); continue; }
+          try {
+            const page = await this.searchWorkspace({ workspaceId, query: item.query, limit: item.limit ?? 10 });
+            const results = (Array.isArray(page) ? page : page?.items ?? []).map(result => ({ type: result.type, id: result.id, ...(result.versionId ? { versionId: result.versionId } : {}), revision: result.revision,
+              title: result.title, excerpt: result.content, citation: result.citation, localOnly: Boolean(result.localOnly) }));
+            entries.push({ ...base, source: `workspace search "${String(item.query).slice(0, 200)}"`, results, absence: page?.absence ?? null, localOnly: results.some(result => result.localOnly),
+              provenance: { query: String(item.query).slice(0, 1000), results: results.length, mode: page?.mode ?? 'lexical' } });
+          } catch (error) { failure(base, error); }
         } else if (item.kind === 'artifact') {
           const base = { key: `artifact:${item.id}:${item.versionId}`, kind: 'artifact', title: item.id, recordId: item.id, id: item.id };
           let version;
@@ -405,6 +447,18 @@ export class Providers {
     const cloud = !onDevice(profile.endpoint);
     const excluded = new Set(exclude);
     const entries = await this.resolveAttachments(conversation, context, attachments);
+    // Attached search results share one retrieval cap; lower-ranked results are omitted, never cut off.
+    let retrievalTokens = 0;
+    const retrievalCap = retrievalCapTokens(caps);
+    for (const entry of entries.filter(item => item.kind === 'search' && !item.unavailable)) {
+      const visible = cloud ? entry.results.filter(result => !result.localOnly) : entry.results;
+      const fit = capRetrieved(visible, Math.max(0, retrievalCap - retrievalTokens), kept => ({ results: kept, absence: entry.absence }));
+      retrievalTokens += fit.tokens;
+      entry.text = JSON.stringify({ results: fit.kept, ...(entry.absence ? { absence: entry.absence } : {}), retrievalCap: { capTokens: retrievalCap, omitted: fit.omitted, withheldLocalOnly: entry.results.length - visible.length } });
+      entry.localOnly = !cloud && visible.some(result => result.localOnly);
+      entry.provenance = { ...entry.provenance, sent: fit.kept.length, omitted: fit.omitted, withheldLocalOnly: entry.results.length - visible.length, capTokens: retrievalCap };
+      if (fit.omitted) entry.truncated = true;
+    }
     const fallbackStatus = this.fallbackFor(profile);
     const fallback = fallbackStatus?.available ? fallbackStatus : null;
     const fallbackCloud = fallback ? !onDevice(fallback.endpoint) : false;
@@ -498,7 +552,7 @@ export class Providers {
       items: items.filter(item => item.delivery === 'image-via-fallback').map(item => item.key),
       bytes: Buffer.byteLength(text) + fallbackImages.reduce((sum, { image }) => sum + image.bytes, 0),
       scope: 'Your new message text and the listed images only; no conversation history or other attachments.' } : null;
-    return { profile, caps, conversation, cloud, acknowledgementId, system, userContent, primaryImages, fallbackImages,
+    return { profile, caps, conversation, cloud, acknowledgementId, system, userContent, primaryImages, fallbackImages, retrievalTokens,
       fallbackProfile: fallbackImages.length ? fallback.profile : null, fallbackCaps: fallback?.caps, fallbackNotes: imageNotes.slice(primaryImages.length),
       history: history.filter(({ key }) => decisions.get(key) === 'history').map(({ message }) => message),
       textEntries,
@@ -508,7 +562,7 @@ export class Providers {
           ...(fallbackPlan ? [{ role: 'vision-fallback', modelId: fallbackPlan.modelId, endpoint: fallbackPlan.endpoint, model: fallbackPlan.model, locality: fallbackPlan.locality }] : [])],
         fallback: fallbackPlan,
         capabilities: { images: caps.images, tools: caps.tools, streaming: caps.streaming, contextWindow: caps.contextWindow, maxOutputTokens: caps.maxOutputTokens, sources: caps.sources },
-        context: { window: caps.contextWindow, windowSource: caps.sources.contextWindow, reservedOutputTokens: caps.maxOutputTokens,
+        context: { window: caps.contextWindow, windowSource: caps.sources.contextWindow, reservedOutputTokens: caps.maxOutputTokens, retrievalCapTokens: retrievalCap, retrievalCapRatio: CONTEXT_SEND_CAP_RATIO, retrievalTokens,
           estimatedInputTokens: fixedTokens + used, omitted: omitted.length, omittedKeys: omitted, strategy: 'omit-oldest-history', summarized: false,
           estimate: 'Approximate (about 3 bytes per token); providers report actual usage after the reply.' },
         visual: { primary: primaryImages.length, viaFallback: fallbackImages.length, inspectedPaths: 0 },
@@ -638,6 +692,8 @@ export class Providers {
       throw new Error('Read-only tools are not enabled for this model connection. Enable a tool-capable OpenAI-compatible connection or turn off read tools.');
     }
     const key = this.key(profile);
+    // Search results already attached to this turn count against the same retrieval cap as tool results.
+    const retrievalBudget = { capTokens: retrievalCapTokens(caps), usedTokens: prepared.retrievalTokens ?? 0 };
     const fallbackKey = prepared.fallbackProfile ? this.key(prepared.fallbackProfile) : null;
     const conversation = this.workspace.getConversation(conversationId);
     if (!conversation) throw new Error('Conversation not found');
@@ -665,7 +721,11 @@ export class Providers {
     this.running.set(conversationId, run);
     const total = setTimeout(() => { if (!run.reason) { run.reason = 'timeout'; run.timeout = 'total'; } controller.abort(); }, this.timeoutMs);
     total.unref?.();
-    const disconnect = () => this.stop(run, 'disconnected');
+    // A caller deadline (Weft-Deadline-Ms / deadlineMs) is a timeout of the whole request, not a disconnect.
+    const disconnect = () => {
+      if (caller.signal?.reason?.code === 'deadline_exceeded') { if (!run.reason) { run.reason = 'timeout'; run.timeout = 'request'; } this.stop(run, 'timeout'); }
+      else this.stop(run, 'disconnected');
+    };
     caller.signal?.addEventListener('abort', disconnect, { once: true });
     if (caller.signal?.aborted) disconnect();
     const emit = payload => {
@@ -723,7 +783,7 @@ export class Providers {
           messages.push({ role: 'assistant', content: result.text || null, tool_calls: calls.map(call => ({ id: call.id, type: 'function', function: { name: call.function.name, arguments: call.function.arguments } })) });
           emit({ type: 'phase', phase: 'tools', count: calls.length });
           for (const call of calls) {
-            messages.push(await this.runReadTool(call, { workspaceId, tabId, conversationId, signal: controller.signal, cloud, manifest, turnId }));
+            messages.push(await this.runReadTool(call, { workspaceId, tabId, conversationId, signal: controller.signal, cloud, manifest, turnId, caps, retrieval: retrievalBudget }));
             toolCalls++;
           }
           continue;

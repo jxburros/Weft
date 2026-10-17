@@ -38,7 +38,7 @@ export function registerEventType(type) {
   if (typeof type !== 'string' || !/^[a-z][a-z_]{1,31}$/.test(type)) throw new Error('Event types are short lowercase identifiers');
   EVENT_TYPES.add(type);
 }
-const RECORD_ID = /^(?:ws|mate|cont|task|conv|work|site|artifact|record|version|event|turn|handoff|approval|policy|msg)_[a-f0-9-]{36}$/;
+const RECORD_ID = /^(?:ws|mate|cont|task|conv|work|site|artifact|record|version|event|turn|handoff|approval|appr|policy|msg)_[a-f0-9-]{36}$/;
 const ID_FIELDS = ['workspaceId', 'targetId', 'taskId', 'conversationId', 'artifactId', 'versionId', 'turnId', 'handoffId', 'approvalId'];
 
 export function sanitizeEvent(event) {
@@ -48,6 +48,8 @@ export function sanitizeEvent(event) {
   if (['human', 'automation', 'admin', 'model'].includes(event.actor) || /^client:[a-f0-9-]{36}$/.test(event.actor)) result.actor = event.actor;
   // Status is a short machine token produced by Weft itself (success, failure, blocked, started, ...).
   if (typeof event.status === 'string' && /^[a-z][a-z_]{0,31}$/.test(event.status)) result.status = event.status;
+  // Stable outcome taxonomy token of the command (succeeded, partial, blocked, ...).
+  if (typeof event.outcome === 'string' && /^[a-z][a-z_]{0,31}$/.test(event.outcome)) result.outcome = event.outcome;
   for (const key of ID_FIELDS) {
     const value = event[key];
     if (typeof value === 'string' && RECORD_ID.test(value)) result[key] = value;
@@ -112,7 +114,16 @@ export function sseFrame({ id, event, data }) {
   return `${id ? `id: ${line(id)}\n` : ''}event: ${line(event)}\ndata: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`;
 }
 
-export function createApiServer({ execute, token, subscribe, authenticate, executeReturnsOutcome = false, turns = null, eventRetention = {} }) {
+/** Parse a deadline from the Weft-Deadline-Ms header or the deadlineMs body field (milliseconds, 1..600000). */
+export function parseDeadline(value) {
+  if (value === undefined || value === null || value === '') return undefined;
+  const number = typeof value === 'number' ? value : /^\d{1,7}$/.test(String(value).trim()) ? Number(String(value).trim()) : NaN;
+  if (!Number.isSafeInteger(number) || number < 1 || number > 600000) throw Object.assign(new Error('Weft-Deadline-Ms / deadlineMs must be an integer from 1 to 600000 milliseconds'), { status: 400, code: 'invalid_arguments' });
+  return number;
+}
+const DOWNLOAD_SOURCES = { artifact: ['id', 'versionId', 'part'], material: ['id'], package: ['name', 'path'] };
+
+export function createApiServer({ execute, token, subscribe, authenticate, executeReturnsOutcome = false, turns = null, eventRetention = {}, eventLog: sharedEventLog = null }) {
   if (!authenticate && (typeof token !== 'string' || !token.trim())) throw new Error('An API token is required');
   const expected = Buffer.from('Bearer ' + token);
   const streams = new Set();
@@ -120,8 +131,9 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
   const sourceSubscribe = subscribe || (listener => { fallbackListeners.add(listener); return () => fallbackListeners.delete(listener); });
   const publish = event => { if (!subscribe) for (const listener of fallbackListeners) listener(event); };
   // One retained subscription feeds every stream so reconnecting clients can replay missed events.
-  const eventLog = new EventLog(eventRetention);
-  const unsubscribeSource = sourceSubscribe(event => { eventLog.append(sanitizeEvent(event)); });
+  // A shared log (fed by the application) also serves events.list for CLI and MCP callers.
+  const eventLog = sharedEventLog ?? new EventLog(eventRetention);
+  const unsubscribeSource = sharedEventLog && subscribe ? null : sourceSubscribe(event => { eventLog.append(sanitizeEvent(event)); });
   const server = http.createServer(async (req, res) => {
     const reply = (status, body) => {
       res.writeHead(status, {
@@ -236,6 +248,40 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       reply(200, { commands });
       return;
     }
+    if (req.method === 'GET' && req.url === '/v1/capabilities') {
+      const outcome = await executeOutcome((name, input) => execute(name, input, { ...context }), 'weft.capabilities', {}, { returnsOutcome: executeReturnsOutcome });
+      reply(resultHttpStatus(outcome), outcome);
+      return;
+    }
+    if (req.method === 'GET' && req.url.startsWith('/v1/download?')) {
+      // Streamed download of stored bytes. Every chunk is read through transfers.read, so the
+      // caller's authority, scope and data-class checks apply exactly as for the command.
+      const query = new URL(req.url, 'http://127.0.0.1').searchParams;
+      const kind = query.get('kind');
+      const source = Object.hasOwn(DOWNLOAD_SOURCES, kind) ? Object.fromEntries([['kind', kind], ...DOWNLOAD_SOURCES[kind].map(key => [key, query.get(key) ?? undefined])]) : { kind };
+      const controller = new AbortController();
+      res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+      let offset = 0;
+      let headers = false;
+      for (;;) {
+        const outcome = await executeOutcome((name, input) => execute(name, input, { ...context, signal: controller.signal }), 'transfers.read', { source, offset }, { returnsOutcome: executeReturnsOutcome });
+        if (res.destroyed) return;
+        if (outcome.error) {
+          if (!headers) reply(resultHttpStatus(outcome), outcome);
+          else res.destroy();
+          return;
+        }
+        const chunk = Buffer.from(outcome.result.dataBase64, 'base64');
+        if (!headers) {
+          res.writeHead(200, { 'content-type': outcome.result.mimeType || 'application/octet-stream', 'content-length': String(outcome.result.totalBytes), 'cache-control': 'no-store',
+            'x-content-type-options': 'nosniff', 'content-disposition': 'attachment', 'x-weft-sha256': outcome.result.sha256 });
+          headers = true;
+        }
+        if (!res.write(chunk)) await new Promise(resolve => { res.once('drain', resolve); res.once('close', resolve); });
+        offset += chunk.length;
+        if (outcome.result.done || !chunk.length) { res.end(); return; }
+      }
+    }
     if (req.method !== 'POST' || req.url !== '/v1/execute') {
       fail(404, 'not_found', 'Not found');
       return;
@@ -246,17 +292,20 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
     }
     let command;
     let args;
+    let deadlineMs;
     try {
       const body = await readJson(req);
       if (!body || typeof body !== 'object' || Array.isArray(body)
           || typeof body.command !== 'string'
-          || Object.keys(body).some(key => !['command', 'args'].includes(key))) {
-        throw new Error('Expected {command, args}');
+          || Object.keys(body).some(key => !['command', 'args', 'deadlineMs'].includes(key))) {
+        throw new Error('Expected {command, args, deadlineMs?}');
       }
       command = body.command;
       args = body.args;
+      if (body.deadlineMs !== undefined && req.headers['weft-deadline-ms'] !== undefined) throw Object.assign(new Error('Send the deadline as the Weft-Deadline-Ms header or the deadlineMs field, not both'), { status: 400, code: 'invalid_arguments' });
+      deadlineMs = parseDeadline(body.deadlineMs ?? req.headers['weft-deadline-ms']);
     } catch (error) {
-      fail(error.status || 400, error.status === 413 ? 'request_too_large' : 'invalid_json', error.message);
+      fail(error.status || 400, error.status === 413 ? 'request_too_large' : error.code === 'invalid_arguments' ? 'invalid_arguments' : 'invalid_json', error.message);
       return;
     }
     // The originating request owns cancellation: a disconnect before the response finishes aborts
@@ -274,7 +323,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
         res.write(sseFrame({ id: frame.id, event: `turn.${frame.type}`, data: frame }));
       };
     }
-    const callContext = { ...context, signal: controller.signal, ...(onProgress ? { onProgress } : {}) };
+    const callContext = { ...context, signal: controller.signal, ...(onProgress ? { onProgress } : {}), ...(deadlineMs !== undefined ? { deadlineMs } : {}) };
     const outcome = await executeOutcome((name, input) => execute(name, input, callContext), command, args, { returnsOutcome: executeReturnsOutcome });
     publish({ type: 'command', command: outcome.command, status: outcome.error ? 'failure' : 'success', actor: context.actor, workspaceId: outcome.workspaceId });
     if (streaming) {

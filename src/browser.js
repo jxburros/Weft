@@ -216,6 +216,8 @@ export class Browser {
         summary: { url, category: finding.category, source: finding.source, listId: finding.listId, stale: Boolean(finding.stale) } }
       : { type: 'block', reason: 'site_rule', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, targetId: rule.id,
         summary: { hostname: rule.hostname, scope: rule.scope, mode: rule.mode, source: ruleSource(rule) } });
+    // Metadata only: never the URL, rule reason or finding text.
+    this.onEvent?.({ type: 'navigation', status: 'blocked', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
     this.layout();
     this.persist();
   }
@@ -411,8 +413,13 @@ export class Browser {
       // An exact-visit exception ends as soon as the tab commits any other destination.
       if (tab.allowUrl !== this.overrideKey(contents.getURL())) { tab.allowUrl = null; tab.allowSecurity = false; }
       this.layout(); this.persist();
+      this.onEvent?.({ type: 'navigation', status: 'committed', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
     });
-    contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame === false) return; tab.version++; this.stateBoundary(tab, 'in-page navigation'); this.persist(); });
+    contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+      if (isMainFrame === false) return;
+      tab.version++; this.stateBoundary(tab, 'in-page navigation'); this.persist();
+      this.onEvent?.({ type: 'navigation', status: 'in_page', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
+    });
     contents.on('did-start-navigation', details => {
       if (!details?.isMainFrame || details.isSameDocument || (details.frame && details.frame !== contents.mainFrame)) return;
       tab.navigating = details.url;

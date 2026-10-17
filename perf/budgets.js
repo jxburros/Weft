@@ -80,3 +80,22 @@ test('100 catalog and OpenAPI serializations stay within budget', async t => {
     }
   });
 });
+
+test('exact cosine search at the 20k-vector per-workspace limit', async t => {
+  const { DatabaseSync } = await import('../src/sqlite.js');
+  const { VectorIndex, MAX_VECTORS_PER_WORKSPACE, normalize } = await import('../src/vector-index.js');
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE store_info(key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE search_docs(rowid INTEGER PRIMARY KEY, collection TEXT, record_id TEXT, version_id TEXT, workspace_id TEXT, local_only INTEGER)');
+  const index = new VectorIndex(db);
+  index.ensure(key => db.prepare('SELECT value FROM store_info WHERE key = ?').get(key)?.value, (key, value) => db.prepare('INSERT OR REPLACE INTO store_info VALUES (?, ?)').run(key, value));
+  const dims = 768;
+  const vector = () => normalize(Array.from({ length: dims }, () => Math.random() - 0.5));
+  db.exec('BEGIN');
+  for (let i = 0; i < MAX_VECTORS_PER_WORKSPACE / 4; i++) index.replace('materials', `mate-${i}`, 'ws_perf', Array.from({ length: 4 }, (_, chunk) => ({ versionId: '', chunk, start: 0, end: 0, sha256: 'x', modelKey: 'model', vector: vector() })));
+  db.exec('COMMIT');
+  const query = vector();
+  await budget(t, `first search over ${MAX_VECTORS_PER_WORKSPACE} x ${dims} vectors (loads matrix)`, 5000, () => index.search('ws_perf', 'model', query, { minSimilarity: 0 }));
+  const results = await budget(t, `cached search over ${MAX_VECTORS_PER_WORKSPACE} x ${dims} vectors`, 1500, () => index.search('ws_perf', 'model', query, { minSimilarity: 0 }));
+  assert.equal(results.length, 100);
+  db.close();
+});

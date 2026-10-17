@@ -51,6 +51,10 @@ add('administration', 'update.check update.install update.rollback update.config
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Integration contracts (#14) and optional hybrid retrieval (#67): discovery, replay and chunked transfer.
+add('local_read', 'weft.capabilities events.list search.status transfers.read transfers.list conversations.messages artifacts.versions');
+add('local_write', 'search.reindex transfers.begin transfers.append transfers.commit transfers.abort');
+add('administration', 'search.configureEmbeddings');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -116,6 +120,8 @@ const dataOverrides = {
   'chat.send': ['conversations', 'workspace_records'], 'conversations.message': ['conversations'],
   'workspace.snapshot': ['workspace_records', 'conversations', 'browsing_history', 'activity'],
   'search.query': ['workspace_records', 'conversations'],
+  'weft.capabilities': [], 'search.status': [], 'events.list': ['activity'], 'transfers.list': [], 'conversations.messages': ['conversations'],
+  'transfers.read': ['workspace_records', 'page_capture'],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];

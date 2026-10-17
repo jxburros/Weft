@@ -12,6 +12,8 @@ import { componentPath, sha256 } from './components.js';
 import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 import { executeHandoffCommand, importHandoffs, recordTakeover } from './handoffs.js';
 import { effectiveRule, explainRules } from './site-rules.js';
+import { DEFAULT_PAGE_LIMIT, decodeCursor, encodeCursor, pageItems } from './pagination.js';
+import { RRF_K, documentKey, reciprocalRankFusion } from './retrieval.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -26,13 +28,15 @@ const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const REPLAYED = Symbol.for('weft.replayed');
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
-const HUMAN_ADMIN = new Set(['siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
 // activity.list is served by the durable activity log (src/activity-log.js) through the dispatcher.
-const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'search.query', 'workspaces.list', 'workspaces.get', 'workspaces.export', ...collections.flatMap(name => [`${name}.list`, `${name}.get`])]);
+const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'workspaces.list', 'workspaces.get', 'workspaces.export', 'artifacts.versions', 'conversations.messages', ...collections.flatMap(name => [`${name}.list`, `${name}.get`])]);
 // Batches contain record writes only: these can be rolled back exactly.
 export const BATCHABLE = Object.freeze(new Set([...Object.keys(recordShapes).flatMap(name => [`${name}.create`, `${name}.update`, `${name}.delete`]),
   'tasks.transition', 'conversations.message', 'artifacts.create', 'artifacts.annotate', 'artifacts.delete', 'bookmarks.create', 'bookmarks.delete', 'workspaces.update', 'settings.update']));
 const WITH_EFFECTS = new Set(['workspaces.create', 'workspaces.switch', 'workspaces.archive', 'workspaces.delete', 'workspaces.import', 'workspaces.importPackage']);
+// Candidates per index fused by reciprocal rank; hybrid result pages end after this many per index.
+const HYBRID_WINDOW = 200;
 const ID_TOKEN = /\b[a-z]{2,12}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
 const EXPORT_EXCLUDED = Object.freeze(['Browser sessions, tabs, cookies and site storage', 'Credentials, provider keys and model connection settings', 'Global site rules', 'Activity log and browsing history', 'Local search index and request identities', 'Local backups',
   'Site storage modes and exceptions: browser privacy policy for this profile; set them again after import',
@@ -352,7 +356,31 @@ export class WorkspaceService {
   }
 
   executeHandoff(name, args = {}, context = {}) {
-    const run = this.queue.then(() => executeHandoffCommand(this, name, args, context));
+    const run = this.queue.then(() => {
+      if (context.signal?.aborted) throw Object.assign(new Error('The request deadline passed before the command started'), { code: context.signal.reason?.code === 'deadline_exceeded' ? 'deadline_exceeded' : 'cancelled', notStarted: true, details: { started: false, effect: 'not_started' } });
+      context.markStarted?.();
+      return executeHandoffCommand(this, name, args, context);
+    });
+    this.queue = run.catch(() => {});
+    return run;
+  }
+  /**
+   * Create the target of a verified chunked upload (src/transfers.js). Runs the same apply/transact
+   * path as artifacts.create and materials.create, including request identity; the upload replaces
+   * only the per-request JSON size cap, never the stored-content limits.
+   */
+  commitUpload(name, args, context = {}, requestId) {
+    const run = this.queue.then(() => {
+      context.assertAuthorized?.();
+      this.storage.assertOpen();
+      rejectSecretKeys(args);
+      const fields = name === 'materials.create' ? workspaceSchemas[name].parse(args) : args;
+      this.authorize(name, fields, context);
+      const request = requestId ? this.requestIdentity(name, { ...fields, ...(fields.fileBase64 ? { fileBase64: digest(fields.fileBase64) } : {}), ...(fields.pngBase64 ? { pngBase64: digest(fields.pngBase64) } : {}), ...(fields.text ? { text: digest(fields.text) } : {}) }, context, requestId) : null;
+      if (request?.replay) return request.replay;
+      const effects = [];
+      return this.transact(() => this.apply(name, { ...fields }, context, effects), { context, request, effects });
+    });
     this.queue = run.catch(() => {});
     return run;
   }
@@ -362,11 +390,16 @@ export class WorkspaceService {
     return run;
   }
   execute(name, args = {}, context = {}) {
+    // Search reads and embedding administration wait on local model endpoints; they never hold the write queue.
+    if (name.startsWith('search.')) return this.searchCommand(name, args, context);
     const run = this.queue.then(() => this.run(name, args, context));
     this.queue = run.catch(() => {});
     return run;
   }
   async run(name, input, context) {
+    // A command whose deadline passed while it waited in the queue never starts.
+    if (context.signal?.aborted) throw Object.assign(new Error('The request deadline passed before the command started'), { code: context.signal.reason?.code === 'deadline_exceeded' ? 'deadline_exceeded' : 'cancelled', notStarted: true, details: { started: false, effect: 'not_started' } });
+    context.markStarted?.();
     context.assertAuthorized?.();
     this.storage.assertOpen();
     if (name === 'batch.execute') return this.runBatch(input, context);
@@ -400,6 +433,8 @@ export class WorkspaceService {
     try {
       const result = await work();
       context.assertAuthorized?.();
+      // A deadline that passed while the change was prepared rolls it back instead of committing late.
+      if (context.signal?.aborted && context.signal.reason?.code === 'deadline_exceeded') throw Object.assign(new Error('The request deadline passed before the change committed; nothing was saved'), { code: 'deadline_exceeded', details: { started: true, effect: 'rolled_back' } });
       if (dryRun) {
         const preview = { dryRun: true, applied: false, result: this.output(result), changes: this.storage.changes(this.data) };
         this.data = this.storage.revert(this.data);
@@ -466,7 +501,17 @@ export class WorkspaceService {
   }
   read(name, args, context, { workspaceId }) {
     const [collection, action] = name.split('.');
-    if (name === 'history.list') return clone((this.data.history || []).filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
+    if (name === 'history.list') return clone((this.data.history || []).filter(item => item.workspaceId === workspaceId).slice(-(args.limit || (context.allItems ? Infinity : 100))).reverse());
+    if (name === 'conversations.messages') {
+      const record = this.record('conversations', args.id, context);
+      const page = pageItems(record.messages, args.page, { command: name, scope: { id: record.id }, positional: true });
+      return { conversationId: record.id, workspaceId: record.workspaceId, revision: record.revision, ...page, items: clone(page.items) };
+    }
+    if (name === 'artifacts.versions') {
+      const record = this.record('artifacts', args.id, context);
+      const page = pageItems(artifactSummary(record).versions, args.page, { command: name, scope: { id: record.id }, positional: true });
+      return { artifactId: record.id, workspaceId: record.workspaceId, revision: record.revision, ...page };
+    }
     if (name === 'bookmarks.list') return this.data.materials.filter(item => item.workspaceId === workspaceId && item.kind === 'website' && item.pinned).map(withoutFile);
     if (name === 'workspace.snapshot') {
       const snapshot = this.snapshot();
@@ -482,7 +527,6 @@ export class WorkspaceService {
       return snapshot;
     }
     if (name === 'settings.get') return clone(this.data.settings);
-    if (name === 'search.query') return this.search(args.query, workspaceId, args.limit || 50);
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
     if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms);
@@ -495,13 +539,67 @@ export class WorkspaceService {
     }
     return this.output(record);
   }
-  /** Ranked local full-text search. Results cite the record revision or exact capture version. */
-  search(query, workspaceId, limit) {
-    return this.storage.search({ workspaceId, query, limit }).map(row => {
+  attachRetrieval(retrieval) { this.retrieval = retrieval; }
+  /** search.* commands: reads and embedding administration outside the write queue. */
+  async searchCommand(name, input, context) {
+    if (context.signal?.aborted) throw Object.assign(new Error('The request deadline passed before the command started'), { code: context.signal.reason?.code === 'deadline_exceeded' ? 'deadline_exceeded' : 'cancelled', notStarted: true, details: { started: false, effect: 'not_started' } });
+    context.markStarted?.();
+    context.assertAuthorized?.();
+    this.storage.assertOpen();
+    rejectSecretKeys(input);
+    const args = workspaceSchemas[name].parse(input);
+    const { workspaceId } = this.authorize(name, args, context);
+    if (name === 'search.query') return this.searchQuery(args, workspaceId, context);
+    if (!this.retrieval) throw Object.assign(new Error('Embeddings are unavailable in this process'), { code: 'unavailable' });
+    return this.retrieval.execute(name, args, { ...context, workspaceId });
+  }
+  /**
+   * Ranked local search. BM25 always; with embeddings enabled (mode auto/hybrid) lexical and
+   * exact-cosine results are fused by reciprocal rank (k=60). Results cite the record revision or
+   * exact capture version. Page mode adds coverage and an explicit (un)verified absence signal.
+   */
+  async searchQuery(args, workspaceId, context = {}) {
+    const mode = args.mode ?? 'auto';
+    if (args.page && args.limit !== undefined) throw Object.assign(new Error('Use page.limit with page; limit is the unpaged result size'), { code: 'invalid_arguments', field: 'limit' });
+    const limit = args.page ? args.page.limit ?? DEFAULT_PAGE_LIMIT : args.limit || 50;
+    const scope = { workspaceId, query: args.query, mode };
+    const offset = args.page?.cursor ? decodeCursor(args.page.cursor, 'search.query', scope) : 0;
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1000) throw Object.assign(new Error('Invalid page cursor; restart from the first page'), { code: 'invalid_arguments', field: 'page.cursor' });
+    let vector = { used: false, reason: mode === 'lexical' ? 'lexical_mode' : 'not_enabled', matches: [] };
+    if (mode !== 'lexical' && this.retrieval && String(args.query).trim()) vector = await this.retrieval.vectorSearch(workspaceId, args.query, { mode, signal: context.signal, limit: HYBRID_WINDOW });
+    else if (mode === 'hybrid') throw Object.assign(new Error('Hybrid search needs embeddings, which are not enabled for this workspace'), { code: 'unsupported_capability', details: { capability: 'embeddings' } });
+    // Fusion always ranks a fixed candidate window per index, so pages of one query never reorder.
+    const lexical = this.storage.search({ workspaceId, query: args.query, limit: vector.used ? HYBRID_WINDOW : Math.min(1000, offset + limit + 1) });
+    const rows = new Map(lexical.map((row, index) => [documentKey(row.collection, row.record_id, row.version_id), { row, lexicalRank: index + 1 }]));
+    vector.matches.forEach((match, index) => {
+      const key = documentKey(match.collection, match.recordId, match.versionId);
+      const entry = rows.get(key) ?? { row: this.storage.document({ collection: match.collection, recordId: match.recordId, versionId: match.versionId, start: match.start }) };
+      if (!entry.row) return;
+      rows.set(key, { ...entry, vectorRank: index + 1, similarity: match.similarity });
+    });
+    const ordered = vector.used
+      ? reciprocalRankFusion([lexical.map(row => documentKey(row.collection, row.record_id, row.version_id)), vector.matches.map(match => documentKey(match.collection, match.recordId, match.versionId))])
+        .map(({ key, score }) => ({ ...rows.get(key), fused: score })).filter(entry => entry.row)
+      : [...rows.values()];
+    const results = ordered.slice(offset, offset + limit).map(({ row, lexicalRank, vectorRank, similarity, fused }) => {
       const citation = { recordType: row.collection, recordId: row.record_id, revision: row.revision, versionId: row.version_id || null, versionNumber: row.version_number };
       return { type: row.collection, id: row.record_id, ...(row.version_id ? { versionId: row.version_id, versionNumber: row.version_number } : {}), revision: row.revision,
-        localOnly: row.local_only === 1, title: row.title, content: String(row.excerpt || '').slice(0, 300), updatedAt: row.updated_at, score: Number((-row.score).toFixed(6)), match: row.match, citation };
+        localOnly: row.local_only === 1, title: row.title, content: String(row.excerpt || '').slice(0, 300), updatedAt: row.updated_at,
+        score: Number((fused ?? -row.score).toFixed(6)), match: lexicalRank ? row.match : 'semantic', citation,
+        ...(vector.used && { ranking: { method: 'rrf', k: RRF_K, lexicalRank: lexicalRank ?? null, vectorRank: vectorRank ?? null, similarity: similarity === undefined ? null : Number(similarity.toFixed(6)) } }) };
     });
+    if (!args.page) return results;
+    const next = offset + results.length;
+    const coverage = this.retrieval ? this.retrieval.status(workspaceId, { listLimit: 20 }) : { workspaceId, lexical: { documents: this.storage.documentCount(workspaceId), complete: true }, vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
+    const searched = ['lexical', ...(vector.used ? ['vector'] : [])];
+    const vectorComplete = !coverage.vector.enabled || (vector.used && coverage.vector.unembeddedCount === 0);
+    const absence = offset === 0 && !results.length ? { verified: vectorComplete, searched,
+      reason: vectorComplete ? 'No indexed document in this workspace matched; every indexed document was searched.' : !vector.used && coverage.vector.enabled ? `Vector search was not used (${vector.reason}); only lexical matching was checked.` : `${coverage.vector.unembeddedCount} document(s) have no embedding yet; they were checked lexically only.` } : null;
+    return { items: results, nextCursor: next < ordered.length && results.length ? encodeCursor('search.query', scope, next) : null,
+      total: vector.used ? ordered.length : this.storage.searchCount({ workspaceId, query: args.query }), mode: vector.used ? 'hybrid' : 'lexical',
+      vector: { used: vector.used, reason: vector.used ? null : vector.reason, ...(vector.error ? { error: vector.error } : {}) },
+      ...(mode !== 'lexical' && coverage.vector.enabled && !vector.used ? { partial: true } : {}),
+      coverage: { lexical: coverage.lexical, vector: coverage.vector }, absence };
   }
   async apply(name, args, context, effects) {
     const { actor, admin, workspaceId } = this.authorize(name, args, context);
@@ -543,6 +641,7 @@ export class WorkspaceService {
     }
     if (name === 'tasks.transition') {
       const record = this.record(collection, args.id, context);
+      if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw Object.assign(new Error('STALE_STATE: task changed; reload before changing its state'), { notStarted: true, details: { reason: 'revision_changed' } });
       const prior = record.status;
       record.status = args.status;
       if (args.checkpoint !== undefined) record.checkpoint = args.checkpoint;
@@ -621,9 +720,9 @@ export class WorkspaceService {
       if (!admin && collection === 'context' && [record.category, args.changes?.category].some(category => ['confirmed', 'instructions', 'decisions'].includes(category))) {
         throw new Error('PERMISSION_REQUIRED: trusted context requires human approval');
       }
+      if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw Object.assign(new Error('STALE_STATE: record changed; reload before changing it'), { notStarted: true, details: { reason: 'revision_changed' } });
       if (action === 'delete') this.data[collection] = this.data[collection].filter(item => item.id !== record.id);
       else if (action === 'update') {
-        if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: record changed; reload before updating');
         if (!admin && collection === 'workflows' && record.enabled === false && args.changes.enabled === true) throw new Error('PERMISSION_REQUIRED: imported workflow requires human review');
         const updated = { ...record, ...args.changes };
         if (collection === 'siteRules') { this.validateRule(updated); updated.workspaceId = updated.scope === 'global' ? null : (record.workspaceId || workspaceId); this.recordRuleRevision(record, updated, actor, 'Updated'); }
@@ -654,14 +753,15 @@ export class WorkspaceService {
     }
   }
   async mutateArtifact(action, args, workspaceId, actor, context) {
+    const expect = record => { if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw Object.assign(new Error('STALE_STATE: artifact changed; reload before changing it'), { notStarted: true, details: { reason: 'revision_changed' } }); return record; };
     if (action === 'delete') {
-      const record = this.record('artifacts', args.id, context);
+      const record = expect(this.record('artifacts', args.id, context));
       this.data.artifacts = this.data.artifacts.filter(item => item.id !== record.id);
       this.log('artifacts.delete', record.workspaceId, record.id, actor);
       return { id: record.id, deleted: true };
     }
     if (action === 'annotate') {
-      const record = this.record('artifacts', args.id, context);
+      const record = expect(this.record('artifacts', args.id, context));
       record.note = args.note; if (args.tags) record.tags = args.tags;
       this.touch(record); record.annotations.push({ note: record.note, tags: record.tags, revision: record.revision, actor, createdAt: now() });
       this.log('artifacts.annotate', record.workspaceId, record.id, actor);

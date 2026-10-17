@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { pageField } from './pagination.js';
 
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
@@ -43,11 +44,21 @@ export const commandDefinitions = {
     automation: z.strictObject({ inputConcurrency: z.enum(['shared', 'exclusive']).optional().describe('shared lets agents act on available tabs; exclusive requires a lease.'),
       queueLimit: z.number().int().min(0).max(20).optional().describe('Agent input requests that may wait per tab; 0 rejects busy tabs immediately.'),
       queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.') }],
-  'search.query': ['Search project records and saved text locally', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional() }],
+  'search.query': ['Search project records and saved text locally (BM25, fused with opt-in local embeddings when enabled); page mode adds coverage and verified absence', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional(),
+    mode: z.enum(['auto', 'lexical', 'hybrid']).optional().describe('auto (default) fuses lexical and vector results when this workspace has embeddings enabled; lexical uses BM25 only; hybrid requires embeddings.') }],
+  'search.status': ['Report lexical and optional embedding index coverage for a workspace', optionalWorkspace],
+  'search.configureEmbeddings': ['Human enables or disables optional embeddings for a workspace using an existing model connection endpoint', { ...optionalWorkspace, enabled: z.boolean(),
+    modelId: id.optional().describe('Existing model connection whose endpoint serves embeddings (Ollama /api/embed or OpenAI-compatible /embeddings).'),
+    embeddingModel: z.string().trim().min(1).max(200).optional().describe('Embedding model name already available at that endpoint; Weft never downloads models.'),
+    acknowledgeEgress: z.boolean().optional().describe('Required when the endpoint is not on this device: record text is sent to it for embedding.'),
+    minSimilarity: z.number().min(0).max(1).optional().describe('Cosine similarity a vector match needs to count (default 0.35).') }],
+  'search.reindex': ['Queue every record in a workspace for embedding and process the queue now', optionalWorkspace],
   'conversations.message': ['Append a durable conversation message', { id, localOnly: z.boolean().optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: text, model: z.string().max(200).optional(), status: z.enum(['complete', 'interrupted', 'error']).optional(), attachments: references.optional(), turnId: id.optional(), finishReason: finishReason.optional(), continuable: z.boolean().optional() }],
   'tasks.transition': ['Change task state and record the cause', { id, status: recordShapes.tasks.status.removeDefault(), cause: z.string().max(2000).optional(), checkpoint: text.optional() }],
   'artifacts.list': ['List saved artifact metadata', optionalWorkspace],
   'artifacts.get': ['Read an offline artifact or exact immutable version', { id, versionId: id.optional() }],
+  'artifacts.versions': ['List version metadata of one artifact in capture order, paged', { id, page: pageField.optional() }],
+  'conversations.messages': ['List messages of one conversation in append order, paged', { id, page: pageField.optional() }],
   'artifacts.capture': ['Save page text and/or PNG as an immutable offline reference', { ...optionalWorkspace, tabId: z.number().int().positive().optional(), artifactId: id.optional(), title: title.optional(), note: text.optional(), tags: tags.optional(), kind: z.enum(['bundle', 'text', 'screenshot']).default('bundle') }],
   'artifacts.create': ['Save supplied text or PNG as an untrusted offline artifact', { ...optionalWorkspace, artifactId: id.optional(), title, text: text.optional(), pngBase64: z.string().max(28000000).optional(), url: httpUrl.optional(), note: text.optional(), tags: tags.optional() }],
   'artifacts.annotate': ['Append a revision of artifact notes and tags', { id, note: text, tags: tags.optional() }],
@@ -59,7 +70,15 @@ for (const [collection, shape] of Object.entries(recordShapes)) {
   commandDefinitions[`${collection}.get`] = [`Get ${collection} record`, { id }];
   commandDefinitions[`${collection}.create`] = [`Create ${collection} record`, { ...optionalWorkspace, ...shape }];
   commandDefinitions[`${collection}.update`] = [`Update ${collection} with optional revision check`, { id, changes: z.strictObject(Object.fromEntries(Object.entries(shape).map(([key, field]) => [key, field.removeDefault ? field.removeDefault().optional() : field.optional()]))), expectedRevision: z.number().int().positive().optional() }];
-  commandDefinitions[`${collection}.delete`] = [`Delete ${collection} record`, { id }];
+  commandDefinitions[`${collection}.delete`] = [`Delete ${collection} record`, { id, expectedRevision: z.number().int().positive().optional() }];
+}
+// Expected state where a write can race another writer: revision checks on transitions, annotations and deletions.
+commandDefinitions['tasks.transition'][1] = { ...commandDefinitions['tasks.transition'][1], expectedRevision: z.number().int().positive().optional() };
+commandDefinitions['artifacts.annotate'][1] = { ...commandDefinitions['artifacts.annotate'][1], expectedRevision: z.number().int().positive().optional() };
+commandDefinitions['artifacts.delete'][1] = { ...commandDefinitions['artifacts.delete'][1], expectedRevision: z.number().int().positive().optional() };
+// Additive pagination: `page` switches a collection result to {items, nextCursor, total}.
+for (const name of ['history.list', 'bookmarks.list', 'workspaces.list', 'search.query', 'artifacts.list', ...Object.keys(recordShapes).map(collection => `${collection}.list`)]) {
+  commandDefinitions[name][1] = { ...commandDefinitions[name][1], page: pageField.optional() };
 }
 const packageName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/, 'Use 1-100 letters, digits, dots, dashes or underscores; no paths').refine(value => !value.includes('..'), 'Package names cannot contain ..');
 const backupId = z.string().regex(/^\d{8}T\d{6}Z-(?:manual|automatic)-[0-9a-f]{8}$/, 'Expected a backup identifier from backups.list');

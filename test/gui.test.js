@@ -307,6 +307,11 @@ if (process.argv.includes("--gui-workflows")) {
     );
     await click('[data-action="close-dialog"]');
     await click("#settings-button");
+    // Semantic search is off until a person configures it; the dialog offers only existing connections.
+    await until('document.getElementById("embedding-status")?.textContent.includes("documents searchable by words")');
+    await click('[data-action="configure-embeddings"]');
+    await until('document.querySelector("#edit-form [name=modelId]") !== null && document.querySelector("#edit-form [name=acknowledgeEgress]") !== null');
+    await click('[data-action="close-dialog"]');
     await until('document.querySelector("[data-action=backup-now]")!==null');
     await click('[data-action="backup-now"]');
     await until('document.getElementById("toast").textContent.includes("Backup created and verified")');
@@ -322,7 +327,7 @@ if (process.argv.includes("--gui-workflows")) {
     await click('[data-action="close-dialog"]');
     const agentCall = async (args) => {
       const response = await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token", "content-type": "application/json" }, body: JSON.stringify({ command: "materials.create", args }) });
-      return { status: response.status, ...(await response.json()) };
+      return { ...(await response.json()), status: response.status };
     };
     const requested = await agentCall({ workspaceId: first.id, title: "Agent proposed note" });
     assert.equal(requested.status, 403);

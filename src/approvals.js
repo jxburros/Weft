@@ -138,7 +138,8 @@ export class ApprovalQueue {
     if (name === 'approvals.list') {
       const rows = this.items.filter(item => (human || item.actor === context.actor) && (args.status === 'all' || item.status === args.status)
         && (!context.workspaceIds || context.workspaceIds.includes(item.workspaceId)));
-      return rows.slice(-(args.limit || 100)).reverse().map(item => this.describe(item, human));
+      // Paged requests (page: {...}) receive every row; the dispatcher pages them newest first.
+      return rows.slice(-(args.limit || (context.allItems ? Infinity : 100))).reverse().map(item => this.describe(item, human));
     }
     // Resolution belongs to browser-owned UI. No API, CLI, MCP or model identity can approve, even with a human-sounding actor.
     if (!human || context.source !== 'gui') throw Object.assign(new Error('Approval decisions require the trusted browser interface'), { code: 'human_required', notStarted: true,

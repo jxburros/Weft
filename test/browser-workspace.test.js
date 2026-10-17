@@ -47,7 +47,15 @@ if (smoke) {
       await browser.restore();
       const firstWorkspace = workspace.activeWorkspaceId;
       const firstTab = browser.activeId;
+      const published = [];
+      browser.onEvent = event => published.push(event);
       await browser.execute('page.navigate', { url: origin });
+      // Committed navigations are replayable metadata events: tab, workspace and version, never the URL or title.
+      await until(() => published.some(event => event.type === 'navigation' && event.status === 'committed'));
+      const navigation = published.find(event => event.type === 'navigation');
+      assert.deepEqual(Object.keys(navigation).sort(), ['status', 'tabId', 'type', 'version', 'workspaceId']);
+      assert.equal(navigation.workspaceId, firstWorkspace);
+      assert.equal(navigation.tabId, firstTab);
       await browser.execute('cookies.set', { url: origin, name: 'isolated', value: 'first' });
       await browser.execute('page.evaluate', { expression: 'localStorage.setItem("project", "first")' });
       assert.ok((await workspace.execute('history.list')).some(visit => visit.url === `${origin}/`));

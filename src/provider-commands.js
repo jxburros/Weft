@@ -26,6 +26,8 @@ export const attachmentSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('material'), id }),
   z.strictObject({ kind: z.literal('context'), id }),
   z.strictObject({ kind: z.literal('task'), id }),
+  z.strictObject({ kind: z.literal('search'), query: z.string().trim().min(1).max(1000).describe('Search this conversation workspace and attach the cited results.'),
+    limit: z.number().int().min(1).max(50).optional().describe('Results to request (default 10); retrieved context is capped at 0.4 of the window after the reserved reply.') }),
   z.strictObject({ kind: z.literal('artifact'), id, versionId: id.describe('Exact immutable artifact version.'),
     parts: z.array(z.enum(['text', 'image'])).min(1).max(2).optional().describe('Version components to attach; default both when present.') }),
 ]);
@@ -50,7 +52,7 @@ export const providerCommandDefinitions = {
       title: z.string().max(300), content: z.string().max(100000),
       id: id.optional(), recordType: z.enum(['context', 'materials']).optional(), source: z.string().max(2048).optional(), localOnly: z.boolean().optional(),
     })).max(12).optional(),
-    attachments: z.array(attachmentSchema).max(16).optional().describe('Selected passages, tab snapshots, stored materials, context, tasks and exact artifact versions.'),
+    attachments: z.array(attachmentSchema).max(16).optional().describe('Selected passages, tab snapshots, stored materials, context, tasks, cited search results and exact artifact versions.'),
     exclude: z.array(z.string().min(1).max(300)).max(1000).optional().describe('Disclosure item keys (from chat.preview) to leave out of this turn.'),
   }],
   'chat.cancel': ['Cancel a running model request; any partial reply is kept and marked interrupted', { conversationId: id }],

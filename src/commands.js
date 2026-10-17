@@ -16,6 +16,10 @@ import { storageCommandDefinitions } from './site-storage.js';
 import { threatCommandDefinitions } from './threat-intel.js';
 import { downloadSafetyCommandDefinitions } from './download-safety.js';
 import { updateCommandDefinitions } from './updater.js';
+import { transferCommandDefinitions } from './transfers.js';
+import { eventCommandDefinitions } from './events.js';
+import { capabilityCommandDefinitions } from './capabilities.js';
+import { PAGEABLE, pageField } from './pagination.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -120,7 +124,12 @@ const definitions = {
   ...threatCommandDefinitions,
   ...downloadSafetyCommandDefinitions,
   ...updateCommandDefinitions,
+  ...transferCommandDefinitions,
+  ...eventCommandDefinitions,
+  ...capabilityCommandDefinitions,
 };
+// Additive pagination for every potentially large collection (ADR 018).
+for (const name of PAGEABLE) if (definitions[name] && !definitions[name][1].page) definitions[name][1] = { ...definitions[name][1], page: pageField.optional() };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
 
@@ -133,10 +142,10 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
   'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
-  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete', 'search.configureEmbeddings']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
-  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
+  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'search.status', 'transfers.read', 'events.list', 'weft.capabilities', 'conversations.messages', 'artifacts.versions', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
@@ -191,6 +200,31 @@ function distance(a, b) {
 const suggest = (value, allowed) => allowed.filter(item => typeof item === 'string')
   .map(item => [item, distance(String(value).slice(0, 200), item)])
   .filter(([, score]) => score <= 3).sort((a, b) => a[1] - b[1]).slice(0, 3).map(([item]) => item);
+/** HTTP status for every stable error code. Adding a code requires a status, an exit code and an outcome status. */
+export const ERROR_HTTP_STATUS = Object.freeze({ unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
+  unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
+  timeout: 504, deadline_exceeded: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
+  command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 });
+/**
+ * Stable outcome taxonomy shared by GUI, CLI, MCP and REST. Every outcome carries exactly one
+ * `status`; failures derive it from the error code so all surfaces classify a result identically.
+ */
+export const OUTCOME_STATUSES = Object.freeze(['succeeded', 'partial', 'blocked', 'approval_required', 'stale_state', 'conflict', 'unsupported', 'invalid', 'cancelled', 'timed_out', 'failed']);
+export const ERROR_STATUS = Object.freeze({
+  invalid_arguments: 'invalid', invalid_json: 'invalid', unknown_command: 'invalid', ambiguous_target: 'invalid', request_too_large: 'invalid',
+  unauthorized: 'blocked', permission_required: 'blocked', human_required: 'blocked', target_mismatch: 'blocked', site_blocked: 'blocked',
+  approval_required: 'approval_required', stale_state: 'stale_state',
+  idempotency_conflict: 'conflict', already_committed: 'conflict', lease_conflict: 'conflict', tab_busy: 'conflict',
+  unsupported_capability: 'unsupported', unsupported: 'unsupported', unsupported_media_type: 'unsupported',
+  cancelled: 'cancelled', emergency_stop: 'cancelled', action_interrupted: 'cancelled',
+  timeout: 'timed_out', deadline_exceeded: 'timed_out',
+  not_found: 'failed', command_failed: 'failed', component_integrity: 'failed', transport_error: 'failed', unavailable: 'failed',
+});
+/** A completed command whose result explicitly reports incompleteness is partial, never plain success. */
+export const isPartialResult = result => Boolean(result) && typeof result === 'object' && !Array.isArray(result)
+  && (result.status === 'partial' || result.partial === true || result.complete === false);
+export const outcomeStatus = outcome => outcome.error ? (ERROR_STATUS[outcome.error.code] ?? 'failed') : isPartialResult(outcome.result) ? 'partial' : 'succeeded';
+export const API_VERSION = 1;
 const schemaHint = name => `weft_reference({command:${JSON.stringify(name)}}); GET /v1/commands`;
 export function toCommandError(error, commandName, input) {
   if (error instanceof CommandError) return error.toJSON();
@@ -211,10 +245,7 @@ export function toCommandError(error, commandName, input) {
     return { ...fields[0], issues: fields };
   }
   const message = error?.message || 'Command failed';
-  const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
-    unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
-    timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
-    command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 };
+  const known = ERROR_HTTP_STATUS;
   let code = error?.code === 'SITE_BLOCKED' ? 'site_blocked' : Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
     if (/stale|STALE_STATE/i.test(message)) code = 'stale_state';
@@ -259,16 +290,26 @@ export function toCommandError(error, commandName, input) {
   }
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   if (code === 'unsupported_capability') {
-    if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback'].includes(error.details?.capability)) details.capability = error.details.capability;
+    if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback', 'embeddings'].includes(error.details?.capability)) details.capability = error.details.capability;
     if (typeof error.details?.modelId === 'string' && /^[\w.-]{1,128}$/.test(error.details.modelId)) details.modelId = error.details.modelId;
   }
   // Model turn stops report whether the partial reply was kept, never its text.
   if (['cancelled', 'timeout', 'emergency_stop'].includes(code) && typeof error.details?.turnId === 'string' && /^turn_[0-9a-f-]{36}$/.test(error.details.turnId)) {
     details.turnId = error.details.turnId;
     for (const key of ['partialSaved', 'continuable']) if (typeof error.details[key] === 'boolean') details[key] = error.details[key];
-    if (['first_token', 'idle', 'total'].includes(error.details.deadline)) details.deadline = error.details.deadline;
+    if (['first_token', 'idle', 'total', 'request'].includes(error.details.deadline)) details.deadline = error.details.deadline;
   }
-  return { code, message, field: null, schema: schemaHint(commandName), httpStatus: known[code], ...(Object.keys(details).length && { details }) };
+  // Deadlines report only whether execution started and what happened to it (fixed vocabulary).
+  if (code === 'deadline_exceeded' && error.details && typeof error.details === 'object') {
+    if (typeof error.details.started === 'boolean') details.started = error.details.started;
+    if (['not_started', 'rolled_back', 'stopped', 'uncertain'].includes(error.details.effect)) details.effect = error.details.effect;
+    for (const key of ['deadlineMs', 'elapsedMs']) if (Number.isSafeInteger(error.details[key]) && error.details[key] >= 0) details[key] = error.details[key];
+    if (typeof error.details.turnId === 'string' && /^turn_[0-9a-f-]{36}$/.test(error.details.turnId)) details.turnId = error.details.turnId;
+    if (typeof error.details.partialSaved === 'boolean') details.partialSaved = error.details.partialSaved;
+  }
+  // A field named by Weft's own validation (never caller text) locates the problem argument.
+  const field = typeof error?.field === 'string' && /^[A-Za-z][\w.]{0,100}$/.test(error.field) ? error.field : null;
+  return { code, message, field, schema: schemaHint(commandName), httpStatus: known[code], ...(Object.keys(details).length && { details }) };
 }
 export function validateCommand(name, args = {}) {
   if (!Object.hasOwn(schemas, name)) throw new CommandError({ code: 'unknown_command', message: 'Unknown command. Select a canonical command from the catalog.',
@@ -297,12 +338,21 @@ export function normalizeCommand(name, args = {}) {
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
   stale_state: 3, idempotency_conflict: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
-  emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8 });
+  emergency_stop: 6, timeout: 7, deadline_exceeded: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;
+/** Execution state of a failed command; a deadline reports whether the command started and how it ended. */
+function failedExecution(details, error, validation) {
+  if (['cancelled', 'emergency_stop'].includes(details.code)) return 'cancelled';
+  if (details.code === 'deadline_exceeded') {
+    const effect = details.details?.effect;
+    return details.details?.started === false || effect === 'not_started' ? 'not_started' : effect === 'uncertain' ? 'uncertain' : 'cancelled';
+  }
+  return validation === 'failed' || error?.notStarted === true ? 'not_started' : 'failed';
+}
 export function errorOutcome(error, command = null, args = {}, normalized = [], validation = 'passed') {
   const details = toCommandError(error, command);
-  return { schemaVersion: 1, command, execution: ['cancelled', 'emergency_stop'].includes(details.code) ? 'cancelled' : validation === 'failed' || error?.notStarted === true ? 'not_started' : 'failed',
+  return { schemaVersion: 1, command, status: ERROR_STATUS[details.code] ?? 'failed', execution: failedExecution(details, error, validation),
     validation, review: ['permission_required', 'human_required', 'approval_required', 'site_blocked'].includes(details.code) ? 'required' : 'not_required',
     workspaceId: typeof args?.workspaceId === 'string' && args.workspaceId.length <= 200 ? args.workspaceId : null, tabId: Number.isSafeInteger(args?.tabId) && args.tabId > 0 ? args.tabId : null, normalized, result: null, error: details };
 }
@@ -314,9 +364,10 @@ export async function executeOutcome(execute, name, input = {}, { returnsOutcome
   try {
     const result = await execute(prepared.command, args);
     if (returnsOutcome && result?.schemaVersion === 1 && result.execution && Object.hasOwn(result, 'result') && Object.hasOwn(result, 'error')) {
-      return { ...result, normalized: [...prepared.normalized, ...(result.normalized || [])] };
+      const outcome = { ...result, normalized: [...prepared.normalized, ...(result.normalized || [])] };
+      return Object.hasOwn(outcome, 'status') ? outcome : { schemaVersion: 1, command: outcome.command, status: outcomeStatus(outcome), ...outcome };
     }
-    return { schemaVersion: 1, command: prepared.command, execution: 'succeeded', validation: 'passed', review: 'not_required',
+    return { schemaVersion: 1, command: prepared.command, status: isPartialResult(result) ? 'partial' : 'succeeded', execution: 'succeeded', validation: 'passed', review: 'not_required',
       workspaceId: args.workspaceId ?? (prepared.command !== 'page.evaluate' ? result?.workspaceId : null) ?? null, tabId: args.tabId ?? (prepared.command.startsWith('tabs.') ? result?.id : result?.tabId) ?? null,
       normalized: prepared.normalized, ...(typeof args.requestId === 'string' && { idempotency: { requestId: args.requestId, replayed: result?.[REPLAYED] === true } }), result: result ?? null, error: null };
   } catch (error) { return errorOutcome(error, prepared.command, args, prepared.normalized); }
