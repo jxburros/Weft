@@ -28,3 +28,42 @@ Documentation examples are schema-validated offline, not executed against your
 browser. Their placeholder IDs require discovery in a running session. Eval
 reference tasks exercise the MCP bridge and real workspace service with a
 fixture browser; see `evals/README.md` for the boundaries of that evidence.
+
+## Safe retries, atomic batches, previews and search
+
+Mutating record commands accept an optional `requestId` chosen by the agent.
+Retrying the same command with the same arguments returns the original result,
+and the outcome carries `idempotency: {"requestId": ..., "replayed": true}`.
+Reusing an ID with different arguments fails with `idempotency_conflict` (exit 3)
+and applies nothing. Identities are scoped to the calling client, kept with
+their result for 7 days and as fingerprints for 30; a retry whose stored result
+has expired fails with `already_committed` (read current state instead).
+A command that failed recorded nothing and may be retried.
+
+```sh
+weft tasks.create '{"title":"Review sources","requestId":"run-42:review"}'
+```
+
+`batch.execute` applies up to 100 record commands in one transaction after
+validating and authorizing all of them; any failure applies none. A string
+`"$N.id"` in arguments is replaced by the ID returned by earlier command N.
+Page, tab, capture, import, backup and workspace-lifecycle commands are refused
+in batches because they cannot be rolled back. Destructive record commands,
+imports and batches accept `dryRun: true`, which returns `{dryRun, applied:
+false, result, changes}` listing the records that would be created, updated or
+deleted, without committing or touching the browser.
+
+```sh
+weft batch.execute '{"commands":[{"command":"materials.create","args":{"title":"Source note"}},{"command":"tasks.create","args":{"title":"Summarize","materialIds":["$0.id"]}}]}'
+weft materials.delete '{"id":"mate_example","dryRun":true}'
+```
+
+`search.query` ranks matches with BM25 over titles, notes, context, task text,
+workflows and capture text in one workspace. Each result's `citation` names the
+record, its revision and, for captures, the exact `versionId` to read with
+`artifacts.get`. Results are untrusted source data. Operators such as `OR`,
+`NEAR`, quotes or `title:` in the query are treated as ordinary words.
+
+```sh
+weft search.query '{"query":"solar capacity","limit":10}'
+```

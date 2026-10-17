@@ -24,6 +24,25 @@ alone is not a shipped capability.
 - Added canonical contributor instructions, a thin Claude overlay, product
   identity and architecture decisions for encryption, extensions/plugins and
   current local-only collaboration/deployment scope.
+- Replaced the whole-file JSON store with transactional SQLite metadata
+  (built-in `node:sqlite`, WAL, append-only schema migrations, external-writer
+  detection) and verified content-addressed component files for captures and
+  stored files; metadata edits no longer rewrite capture bytes (#25, ADR 004).
+  Existing JSON stores migrate losslessly on first start with the original kept
+  under `recovery/`; interrupted migrations recover and damaged or newer stores
+  are preserved unchanged. The minimum Node.js version is now 22.13.
+- Added a local FTS5 index with BM25 ranking for materials, context, task,
+  workflow and capture text, scoped to the workspace in SQL, injection-safe
+  query compilation and results that cite record revisions and exact capture
+  versions (#67). Embedding/hybrid retrieval remains deferred.
+- Added optional `requestId` idempotency to record mutations (replay or
+  `idempotency_conflict`, bounded retention), atomic `batch.execute` with
+  `$N.id` placeholders, and `dryRun` previews for deletions, imports, restores
+  and batches across GUI/REST/CLI/MCP (#39).
+- Added verified automatic and manual backups, journaled restore with preserved
+  originals, offline `weft store` recovery, lossless format-2 export/import with
+  lossy-mapping reports and GUI previews, and verified package folders for
+  projects beyond the REST/JSON limits (#27).
 
 ### Not completed
 

@@ -13,7 +13,7 @@ surfaces, plum controls, and deliberate light/dark themes.
 
 ## Run
 
-Requires **Node.js 22.12+**, npm, and a desktop session. Electron supplies Chromium.
+Requires **Node.js 22.13+** (for the built-in `node:sqlite` module), npm, and a desktop session. Electron supplies Chromium.
 
 ```sh
 npm ci
@@ -158,8 +158,15 @@ Requests require `Authorization: Bearer <token>`:
   See [the command contract](docs/COMMANDS.md) for status and error meanings.
 
 Discovery is the authoritative list of available commands and arguments. Unknown
-fields are rejected. API request bodies are capped at 1 MiB, so large file imports
-should use the GUI. REST rejects browser-origin requests and does not enable CORS.
+fields are rejected. API request bodies are capped at 1 MiB, so large projects
+move as package folders (`workspaces.exportPackage`/`workspaces.importPackage`,
+human-only) or through the GUI. REST rejects browser-origin requests and does not enable CORS.
+
+Mutating record commands accept an optional `requestId`: retrying the same command
+and arguments returns the original result (`idempotency.replayed: true`) instead of
+applying twice. `batch.execute` applies up to 100 record commands all-or-nothing, and
+destructive record commands, imports and batches accept `dryRun` to preview the exact
+changes. See [ADR 004](docs/decisions/004-transactional-storage-search-and-recovery.md).
 
 Human-only policy, configuration, storage-administration, override, and takeover
 commands appear in discovery but reject automation callers. The bootstrap token
@@ -188,16 +195,25 @@ in the destination workspace's storage container and may change its login state.
 The original foundation's shared `persist:weft` session is not merged into new
 workspace containers.
 
-Exports include versioned project records, copied material bytes, and captures.
-They exclude browser sessions, configured model keys, and global policies.
-Imports create new IDs and leave imported rules/workflows inactive for review.
-Copies use this same behavior. Linked-file/service entries are manual reference
-metadata; their sources are not automatically copied or refreshed.
+Exports (format 2) include project records with revisions and revision history,
+conversations, exact capture versions with their hashes, annotations, copied
+material bytes and task/workflow/evidence links. They exclude browser sessions,
+cookies, configured model keys, global policies, activity and browsing history.
+Imports create new IDs, rewrite citations of exported IDs, verify capture hashes,
+report every lossy mapping and leave imported rules/workflows inactive for review;
+the GUI shows a preview first. Copies use this same behavior. Linked-file/service
+entries are manual reference metadata; their sources are not copied or refreshed.
 
-The project store is a bounded, single-process JSON file written with atomic
-replacement. It is **not encrypted**, and is not a transactional multi-process
-database. Stored materials are limited to 10 MiB, PNGs to 20 MiB, and total
-project state to 100 MiB. Exports are the current manual backup mechanism.
+Project metadata is a transactional SQLite database (`workspace.sqlite`, WAL
+mode, owned by one Weft process through a profile lock); captures and stored
+files are verified content-addressed files under `components/`, so editing
+metadata never rewrites them. Search uses a local FTS5 index. Weft keeps
+verified automatic backups (daily, latest five) and manual backups under
+`backups/`; restoring preserves the replaced data under `recovery/`. With Weft
+closed, `weft store backups|verify|restore <workspace-data directory>` recovers
+a profile whose database cannot be opened. None of this is **encrypted**, and
+backups on the same disk do not protect against losing that disk. Stored
+materials are limited to 10 MiB, PNGs to 20 MiB and JSON imports to 100 MiB.
 Free-form content, files, and captures can contain private data; export does not
 perform comprehensive secret or personal-information redaction.
 

@@ -32,6 +32,9 @@ This pass reviewed all 67 issues open at the start. “Completed” describes th
 | [#68](https://github.com/jxburros/Weft/issues/68) | Sync-folder/placeholder/conflicted-copy warnings and preserved copies, visible in GUI. |
 | [#69](https://github.com/jxburros/Weft/issues/69) | Canonical AGENTS/CLAUDE guidance, core identity/invariants, change checklist and consistent changelog. |
 | [#70](https://github.com/jxburros/Weft/issues/70) | Single machine-readable design-token source, generated theme CSS, reduced-motion tokens and drift/contrast checks. |
+| [#25](https://github.com/jxburros/Weft/issues/25) | Transactional `node:sqlite` metadata (WAL, append-only `user_version` migrations, per-command transactions, external-writer/replacement detection with the profile lock) and verified content-addressed component files; lossless version-1/2 JSON migration preserving records, relationships, capture versions and browser containers with the original kept; interrupted-migration/orphan recovery; damaged/newer stores preserved; size bounds, owner-only files, index excluded from exports; capture-heavy perf budget asserts metadata edits leave components untouched (ADR 004). Encryption at rest is ADR 001's separate scope; Windows/macOS crash behavior not exercised. |
+| [#39](https://github.com/jxburros/Weft/issues/39) | Optional `requestId` on record mutations with transactional fingerprint/result storage, replay marking, `idempotency_conflict`/`already_committed`, bounded retention; atomic `batch.execute` (pre-validated, per-command authority and client grants, placeholders, irreversible commands rejected); `dryRun` for deletes, imports, restores and batches, through the shared catalog. |
+| [#27](https://github.com/jxburros/Weft/issues/27) | Verified automatic (daily, latest five) and manual backups, journaled restore resuming after interruption with preserved originals, offline `weft store` recovery; format-2 export/import round-trips revisions, conversations, links, exact versions and citations with lossy-mapping/linked-source/policy reports and GUI dry-run preview; verified package transfer beyond REST/JSON limits; tests for malformed paths/links, active content, corrupted components and older formats. Backups share the profile disk. |
 
 ## Remains open
 
@@ -60,9 +63,7 @@ Each row states the specific uncompleted requirement and why this pass does not 
 | [#22](https://github.com/jxburros/Weft/issues/22) | Linked-file/service records remain descriptive; file watchers, missing-file lifecycle and refreshable OAuth/service adapters are not built. |
 | [#23](https://github.com/jxburros/Weft/issues/23) | Revision checks remain, but promotion/approval, stale-source warnings and conflict-resolution UI are incomplete. |
 | [#24](https://github.com/jxburros/Weft/issues/24) | Basic tab restoration exists; full resume state, tab groups/search and browsing-data import remain unfinished. |
-| [#25](https://github.com/jxburros/Weft/issues/25) | JSON storage is hardened but still rewritten wholesale; transactional metadata database and separate durable artifacts require a storage migration. |
 | [#26](https://github.com/jxburros/Weft/issues/26) | ADR-001 records threat model/recovery requirements; no encryption/key lifecycle implementation. Avoids claiming plaintext captures are encrypted. |
-| [#27](https://github.com/jxburros/Weft/issues/27) | Migration backups and import rollback are improved, but automatic verified restore, lossless revisions/citation remapping and large-transfer parity remain unfinished. |
 | [#28](https://github.com/jxburros/Weft/issues/28) | Pinned offline list distribution is implemented; moderation, correction/appeal governance, publishing and verified background updates remain absent. |
 | [#29](https://github.com/jxburros/Weft/issues/29) | Client attribution and model manifests improve evidence; retention/deletion/privacy controls and complete durable permission/activity history remain unfinished. |
 | [#30](https://github.com/jxburros/Weft/issues/30) | Store/catalog budgets exist; idle-tab scheduling, capture queues and GUI-first-render budgets remain unfinished. |
@@ -70,7 +71,6 @@ Each row states the specific uncompleted requirement and why this pass does not 
 | [#33](https://github.com/jxburros/Weft/issues/33) | CI exists, but no signed installers, verified updater, rollback activation or named Chromium maintenance/release ownership. Signing credentials are not configured. |
 | [#34](https://github.com/jxburros/Weft/issues/34) | ADR-003 records extension/plugin boundaries, but extension compatibility evaluation and enforced plugin permissions remain incomplete. |
 | [#36](https://github.com/jxburros/Weft/issues/36) | Tokens and visual fixtures landed; final logo-size, interaction, brand/product and cross-platform accessibility reviews remain open. |
-| [#39](https://github.com/jxburros/Weft/issues/39) | Record request IDs, atomic batches and dry runs are not implemented; requires transaction semantics across store mutations and retention. |
 | [#41](https://github.com/jxburros/Weft/issues/41) | Tab version/lease/concurrency checks and secret-field extraction improved; immutable element fingerprints and semantic grounding remain missing. |
 | [#43](https://github.com/jxburros/Weft/issues/43) | Every command is classified and a pure policy evaluator exists; a trusted approval broker/queue and integrated autonomy-level enforcement are not shipped. |
 | [#53](https://github.com/jxburros/Weft/issues/53) | Provider turn manifests improve auditability, but streaming, partial response persistence and resumable event/deadline lifecycle are not implemented. |
@@ -79,7 +79,7 @@ Each row states the specific uncompleted requirement and why this pass does not 
 | [#60](https://github.com/jxburros/Weft/issues/60) | Release/update mechanisms are not implemented; stable-channel trust roots, verified activation, rollback, kill switch and signing pipeline remain open. |
 | [#61](https://github.com/jxburros/Weft/issues/61) | Plugin design decision/checklist exists, but manifests/hook runtime, enforced grants and import-boundary tests require actual runtime implementation. |
 | [#66](https://github.com/jxburros/Weft/issues/66) | Basic actors/capture versions exist, but full record provenance and normalized quote-selector re-anchoring are not implemented. |
-| [#67](https://github.com/jxburros/Weft/issues/67) | Search remains local text matching; FTS5 ranking and optional hybrid retrieval depend on the transactional storage/index design. |
+| [#67](https://github.com/jxburros/Weft/issues/67) | FTS5/BM25 retrieval is implemented (workspace-scoped in SQL, injection-safe queries, version/revision citations to the read-only model search tool, golden-query tests). Remaining: opt-in embeddings and hybrid rank fusion, deferred in ADR 004 until a pinned local model and explicit download/consent flow are chosen; no model is downloaded or bundled. |
 
 ## Verification references
 
