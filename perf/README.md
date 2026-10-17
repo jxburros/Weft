@@ -22,6 +22,12 @@ deliberately generous ceilings:
 | Note update / capture annotation with 500 captures | 1 s each |
 | Ranked search over 500 captures | 1 s |
 | Reopen the capture-heavy store | 5 s |
+| Encrypted: enable encryption in place (11k records, 1k captures, first backup) | 30 s |
+| Encrypted: update one record in a 10k-record store | 5 s |
+| Encrypted: first search (builds the in-memory index) / repeated search | 5 s / 2 s |
+| Encrypted: export (acknowledged plaintext) | 5 s |
+| Encrypted: reopen and unlock with the OS key | 5 s |
+| Encrypted: data-key rotation of 11k records and 1k components | 60 s |
 | 100 catalog serializations | 2 s |
 | 100 OpenAPI generations and serializations | 3 s |
 
@@ -29,6 +35,9 @@ Reference run (Linux container, Node 22, 2026-10-17): 10k-record update
 ~50-230 ms (JSON store: ~270 ms), 1k-capture search ~10-50 ms, import ~2.6-3.1 s
 (JSON store: ~2.3 s), 500-capture initial write ~1.6-2.3 s, note update
 ~55-100 ms, annotation ~15-30 ms, ranked search ~25-40 ms, reopen ~150-300 ms.
+Encrypted profile (injected OS key store, production recovery-key KDF): enable
+~4.7 s, update ~40 ms, first search ~0.8 s, repeated search ~13 ms, export
+~160 ms, reopen ~370 ms, data-key rotation ~2.3 s.
 
 Timings print in TAP diagnostics. A failure should be investigated on the same
 fixture before raising a budget; do not automatically tune ceilings to the

@@ -226,14 +226,43 @@ alone is not a shipped capability.
   extension state and updater state are deliberately not restored (see
   `docs/STORAGE-SAFETY.md`). A restore appends to the activity hash chain and
   never rewinds it.
+- Added opt-in workspace encryption at rest (#26, ADR 014): Settings >
+  Encryption and `encryption.status/enable/lock/unlock/configure/rotate/checkRecoveryKey/disable`.
+  Records, settings, request results and components are sealed with
+  AES-256-GCM (node:crypto) bound to collection, id, revision and key version;
+  component files get keyed names; the search index exists only in memory after
+  unlock. A random profile key is wrapped by the OS key store (Electron
+  `safeStorage`; Linux `basic_text` is refused), a one-time recovery key and an
+  optional scrypt passphrase. Enabling/disabling is in place and crash-safe
+  (one transaction plus key-free startup recovery; plaintext overwritten where
+  feasible, never called secure erasure); wrapping rotation and resumable
+  data-key rotation; encrypted backups carry their keyring; restores re-lock when
+  the backup needs a different key; exports from an encrypted profile require
+  `acknowledgePlaintext`.
+- Added the `locked` outcome (HTTP 423, CLI exit 9; `error.details.reason`) on
+  REST, CLI, MCP, GUI IPC and in-process dispatch while encrypted data is
+  locked, a full-window GUI lock screen, `encryption` events, and `key_invalid`
+  for a wrong passphrase or recovery key. Unlocking is human-only from the Weft
+  window; locking stops model turns and plugins and closes tabs.
+- Activity summaries now keep identifier-shaped strings only in identifier
+  fields (`id`, `...Id`, `name`, `command`, `format`); one-word free text such as
+  a note body is reduced to a character count. `passphrase` and
+  `recoveryKey` fields are never logged.
+- Encrypted-mode performance budgets (enable, write, first/repeated search,
+  export, reopen, data-key rotation) in `npm run test:perf`.
 
 ### Not completed
 
 - See [all 67 issue dispositions](docs/ISSUE-STATUS.md) for the 43 completed
   scopes and 24 broader/partial items left open.
 
-- Workspace encryption, key lifecycle/recovery, extension compatibility testing,
-  native plugin isolation/permissions and plugin loading remain unimplemented.
+- Extension compatibility testing, native plugin isolation/permissions and plugin
+  loading remain unimplemented.
+- Workspace encryption has not been exercised against real macOS Keychain,
+  Windows DPAPI or a Linux secret service (injected backends; real Electron
+  reports `basic_text` under xvfb). There is no idle auto-lock, rollback of a
+  whole profile to an older copy is not detectable, and the Settings golden needs
+  a reviewed update on the reference platform (local fonts differ).
 - Hosted sync, concurrent collaboration and remote deployment are deferred.
 - Activity integrity is tamper evidence only; a process that can rewrite the
   profile can rewrite the log. The changed agent-connections dialog needs a

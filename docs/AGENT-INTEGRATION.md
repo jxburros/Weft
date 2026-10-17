@@ -221,6 +221,30 @@ requests and check outcomes are recorded in durable activity.
 weft update.status
 ```
 
+## Encrypted workspaces and the locked state
+
+A person can turn on workspace encryption (Settings > Encryption; see
+[ADR 014](decisions/014-workspace-encryption-and-key-management.md)). While the
+encrypted data is locked — after a person locks it, or at startup when the
+profile asks for a passphrase or recovery key — every command fails before it
+starts with code `locked` (HTTP 423, CLI exit 9, MCP `isError` with the same
+outcome) and `error.details.reason` (`locked`, `unlock_required` or
+`os_key_unavailable`). Nothing ran; do not retry in a loop or try another
+interface. Report it and wait for the person. `encryption.status` (MCP
+`weft_workspace`) still answers and shows whether encryption is on, whether it
+is locked and how it unlocks, without any secret. The event stream publishes
+`encryption` events with status `locked` or `unlocked`. Unlocking, locking,
+enabling, rotating keys, changing unlock options and turning encryption off are
+human-only administration (`permission_required` with reason `human_only`).
+
+```sh
+weft encryption.status
+```
+
+Exports from an encrypted profile are plaintext and are refused unless the
+person confirmed that (`acknowledgePlaintext: true` on `workspaces.export`,
+`workspaces.exportPackage` and `workspaces.exportAs`, all human-only).
+
 
 ## Safe retries, atomic batches, previews and search
 
