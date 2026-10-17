@@ -157,8 +157,9 @@ test('linked files and folders: status detection, refresh, relink and bounded ag
   const moved = await f.rest('sources.check', { id: file.id }, agent.token);
   assert.equal(moved.result.status, 'moved');
   assert.deepEqual(moved.result.candidate, { name: 'brief-final.txt', matchedBy: 'inode' });
-  // Links store canonical real paths (macOS temp folders resolve through /private).
-  const movedPath = realpathSync(join(project, 'archive', 'brief-final.txt'));
+  // Links store canonical real paths (macOS temp folders resolve through /private; Windows expands 8.3 short
+  // names such as RUNNER~1). The native resolver is the one the product's fs/promises realpath uses.
+  const movedPath = realpathSync.native(join(project, 'archive', 'brief-final.txt'));
   assert.equal(f.workspace.data.materials.find(item => item.id === file.id).link.candidate.path, movedPath);
   assert.equal((await f.rest('sources.relink', { id: file.id }, agent.token)).error.code, 'permission_required');
   const relinked = await f.run('sources.relink', { id: file.id });
@@ -171,7 +172,8 @@ test('linked files and folders: status detection, refresh, relink and bounded ag
   assert.equal((await f.rest('sources.read', { id: file.id, workspaceId: f.a }, agent.token)).error.code, 'permission_required', 'a link swapped for a symlink is not read');
   unlinkSync(join(project, 'archive', 'brief-final.txt'));
   assert.equal((await f.run('sources.check', { id: file.id })).status, 'missing');
-  if (process.getuid?.() !== 0) {
+  // Unreadable by permission bits: root reads anyway, and on Windows chmod only toggles the read-only attribute.
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
     writeFileSync(join(project, 'locked.txt'), 'locked');
     const locked = await f.run('sources.link', { workspaceId: f.a, path: join(project, 'locked.txt') });
     chmodSync(join(project, 'locked.txt'), 0o000);

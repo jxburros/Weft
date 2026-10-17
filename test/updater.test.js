@@ -13,6 +13,9 @@ import { createDispatcher } from '../src/dispatch.js';
 const sha = bytes => createHash('sha512').update(bytes).digest('base64');
 const RELEASES = 'https://github.com/jxburros/Weft/releases';
 const appImage = version => `Weft-${version}-x86_64.AppImage`;
+// These tests replace the AppImage file itself (src/updater.js replaceAppImage). AppImage installs exist only on
+// Linux; on Windows the fsync of the read-only copied file is refused (EPERM), a path no Windows install reaches.
+const appImageOnly = process.platform === 'win32' ? 'AppImage installs exist only on Linux' : false;
 
 /** Same shape electron-builder writes (see dist/latest-linux.yml from a local build). */
 function manifestText({ version, files, path = files[0].url, primarySha = files[0].sha512, extra = '' }) {
@@ -242,7 +245,7 @@ test('only the trusted human interface can check, install, configure or roll bac
   assert.equal((await offline('update.status', {}, { actor: 'human', source: 'gui' })).error.code, 'unavailable');
 });
 
-test('AppImage install replaces atomically, then health check promotes or rollback restores', async t => {
+test('AppImage install replaces atomically, then health check promotes or rollback restores', { skip: appImageOnly }, async t => {
   const f = fixture(t);
   await f.service.check();
   await assert.rejects(f.service.install({ version: '1.2.0' }), error => error.code === 'stale_state');
@@ -270,7 +273,7 @@ test('AppImage install replaces atomically, then health check promotes or rollba
   assert.equal(back.status().activation.health.status, 'healthy');
 });
 
-test('a version that never proves healthy is rolled back automatically on AppImage', async t => {
+test('a version that never proves healthy is rolled back automatically on AppImage', { skip: appImageOnly }, async t => {
   const f = fixture(t);
   await f.service.check();
   await f.service.install({ version: '1.1.0' });
@@ -296,7 +299,7 @@ test('a version that never proves healthy is rolled back automatically on AppIma
   assert.equal((await old.check()).status, 'staged');
 });
 
-test('explicit health failure, unapplied updates and corrupt state are reported honestly', async t => {
+test('explicit health failure, unapplied updates and corrupt state are reported honestly', { skip: appImageOnly }, async t => {
   const f = fixture(t);
   await f.service.check();
   await f.service.install({ version: '1.1.0' });

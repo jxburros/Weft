@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorkspaceService } from '../src/workspace.js';
 import { DatabaseSync } from '../src/sqlite.js';
@@ -44,7 +44,7 @@ function crashAt(directory, operation, step, unlockMode = 'os') {
 }
 function plaintextHits(directory) {
   const hits = [];
-  const walk = path => { for (const entry of readdirSync(path, { withFileTypes: true })) { const file = join(path, entry.name); if (entry.isDirectory()) walk(file); else for (const needle of NEEDLES) if (readFileSync(file).includes(needle)) hits.push(file.slice(directory.length)); } };
+  const walk = path => { for (const entry of readdirSync(path, { withFileTypes: true })) { const file = join(path, entry.name); if (entry.isDirectory()) walk(file); else for (const needle of NEEDLES) if (readFileSync(file).includes(needle)) hits.push(file.slice(directory.length).replaceAll(sep, '/')); } };
   walk(directory);
   return hits.filter(hit => !hit.startsWith('/backups/') && !hit.startsWith('/recovery/'));
 }

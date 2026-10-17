@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { DatabaseSync } from '../src/sqlite.js';
 import { createKeyProtector } from '../src/encryption.js';
@@ -45,7 +45,7 @@ function plaintextHits(directory, needles) {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const file = join(path, entry.name);
       if (entry.isDirectory()) walk(file);
-      else { const bytes = readFileSync(file); for (const needle of needles) if (bytes.includes(needle)) hits.push(`${file.slice(directory.length)}: ${typeof needle === 'string' ? needle : 'bytes'}`); }
+      else { const bytes = readFileSync(file); for (const needle of needles) if (bytes.includes(needle)) hits.push(`${file.slice(directory.length).replaceAll(sep, '/')}: ${typeof needle === 'string' ? needle : 'bytes'}`); }
     }
   };
   walk(directory);

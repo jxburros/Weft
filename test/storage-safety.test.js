@@ -57,6 +57,14 @@ test('a replaced database file is detected before writing', async t => {
   const other = mkdtempSync(join(tmpdir(), 'weft-other-'));
   removeAfter(t, other);
   fs.copyFileSync(path, join(other, 'copy.sqlite'));
+  if (process.platform === 'win32') {
+    // Windows itself refuses to replace a file that is open without delete sharing (as SQLite opens it), so the
+    // replacement cannot happen while Weft has the database open; the open database stays canonical and writable.
+    assert.throws(() => fs.renameSync(join(other, 'copy.sqlite'), path), error => ['EPERM', 'EBUSY', 'EACCES'].includes(error.code));
+    await service.execute('materials.create', { title: 'Still the canonical file' });
+    assert.equal(count(path, 'materials'), 1);
+    return;
+  }
   fs.renameSync(join(other, 'copy.sqlite'), path);
   await assert.rejects(service.execute('materials.create', { title: 'Must not write' }), /STORE_CONFLICT/);
   assert.equal(readdirSync(directory).includes('workspace.sqlite'), true);
