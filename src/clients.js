@@ -81,7 +81,7 @@ export class ClientGrants {
     if (target.workspaceId && !grant.workspaceIds.includes(target.workspaceId)) throw denied('Workspace is outside this client grant');
     // Explicit allowlists keep newly introduced commands denied until classified.
     const read = /^(materials|context|tasks|conversations|workflows|artifacts)\.(list|get)$/.test(name)
-      || ['workspaces.list', 'workspaces.get', 'workspace.snapshot', 'history.list', 'bookmarks.list', 'activity.list', 'search.query', 'tabs.list', 'page.inspect', 'page.readable', 'page.title', 'page.content', 'page.screenshot', 'page.pdf', 'downloads.list', 'storage.info', 'browser.info', 'guide.get'].includes(name);
+      || ['workspaces.list', 'workspaces.get', 'workspace.snapshot', 'history.list', 'bookmarks.list', 'activity.list', 'search.query', 'tabs.list', 'page.inspect', 'page.readable', 'page.title', 'page.content', 'page.screenshot', 'page.pdf', 'downloads.list', 'storage.info', 'storage.policy', 'siteRules.explain', 'threats.status', 'launches.list', 'browser.info', 'guide.get'].includes(name);
     const records = /^(materials|context|tasks|conversations|workflows)\.(create|update|delete)$/.test(name)
       || ['tasks.transition', 'conversations.message', 'bookmarks.create', 'bookmarks.delete', 'artifacts.create', 'artifacts.capture', 'artifacts.annotate', 'artifacts.delete'].includes(name);
     const tabs = ['tabs.new', 'tabs.activate', 'tabs.close', 'tabs.pin', 'tabs.duplicate', 'tabs.claim', 'tabs.release', 'page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.click', 'page.fill', 'page.find', 'page.zoom', 'downloads.cancel'].includes(name);

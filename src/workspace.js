@@ -7,6 +7,7 @@ import { workspaceSchemas, recordShapes } from './workspace-commands.js';
 import { acquireProfileLock, assertUnchanged, fileStamp, writeVerifiedJson, storageWarnings, syncDirectory } from './storage-safety.js';
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
+import { effectiveRule, explainRules } from './site-rules.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -166,11 +167,12 @@ export class WorkspaceService {
     this.data.activity.push({ id: uuid('event'), workspaceId, targetId, action, actor, detail, createdAt: now() });
   }
   matchSiteRule(value, workspaceId = this.activeWorkspaceId) {
-    let url;
-    try { url = new URL(value); } catch { return null; }
-    const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
-    const matching = this.data.siteRules.filter(rule => rule.enabled !== false && (rule.scope === 'global' || rule.workspaceId === workspaceId) && (hostname === rule.hostname || (rule.includeSubdomains && hostname.endsWith(`.${rule.hostname}`))) && (rule.path === '/' || url.pathname === rule.path || url.pathname.startsWith(`${rule.path.replace(/\/$/, '')}/`)));
-    return clone(matching.find(rule => rule.behavior === 'block' && rule.mode === 'connection') || matching.find(rule => rule.behavior === 'block') || matching[0] || null);
+    return clone(effectiveRule(this.data.siteRules, value, workspaceId));
+  }
+  /** Every matching rule with explicit precedence; browser adds exceptions/security findings. */
+  explainSiteRules(value, workspaceId = this.activeWorkspaceId, extras = {}) {
+    this.workspace(workspaceId);
+    return clone(explainRules(this.data.siteRules, value, workspaceId, extras));
   }
   getConversation(id) { return clone(this.record('conversations', id)); }
   appendMessage(id, message) { return this.execute('conversations.message', { id, ...message }); }
@@ -241,6 +243,20 @@ export class WorkspaceService {
       return snapshot;
     }
     if (name === 'settings.get') return clone(this.data.settings);
+    if (name === 'siteRules.review') {
+      if (!admin) throw new Error('PERMISSION_REQUIRED: site-rule review requires human administration');
+      const before = clone(this.data);
+      try {
+        const record = this.record('siteRules', args.id, context);
+        if (record.scope !== 'global' && context.workspaceId && record.workspaceId !== context.workspaceId) throw new Error('PERMISSION_REQUIRED: record is outside the authorized workspace');
+        const changes = { lastReviewedAt: now(), lastReviewedBy: actor, ...(args.reviewBy !== undefined && { reviewBy: args.reviewBy }) };
+        this.recordRuleRevision(record, changes, actor, args.note ? `Reviewed: ${args.note}` : 'Reviewed');
+        Object.assign(record, changes); this.touch(record);
+        this.log(name, record.workspaceId, record.id, actor, args.note || '');
+        this.save();
+        return clone(record);
+      } catch (error) { this.data = before; throw error; }
+    }
     if (name === 'activity.list') return clone(this.data.activity.filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
     if (name === 'search.query') {
       const query = args.query.trim().toLocaleLowerCase();
@@ -320,6 +336,7 @@ export class WorkspaceService {
       if (record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
       if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
+      if (this.data.storagePolicies) this.data.storagePolicies = this.data.storagePolicies.filter(item => item.workspaceId !== record.id);
       for (const key of [...collections, 'activity', 'history']) this.data[key] = this.data[key].filter(item => item.workspaceId !== record.id);
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
     } else if (action === 'duplicate') {
@@ -345,6 +362,7 @@ export class WorkspaceService {
       if (collection === 'siteRules') this.validateRule(fields);
       if (collection === 'materials') this.validateMaterial(fields);
       record = createRecord(fields, collection === 'siteRules' && fields.scope === 'global' ? null : workspaceId, collection.slice(0, 4));
+      if (collection === 'siteRules') { record.createdBy = actor; record.revisions = [{ revision: 1, actor, at: record.createdAt, summary: 'Created', changed: Object.keys(fields).sort() }]; }
       if (collection === 'conversations') record.messages = [];
       if (['materials', 'context'].includes(collection)) record.history = [{ revision: 1, content: record.content, actor, createdAt: record.createdAt }];
       this.data[collection].push(record);
@@ -358,7 +376,7 @@ export class WorkspaceService {
         if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: record changed; reload before updating');
         if (!admin && collection === 'workflows' && record.enabled === false && args.changes.enabled === true) throw new Error('PERMISSION_REQUIRED: imported workflow requires human review');
         const updated = { ...record, ...args.changes };
-        if (collection === 'siteRules') { this.validateRule(updated); updated.workspaceId = updated.scope === 'global' ? null : (record.workspaceId || workspaceId); }
+        if (collection === 'siteRules') { this.validateRule(updated); updated.workspaceId = updated.scope === 'global' ? null : (record.workspaceId || workspaceId); this.recordRuleRevision(record, updated, actor, 'Updated'); }
         if (collection === 'materials') this.validateMaterial(updated);
         Object.assign(record, updated); this.touch(record);
         if (record.history && args.changes.content !== undefined) record.history.push({ revision: record.revision, content: record.content, actor, createdAt: now() });
@@ -366,6 +384,11 @@ export class WorkspaceService {
     }
     this.log(`${collection}.${action}`, record.workspaceId, record.id, actor);
     return action === 'delete' ? { deleted: true, id: record.id } : record;
+  }
+  recordRuleRevision(record, updated, actor, summary) {
+    const changed = Object.keys(updated).filter(key => !['revisions', 'updatedAt', 'revision'].includes(key) && JSON.stringify(record[key]) !== JSON.stringify(updated[key])).sort();
+    const previous = Object.fromEntries(changed.map(key => [key, record[key] ?? null]));
+    updated.revisions = record.revisions = [...(record.revisions ?? []), { revision: record.revision + 1, actor, at: now(), summary, changed, previous }].slice(-50);
   }
   validateRule(record) {
     record.hostname = normalizeHostname(record.hostname);
@@ -456,6 +479,7 @@ export class WorkspaceService {
           if (collection === 'conversations') fields.messages = z.array(z.object({ id: z.string().max(128), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: z.string().max(100), model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional() })).max(10000).parse(item.messages || []);
         }
         const record = createRecord(fields, workspace.id, collection.slice(0, 4));
+        if (collection === 'siteRules') { record.createdBy = `${actor} (import)`; record.revisions = [{ revision: 1, actor, at: record.createdAt, summary: 'Imported inactive for review', changed: [] }]; }
         mapping.set(item.id, record.id);
         return record;
       });

@@ -5,6 +5,9 @@ import { commandDefinitions as workspaceDefinitions } from './workspace-commands
 import { providerCommandDefinitions } from './provider-commands.js';
 import { clientCommandDefinitions } from './clients.js';
 import { listCommandDefinitions } from './community-lists.js';
+import { storageCommandDefinitions } from './site-storage.js';
+import { threatCommandDefinitions } from './threat-intel.js';
+import { downloadSafetyCommandDefinitions } from './download-safety.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -42,7 +45,8 @@ const definitions = {
   'page.zoom': ['Set page zoom factor', { ...page, factor: z.number().min(0.25).max(5) }],
   'storage.info': ['Describe storage isolation and supported controls', { workspaceId }],
   'storage.clear': ['Clear site origin or entire workspace data (human administration)', { workspaceId, url: cookieUrl.optional() }],
-  'page.allowOnce': ['Allow this blocked destination for this tab visit (human only; redirects and other destinations remain checked)', { tabId: tabId.unwrap() }],
+  'page.allowOnce': ['Allow this blocked destination for this tab visit (human only; redirects and other destinations remain checked)', { tabId: tabId.unwrap(), acknowledgeSecurityRisk: z.boolean().optional() }],
+  'siteRules.explain': ['Explain every site rule, security finding and exact-visit exception matching a URL, in precedence order', { url: cookieUrl, workspaceId, tabId }],
   'page.navigate': ['Navigate a tab', { ...page, url }],
   'page.back': ['Go back', page],
   'page.forward': ['Go forward', page],
@@ -72,6 +76,9 @@ const definitions = {
   ...providerCommandDefinitions,
   ...clientCommandDefinitions,
   ...listCommandDefinitions,
+  ...storageCommandDefinitions,
+  ...threatCommandDefinitions,
+  ...downloadSafetyCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -79,7 +86,9 @@ for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith
 const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'page.allowOnce',
   'cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear', 'history.clear', 'settings.update',
   'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete',
-  'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback']);
+  'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback',
+  'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
+  'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export']);
 const descriptions = {
@@ -152,7 +161,7 @@ export function toCommandError(error, commandName, input) {
   }
   const message = error?.message || 'Command failed';
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
-    unknown_command: 400, tab_busy: 409, action_interrupted: 409, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
+    unknown_command: 400, tab_busy: 409, action_interrupted: 409, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409, site_blocked: 403,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
     command_failed: 422, transport_error: 503 };
   let code = Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
@@ -172,6 +181,12 @@ export function toCommandError(error, commandName, input) {
     if (Array.isArray(error.details.tabs)) details.tabs = error.details.tabs
       .filter(tab => Number.isSafeInteger(tab?.tabId) && tab.tabId > 0 && workspaceId(tab.workspaceId)).slice(0, 1000)
       .map(({ tabId, workspaceId }) => ({ tabId, workspaceId }));
+  }
+  if (code === 'site_blocked' && error.details && typeof error.details === 'object') {
+    const text = (value, max = 500) => typeof value === 'string' ? value.slice(0, max) : null;
+    details.blocked = { url: text(error.details.url, 16384), kind: ['security', 'preference'].includes(error.details.kind) ? error.details.kind : null, ruleId: text(error.details.ruleId, 200),
+      hostname: text(error.details.hostname, 253), source: text(error.details.source, 50), mode: text(error.details.mode, 30), reason: text(error.details.reason), category: text(error.details.category, 50),
+      stale: typeof error.details.stale === 'boolean' ? error.details.stale : null, exception: text(error.details.exception), explain: text(error.details.explain, 50) };
   }
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   return { code, message, field: null, schema: schemaHint(commandName), httpStatus: known[code], ...(Object.keys(details).length && { details }) };
@@ -203,13 +218,13 @@ export function normalizeCommand(name, args = {}) {
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
   stale_state: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, permission_required: 4, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
-  emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7 });
+  emergency_stop: 6, site_blocked: 5, timeout: 7, transport_error: 7, unavailable: 7 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;
 export function errorOutcome(error, command = null, args = {}, normalized = [], validation = 'passed') {
   const details = toCommandError(error, command);
   return { schemaVersion: 1, command, execution: ['cancelled', 'emergency_stop'].includes(details.code) ? 'cancelled' : validation === 'failed' ? 'not_started' : 'failed',
-    validation, review: ['permission_required', 'human_required'].includes(details.code) ? 'required' : 'not_required',
+    validation, review: ['permission_required', 'human_required', 'site_blocked'].includes(details.code) ? 'required' : 'not_required',
     workspaceId: typeof args?.workspaceId === 'string' && args.workspaceId.length <= 200 ? args.workspaceId : null, tabId: Number.isSafeInteger(args?.tabId) && args.tabId > 0 ? args.tabId : null, normalized, result: null, error: details };
 }
 export async function executeOutcome(execute, name, input = {}, { returnsOutcome = false } = {}) {

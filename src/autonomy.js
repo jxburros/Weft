@@ -10,6 +10,8 @@ add('code_exec', 'page.evaluate');
 add('cloud_spend', 'chat.send');
 add('local_read', 'chat.preview');
 add('administration', 'clients.create clients.list clients.revoke lists.install lists.status lists.rollback');
+add('local_read', 'siteRules.explain storage.policy threats.status launches.list');
+add('administration', 'siteRules.review storage.setSiteMode storage.setDefaultMode threats.install threats.remove threats.configureProvider threats.update downloads.configureScanner launches.approve launches.deny');
 add('administration', `browser.emergencyStop browser.resumeAutomation browser.close downloads.approve tabs.takeover page.allowOnce cookies.list cookies.set cookies.clear storage.clear history.clear settings.update workspaces.delete models.save models.delete`);
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
