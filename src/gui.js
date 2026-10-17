@@ -114,6 +114,18 @@ const host = (url) => {
 };
 const action = (name, label, ico = "", attrs = "", cls = "secondary") =>
   `<button class="${cls}" data-action="${name}" ${attrs}>${ico ? icon(ico) : ""}${esc(label)}</button>`;
+// Polling replaces controls. Keep keyboard focus on the equivalent new control.
+function rememberFocus() {
+  const element = document.activeElement;
+  const attributes = ["data-action", "data-id", "data-section", "data-kind"];
+  const selector = element?.id ? `#${CSS.escape(element.id)}` :
+    element?.hasAttribute("data-action") ? element.tagName.toLowerCase() + attributes.filter(a => element.hasAttribute(a)).map(a => `[${a}="${CSS.escape(element.getAttribute(a))}"]`).join("") : null;
+  return () => {
+    const target = element?.isConnected ? element : selector && document.querySelector(selector);
+    if (target && !target.closest("[hidden]")) target.focus({ preventScroll: true });
+    else $("content").focus({ preventScroll: true });
+  };
+}
 function toast(message) {
   $("toast").textContent = message;
   $("toast").hidden = false;
@@ -177,16 +189,19 @@ async function refresh(force = false) {
 }
 async function refreshState(force) {
   {
-    const [next, nextTabs] = await Promise.all([
+    const [next, nextTabs, browserInfo] = await Promise.all([
       window.weft.execute("workspace.snapshot", {}),
       window.weft.execute("tabs.list", {}),
+      window.weft.execute("browser.info", {}),
     ]);
-    const snapshot = JSON.stringify([next, nextTabs]);
+    const snapshot = JSON.stringify([next, nextTabs, browserInfo.automation]);
     state = next;
     tabs = nextTabs;
     if (snapshot !== lastSnapshot || force) {
       lastSnapshot = snapshot;
+      const restoreFocus = rememberFocus();
       renderShell();
+      renderSafetyNotices(browserInfo.automation);
       if (
         !document.activeElement?.closest(
           "#content input,#content textarea,#content select",
@@ -194,6 +209,7 @@ async function refreshState(force) {
       )
         renderContent();
       if (agentOpen && !chatBusy) renderMessages();
+      if (!document.activeElement || document.activeElement === document.body) restoreFocus();
     }
     if (document.activeElement !== $("address"))
       $("address").value =
@@ -213,6 +229,12 @@ function theme() {
     ? "../assets/logo/dark/horizontal-dark.svg"
     : "../assets/logo/svg/horizontal-full-color.svg";
   $("theme-toggle").innerHTML = icon(dark ? "sun" : "moon");
+}
+function renderSafetyNotices(automation) {
+  const notices = $("safety-notices");
+  notices.innerHTML = (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
+    (state.storageWarnings || []).map(w => `<div class="safety-notice"><strong>Storage warning:</strong> ${esc(w.message)}${w.file ? ` <span>${esc(w.file)}</span>` : ""}</div>`).join("");
+  notices.hidden = !notices.innerHTML;
 }
 function renderShell() {
   theme();
@@ -240,6 +262,8 @@ function renderShell() {
     .join("");
   $("agent-toggle").innerHTML = icon("spark") + "<span>Ask Weft</span>";
   $("agent-toggle").classList.toggle("active", agentOpen);
+  $("agent-toggle").setAttribute("aria-expanded", String(agentOpen));
+  $("toggle-sidebar").setAttribute("aria-expanded", String(!$("app").classList.contains("sidebar-collapsed")));
   $("ownership").textContent =
     section === "browse"
       ? `Control: ${active()?.controller || "available"}${active()?.version ? " · v" + active().version : ""}`
@@ -578,6 +602,7 @@ function navigateSection(next) {
   renderShell();
   renderContent();
   $("content").scrollTop = 0;
+  $("content").focus({ preventScroll: true });
 }
 function openDialog(title, body, footer = "", wide = false) {
   const desk = $("command-desk");
@@ -585,10 +610,10 @@ function openDialog(title, body, footer = "", wide = false) {
     desk.hidden = true;
     document.body.append(desk);
   }
-  dialogRestore = document.activeElement;
+  if (!$("dialog").open) dialogRestore = rememberFocus();
   $("dialog").classList.toggle("dialog-wide", wide);
   $("dialog-content").innerHTML =
-    `<div class="dialog-header"><h2>${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div><div class="dialog-body">${body}<div class="form-error" id="form-error" role="alert"></div></div>${footer ? `<div class="dialog-footer">${footer}</div>` : ""}`;
+    `<div class="dialog-header"><h2 id="dialog-title">${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div><div class="dialog-body">${body}<div class="form-error" id="form-error" role="alert"></div></div>${footer ? `<div class="dialog-footer">${footer}</div>` : ""}`;
   if (!$("dialog").open) $("dialog").showModal();
   layout();
   setTimeout(
@@ -604,7 +629,7 @@ function closeDialog() {
   }
   $("dialog").close();
   layout();
-  dialogRestore?.focus();
+  dialogRestore?.();
 }
 function field(label, name, value = "", type = "text", required = false) {
   return `<label>${esc(label)}<input name="${name}" type="${type}" value="${esc(value)}" ${required ? "required" : ""}></label>`;
@@ -915,6 +940,7 @@ async function workspaceMenu() {
   );
 }
 async function capture(artifactId) {
+  await refresh(true);
   if (!active() || active().url === "about:blank")
     throw new Error("Open a web page before saving a capture.");
   formDialog(
@@ -989,6 +1015,39 @@ function downloadJson(name, value) {
     encodeURIComponent(JSON.stringify(value, null, 2));
   a.download = name;
   a.click();
+}
+function exportWorkspace() {
+  openDialog("Review workspace export",
+    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
+    action("close-dialog", "Cancel"));
+  $("export-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button");
+    button.disabled = true;
+    try {
+      const sensitiveTerms = new FormData(event.currentTarget).get("sensitiveTerms").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      const bundle = await execute("workspaces.export", { id: ws().id, ...(sensitiveTerms.length ? { sensitiveTerms } : {}) }, true);
+      const scan = bundle.residueScan;
+      $("export-review").innerHTML = `<div class="notice">${scan ? `Sensitive-term scan: <strong>${esc(scan.status)}</strong>. ${scan.found?.length || 0} term matches; ${scan.unverifiable?.length || 0} items could not be verified. ${esc(scan.scope || "")}` : "No sensitive-term scan requested."} Review this result before saving; a clean text scan does not establish that the export is free of private information.</div><button id="save-export" class="primary">Save reviewed export</button>`;
+      $("save-export").onclick = () => {
+        downloadJson(`${ws().name.replace(/[^a-z\d -]/gi, "") || "workspace"}.weft.json`, bundle);
+        closeDialog();
+        toast("Workspace export prepared.");
+      };
+    } catch (error) {
+      $("form-error").textContent = errorMessage(error);
+    } finally { button.disabled = false; }
+  };
+}
+function acknowledgeDisclosure(disclosure) {
+  return new Promise(resolve => {
+    let accepted = false;
+    openDialog("Review model destination",
+      `<p>Your request will be sent to <strong>${esc(disclosure.endpoint)}</strong> using ${esc(disclosure.model)} (${esc(disclosure.locality)}).</p><ul>${(disclosure.items || []).map(item => `<li>${esc(item.kind)}: ${esc(item.title || item.id || "Request data")} · ${Number(item.bytes) || 0} bytes${item.withheld ? " · withheld" : ""}</li>`).join("")}</ul><p>Total disclosed bytes: ${Number(disclosure.totalBytes) || 0}. Tools: ${esc((disclosure.tools || []).join(", ") || "None")}.</p>${disclosure.toolScope ? `<p>Tool scope: workspace ${esc(disclosure.toolScope.workspaceId)}${disclosure.toolScope.tabId ? `, tab ${esc(disclosure.toolScope.tabId)}` : ""}; at most ${Number(disclosure.toolScope.maxCalls)} calls.</p>` : ""}<p>This acknowledgement applies to this workspace and this model destination. Review your selections before each request.</p>`,
+      action("close-dialog", "Cancel") + '<button id="acknowledge-disclosure" class="primary">Acknowledge and send</button>');
+    $("dialog").addEventListener("close", () => resolve(accepted), { once: true });
+    $("acknowledge-disclosure").onclick = () => { accepted = true; closeDialog(); };
+  });
 }
 function importWorkspace() {
   formDialog(
@@ -1092,6 +1151,7 @@ function closeAgent() {
   );
   $("app").classList.remove("agent-open");
   $("agent-panel").hidden = true;
+  $("agent-toggle").focus();
   renderShell();
   layout();
 }
@@ -1101,7 +1161,7 @@ function renderAgent() {
   );
   if (!conversation) conversationId = null;
   $("agent-panel").innerHTML =
-    `<div class="agent-header"><span class="agent-symbol icon">${icon("spark")}</span><div><strong>${esc(conversation?.title || "A thinking partner")}</strong><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
+    `<div class="agent-header"><span class="agent-symbol icon">${icon("spark")}</span><div><strong>${esc(conversation?.title || "A thinking partner")}</strong><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="polite" aria-relevant="additions text"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
   updateDestination();
   renderMessages();
   $("chat-model").onchange = () => {
@@ -1158,29 +1218,29 @@ async function sendChat(e) {
       ? records("context")
           .slice(0, 12)
           .map((r) => ({
+            id: r.id,
+            recordType: "context",
+            localOnly: !!r.localOnly,
             title: `${r.category}: ${r.title}`,
             content: r.content.slice(0, 100000),
           }))
       : [];
+    const request = {
+      conversationId, modelId, text, context,
+      allowReadTools: $("allow-read-tools").checked,
+      ...($("allow-read-tools").checked && active() && active().url !== "about:blank" ? { tabId: active().id } : {}),
+    };
+    if (catalog["chat.preview"]) {
+      const preview = await execute("chat.preview", request, true);
+      if (preview.disclosure.requiresAcknowledgement) {
+        if (!await acknowledgeDisclosure(preview.disclosure)) return;
+        request.disclosureAck = true;
+      }
+    }
     input.value = "";
     $("chat-messages").innerHTML +=
       `<div class="chat-message user"><div class="message-author">YOU</div><div class="message-body">${esc(text)}</div></div><p class="muted" id="chat-waiting">Waiting for your model… ${action("cancel-chat", "Cancel", "", "", "text-button")}</p>`;
-    await execute(
-      "chat.send",
-      {
-        conversationId,
-        modelId,
-        text,
-        context,
-        allowReadTools: $("allow-read-tools").checked,
-        ...($("allow-read-tools").checked &&
-        active() &&
-        active().url !== "about:blank"
-          ? { tabId: active().id }
-          : {}),
-      },
-      true,
-    );
+    await execute("chat.send", request, true);
     await refresh(true);
   } catch (error) {
     toast(errorMessage(error));
@@ -1342,11 +1402,7 @@ async function act(button) {
       await workspaceMenu();
       break;
     case "export-workspace":
-      downloadJson(
-        `${ws().name.replace(/[^a-z\d -]/gi, "") || "workspace"}.weft.json`,
-        await execute("workspaces.export", { id: ws().id }),
-      );
-      toast("Workspace export prepared.");
+      exportWorkspace();
       break;
     case "import-workspace":
       importWorkspace();
@@ -1512,6 +1568,10 @@ async function act(button) {
       });
       toast("Bookmark saved.");
       break;
+    case "resume-automation":
+      await execute("browser.resumeAutomation", {});
+      toast("Automation resumed. Tab control remains with you until released.");
+      break;
     case "emergency-stop":
       await execute("browser.emergencyStop", {});
       toast(
@@ -1650,6 +1710,7 @@ $("theme-toggle").onclick = () =>
   }).catch(() => {});
 $("toggle-sidebar").onclick = () => {
   $("app").classList.toggle("sidebar-collapsed");
+  $("toggle-sidebar").setAttribute("aria-expanded", String(!$("app").classList.contains("sidebar-collapsed")));
   void execute(
     "settings.update",
     { sidebarCollapsed: $("app").classList.contains("sidebar-collapsed") },
@@ -1683,6 +1744,7 @@ $("run").onclick = async () => {
   }
 };
 document.addEventListener("keydown", (e) => {
+  if ($("dialog").open) return;
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     const key = e.key.toLowerCase();
     if (["k", "l", "t", "w", "f", "j"].includes(key)) e.preventDefault();
@@ -1714,6 +1776,7 @@ try {
     "sidebar-collapsed",
     !!state.settings.sidebarCollapsed,
   );
+  $("toggle-sidebar").setAttribute("aria-expanded", String(!state.settings.sidebarCollapsed));
   if (state.settings.agentPanelOpen) openAgent();
   setInterval(() => void refresh().catch(() => {}), 1500);
   $("status").textContent = "Ready";

@@ -13,6 +13,7 @@
     <script type="module" src="./gui.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#content">Skip to workspace content</a>
     <div class="app" id="app">
       <nav class="workspace-rail" aria-label="Workspaces">
         <button class="brand-mark" id="home" title="Workspace overview">
@@ -85,6 +86,8 @@
           <button
             class="icon-button"
             id="toggle-sidebar"
+            aria-controls="sidebar"
+            aria-expanded="true"
             aria-label="Toggle sidebar"
           ></button>
           <div class="breadcrumb">
@@ -99,7 +102,7 @@
               aria-label="Command desk"
               title="Command desk"
             ></button
-            ><button class="agent-toggle" id="agent-toggle"></button>
+            ><button class="agent-toggle" id="agent-toggle" aria-controls="agent-panel" aria-expanded="false"></button>
           </div>
         </header>
         <form id="navigation" class="navigation">
@@ -162,6 +165,7 @@
             aria-label="Page tools"
           ></button>
         </form>
+        <div id="safety-notices" aria-label="Workspace safety notices" hidden></div>
         <div class="work-area">
           <main id="content" tabindex="-1"></main>
           <aside
@@ -180,13 +184,13 @@
         </footer>
       </div>
     </div>
-    <dialog id="dialog"><div id="dialog-content"></div></dialog>
+    <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
     <div id="toast" role="status" hidden></div>
     <section id="command-desk" hidden>
-      <select id="command"></select>
+      <select id="command" aria-label="Command"></select>
       <p id="description"></p>
       <pre id="schema"></pre>
-      <textarea id="arguments">{}</textarea
+      <textarea id="arguments" aria-label="Command arguments (JSON)">{}</textarea
       ><button id="run">Run command</button>
       <div id="artifact"></div>
       <pre id="result"></pre>

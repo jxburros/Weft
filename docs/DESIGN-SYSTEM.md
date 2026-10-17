@@ -1,0 +1,54 @@
+# Production design system and validation
+
+Last verified against code: 2026-10-17.
+
+`assets/tokens.json` is the canonical source for light/dark colors, type, spacing,
+radius, elevation, and motion. `node scripts/generate-tokens.js` writes
+`assets/tokens.css`, imported by `src/gui.css`. Commit both files. The token test
+rejects stale generated output, undefined token references, theme key mismatches,
+and raw color literals in component CSS.
+
+The guide's ivory canvas, soft surface, charcoal ink, and plum brand remain the
+production palette. Sage and clay text use darker light-theme variants than the
+decorative guide swatches so status labels remain readable. Dark mode uses
+separately chosen foreground/background pairs. Destructive text, control borders,
+avatar colors, backdrop, and shadows are theme tokens too. The regression check
+covers actual text/status pairs at 4.5:1; this is not an accessibility certification.
+
+Source Sans 3 remains bundled locally. Font sizes use rem tokens, allowing base
+text scaling. Spacing and radius tokens preserve the existing compact browser
+layout. Standard transitions use 150 ms ease-out; the loading indicator uses a
+1 s cycle. Reduced-motion sets both durations to zero and disables animations and
+transitions. State remains visible in text. Existing supplied logo variants are
+retained; no replacement brand or textile terminology has been introduced.
+
+## Automated evidence
+
+- `node --test test/design-tokens.test.js`: canonical/generated consistency,
+  component token usage, light/dark text contrast.
+- `xvfb-run -a node --test test/gui.test.js`: real browser, model fixture, records,
+  captures, workspace switching, palette search, and minimum-window workflow.
+  Capture now refreshes tab state before opening its dialog, preventing the
+  recently navigated tab from being mistaken for an empty tab.
+- `WEFT_VISUAL=1 xvfb-run -a node --test test/visual.test.js`: ten Linux Electron
+  goldens, native dialog Escape/focus restoration and naming, 200% text scale
+  application bounds, reduced-motion emulation, cloud acknowledgement/cancel,
+  storage-conflict notice, automation resume, and export residue review.
+
+Accessibility fixes include a skip link, named dialogs and command inputs,
+expanded state on panel controls, a conversation log, focus restoration when
+polling replaces controls, focus return when closing Ask Weft, and suppressing
+application shortcuts inside modal dialogs. Controls have a 24 px minimum target.
+The narrow layout stacks workspace cards and wraps settings rows. Safety notices
+persist independently of the transient status bar and include text labels.
+
+## Remaining review (#31 and #36)
+
+Both broad audit issues remain open. Automated Linux checks do not establish
+screen-reader behavior on Windows, macOS, or Linux assistive technology; they do
+not cover all native-page focus boundaries, split views, permission/credential
+surfaces, or every state at magnification. The supplied favicon and application
+icons still need optical review at platform sizes. Final brand approval and
+interaction validation for future credential/approval and structured handoff
+features remain human/product review tasks. Do not describe the screenshots or
+contrast tests as completing those audits.
