@@ -1,0 +1,54 @@
+name: Weft checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  unit:
+    name: Node ${{ matrix.node }} / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:unit
+  chromium:
+    name: Real Chromium and GUI (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install display and browser libraries
+        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64
+      - run: npm ci
+      - name: Run real browser tests with a display
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          xvfb-run -a npm test 2>&1 | tee artifacts/chromium-tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chromium-results-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7

@@ -11,7 +11,12 @@
     "start": "electron .",
     "cli": "node bin/weft.js",
     "mcp": "node bin/weft.js mcp",
-    "test": "node --test"
+    "test": "node --test",
+    "check": "node scripts/check.mjs",
+    "test:unit": "node scripts/test-unit.mjs",
+    "test:docs": "node --test test/docs.test.js",
+    "test:perf": "node --test perf/budgets.js",
+    "evals": "node evals/run.js"
   },
   "repository": {
     "type": "git",
