@@ -24,6 +24,17 @@ into tool descriptions.
 weft guide.get '{"topic":"tab-control"}'
 ```
 
+Prefer semantic snapshots over CSS selectors when acting on a page. A snapshot
+returns frame-scoped element refs that are valid only in your latest snapshot at
+the returned `navigationVersion`, plus a coverage report of what it could not
+read. Inspect again after any stale-state failure, takeover or accepted handoff.
+
+```sh
+weft page.snapshot '{"tabId":1,"maxNodes":200}'
+weft page.click '{"tabId":1,"expectedVersion":4,"ref":"f0e12","snapshotId":"snap_0123456789ab"}'
+weft handoffs.create '{"to":"human","objective":"Compare plans","nextStep":"Approve the selected plan","tabIds":[1]}'
+```
+
 Documentation examples are schema-validated offline, not executed against your
 browser. Their placeholder IDs require discovery in a running session. Eval
 reference tasks exercise the MCP bridge and real workspace service with a

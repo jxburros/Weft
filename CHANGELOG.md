@@ -24,6 +24,22 @@ alone is not a shipped capability.
 - Added canonical contributor instructions, a thin Claude overlay, product
   identity and architecture decisions for encryption, extensions/plugins and
   current local-only collaboration/deployment scope.
+- Added `page.snapshot` semantic snapshots with frame-scoped stable element
+  refs, coverage reporting (cross-origin frames, redacted fields, lazy, busy,
+  virtualized, opaque and truncated content) and an isolated-world observer;
+  `page.click`/`page.fill` accept refs bound to the actor's latest snapshot and
+  an element fingerprint (#15, #41).
+- `page.screenshot` adds element/region capture, crop and resolution limits,
+  capture geometry metadata and sensitive-field masking; added permission-gated
+  `page.clickAt`/`page.press` with viewport geometry validation (#15, #41).
+- Automation input now requires a current-state inspection by the same actor;
+  per-tab input is serialized with a configurable queue and optional exclusive
+  mode; newly blocked navigations fail as `site_blocked` (#9, #41).
+- Added explicit tab control modes (`tabs.setControlMode`: you drive, assist,
+  agent drives), takeover boundaries that report uncancellable in-flight
+  actions, and persisted structured handoffs (`handoffs.*`) shown in the GUI (#9).
+- Readable/HTML extraction runs in an isolated world and strips `srcdoc`;
+  page-sourced titles drop control and bidi-override characters (#41).
 
 ### Not completed
 
