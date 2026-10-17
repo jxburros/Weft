@@ -34,13 +34,14 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       if (command.startsWith('lists.')) return lists.execute(command, args, context);
       if (command.startsWith('clients.')) return clients.execute(command, args, context);
       if (command.startsWith('models.') || command.startsWith('chat.')) {
-        if (['models.save', 'models.delete'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });
+        if (['models.save', 'models.delete', 'models.probe'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });
         return providers.execute(command, args, context);
       }
       if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
       if (command === 'browser.emergencyStop' && context.actor === 'human') {
         admission.stop();
-        providers.close();
+        // Running model turns stop now and keep their partial replies, marked as stopped.
+        if (providers.stopAll) providers.stopAll('emergency_stop'); else providers.close();
       }
       const result = await browser.execute(command, args, context);
       return result;

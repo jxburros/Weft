@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, existsSync, statSync, openSync, closeSync,
 import { join } from 'node:path';
 import { domainToASCII } from 'node:url';
 import { z } from 'zod';
-import { workspaceSchemas, recordShapes } from './workspace-commands.js';
+import { workspaceSchemas, recordShapes, finishReason } from './workspace-commands.js';
 import { acquireProfileLock, assertUnchanged, fileStamp, writeVerifiedJson, storageWarnings, syncDirectory } from './storage-safety.js';
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
@@ -453,7 +453,7 @@ export class WorkspaceService {
           if (collection === 'siteRules') { fields.scope = 'workspace'; fields.enabled = false; this.validateRule(fields); }
           if (collection === 'workflows') fields.enabled = false;
           if (collection === 'materials') this.validateMaterial(fields);
-          if (collection === 'conversations') fields.messages = z.array(z.object({ id: z.string().max(128), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: z.string().max(100), model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional() })).max(10000).parse(item.messages || []);
+          if (collection === 'conversations') fields.messages = z.array(z.object({ id: z.string().max(128), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: z.string().max(100), model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional(), turnId: z.string().max(128).optional(), finishReason: finishReason.optional(), continuable: z.boolean().optional() })).max(10000).parse(item.messages || []);
         }
         const record = createRecord(fields, workspace.id, collection.slice(0, 4));
         mapping.set(item.id, record.id);

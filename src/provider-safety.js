@@ -24,7 +24,7 @@ export function redactProviderSecrets(value) {
   return result;
 }
 
-export function formatProviderError(value, status) {
+function providerErrorDetail(value) {
   let parsed = value;
   if (typeof parsed === 'string') {
     try { parsed = JSON.parse(parsed); } catch { /* Treat malformed payload as inert text. */ }
@@ -33,6 +33,16 @@ export function formatProviderError(value, status) {
     parsed = parsed.error ?? parsed.message ?? parsed.detail ?? '';
   }
   const detail = typeof parsed === 'string' ? parsed : '';
-  const clean = redactProviderSecrets(detail).replace(/[\r\n\t\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 500);
+  return redactProviderSecrets(detail).replace(/[\r\n\t\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 500);
+}
+
+export function formatProviderError(value, status) {
+  const clean = providerErrorDetail(value);
   return `Model endpoint returned HTTP ${status}.${clean ? ` ${clean}` : ' Check the connection, model and key.'}`;
+}
+
+/** In-band error frames arrive after HTTP 200; they are failures, never reply text. */
+export function formatProviderStreamError(value) {
+  const clean = providerErrorDetail(value);
+  return `Model endpoint reported an error during the reply.${clean ? ` ${clean}` : ''} No fallback was used.`;
 }

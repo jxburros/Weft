@@ -78,7 +78,7 @@ for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith
 
 const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'page.allowOnce',
   'cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear', 'history.clear', 'settings.update',
-  'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete',
+  'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete', 'models.probe',
   'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export']);
@@ -154,7 +154,7 @@ export function toCommandError(error, commandName, input) {
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
     unknown_command: 400, tab_busy: 409, action_interrupted: 409, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
-    command_failed: 422, transport_error: 503 };
+    command_failed: 422, transport_error: 503, unsupported_capability: 422 };
   let code = Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
     if (/stale|STALE_STATE/i.test(message)) code = 'stale_state';
@@ -174,6 +174,16 @@ export function toCommandError(error, commandName, input) {
       .map(({ tabId, workspaceId }) => ({ tabId, workspaceId }));
   }
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
+  if (code === 'unsupported_capability') {
+    if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback'].includes(error.details?.capability)) details.capability = error.details.capability;
+    if (typeof error.details?.modelId === 'string' && /^[\w.-]{1,128}$/.test(error.details.modelId)) details.modelId = error.details.modelId;
+  }
+  // Model turn stops report whether the partial reply was kept, never its text.
+  if (['cancelled', 'timeout', 'emergency_stop'].includes(code) && typeof error.details?.turnId === 'string' && /^turn_[0-9a-f-]{36}$/.test(error.details.turnId)) {
+    details.turnId = error.details.turnId;
+    for (const key of ['partialSaved', 'continuable']) if (typeof error.details[key] === 'boolean') details[key] = error.details[key];
+    if (['first_token', 'idle', 'total'].includes(error.details.deadline)) details.deadline = error.details.deadline;
+  }
   return { code, message, field: null, schema: schemaHint(commandName), httpStatus: known[code], ...(Object.keys(details).length && { details }) };
 }
 export function validateCommand(name, args = {}) {
@@ -203,7 +213,7 @@ export function normalizeCommand(name, args = {}) {
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
   stale_state: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, permission_required: 4, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
-  emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7 });
+  emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 5 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;
 export function errorOutcome(error, command = null, args = {}, normalized = [], validation = 'passed') {

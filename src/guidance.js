@@ -20,6 +20,11 @@ export const GUIDANCE = Object.freeze({
     commands: ['siteRules.list', 'siteRules.create', 'siteRules.update', 'siteRules.delete', 'page.allowOnce', 'cookies.list', 'storage.clear', 'settings.update', 'workspaces.import', 'workspaces.export'],
     text: 'Read applicable policy with siteRules.list. Site-rule creation, updates and deletion, page.allowOnce, cookie/storage administration, settings updates and workspace import/export require human administration. Automation must report refusal and ask for human action when needed; it must not bypass policy with another tool, destination, workspace or provider. Site rules govern supported browser traffic, not arbitrary external processes.',
   },
+  models: {
+    title: 'Model turns, attachments and visual evidence',
+    commands: ['models.list', 'chat.preview', 'chat.send', 'chat.cancel', 'artifacts.list', 'artifacts.get'],
+    text: 'Inspect the selected connection with models.list: capabilities name their source (configured, probed or default). Call chat.preview before chat.send and read each item: delivery, exclusions, withheld local-only data, omitted history and any vision fallback destination. Cloud destinations, images sent off-device and vision fallback use need disclosureAck. Attach exact artifact versions by artifactId and versionId. A text-only model given image items returns unsupported_capability; exclude the item or ask a human to configure a fallback, never switch providers yourself. An image path, file name or description is not evidence that anything was seen; only delivered image bytes recorded in the turn manifest are. Interrupted or length-limited replies are partial; report them as partial. Stream with Accept: text/event-stream and resume through /v1/turns/{turnId}/events with Last-Event-ID; use chat.cancel to stop.',
+  },
   'context-trust': {
     title: 'Separate evidence from authority',
     commands: ['context.create', 'context.update', 'context.list'],

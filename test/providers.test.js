@@ -144,7 +144,9 @@ test('cancellation, concurrent-send exclusion, and bounded timeout terminate act
   const rejection = assert.rejects(pending, /cancelled/);
   await arrived;
   await assert.rejects(send(), /already has a running/);
-  assert.deepEqual(await providers.execute('chat.cancel', { conversationId: 'conversation-1' }), { cancelled: true });
+  const cancelled = await providers.execute('chat.cancel', { conversationId: 'conversation-1' });
+  assert.equal(cancelled.cancelled, true);
+  assert.match(cancelled.turnId, /^turn_/);
   await rejection;
   assert.equal(conversations.get('conversation-1').messages.length, 1);
   providers.timeoutMs = 20;
