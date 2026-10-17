@@ -75,6 +75,7 @@ export function scriptedCheckout(f, directory, overrides = {}) {
   f.browser.paymentSubmit = async (_args, _context, { frameOrigin, selectors, verify, onAttempt }) => {
     page.events.push('read');
     verify(observe(selectors, frameOrigin));
+    await page.beforeAttempt?.();
     await onAttempt();
     // The attempt must be on disk before the click.
     const stored = JSON.parse(readFileSync(join(directory, 'payments', 'payments.json'), 'utf8')).records.map(record => record.status);

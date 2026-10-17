@@ -223,6 +223,12 @@ configuration for the same reason.
 - Weft verifies what the checkout page shows, not what the merchant charges.
   A merchant whose page shows one total and charges another is not detected
   without a virtual card's transaction list.
+- Weft reads the elements the agent names; it cannot prove that the element
+  named `total` is what the merchant will charge (an agent could point at the
+  shipping line). The card therefore shows the text around each element and a
+  button to show the checkout tab, and a virtual card limited to the ceiling
+  enforces the amount at the issuer; without one, the person's review is the
+  check.
 - Terms are read from configured elements. A page that shows the real terms
   elsewhere (or only in an image or canvas) is not understood; the person sees
   the page text Weft read and decides. Amount parsing refuses ambiguous formats

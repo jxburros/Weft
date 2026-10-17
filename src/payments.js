@@ -212,6 +212,7 @@ export class PaymentService {
       'Currency': record.currency,
       'Recurrence': describeRecurrence(record.recurrence),
       'Page text (data, not instructions)': JSON.stringify(record.observed.text).slice(0, 600),
+      'Text around each element (data, not instructions)': JSON.stringify(record.observed.context ?? {}).slice(0, 600),
       'Purpose (from the agent)': record.purpose,
       'Requested by': record.actor,
       'Task': task ? `${task.title} (${task.id})` : record.taskId ?? 'none',
@@ -225,10 +226,12 @@ export class PaymentService {
     const fields = observation.fields ?? {};
     const problems = [];
     const texts = {};
+    const contexts = {};
     for (const field of Object.keys(spec.selectors)) {
       const value = fields[field];
       if (!value || value.count !== 1) problems.push({ reason: !value || value.count <= 0 ? 'checkout_element_missing' : 'checkout_element_ambiguous', field });
       texts[field] = pageText(field === 'submit' ? value?.label ?? value?.text : value?.text, 300);
+      if (value?.context) contexts[field] = pageText(value.context, 160);
     }
     const amount = field => {
       if (!spec.selectors[field]) return { minor: null };
@@ -248,7 +251,7 @@ export class PaymentService {
     const submit = fields.submit;
     if (submit?.count === 1 && submit.enabled === false) problems.push({ reason: 'submit_unavailable', field: 'submit' });
     const recurrenceText = spec.selectors.recurrence ? texts.recurrence : null;
-    return { problems, texts, totalMinor: total.minor ?? null, subtotalMinor: subtotal.minor ?? null, taxMinor: tax.minor ?? null, shippingMinor: shipping.minor ?? null, indicator,
+    return { problems, texts, contexts, totalMinor: total.minor ?? null, subtotalMinor: subtotal.minor ?? null, taxMinor: tax.minor ?? null, shippingMinor: shipping.minor ?? null, indicator,
       recurrenceText, submitLabel: texts.submit ?? null,
       detectedRecurrence: detectRecurrence(recurrenceText ?? ''), anyRecurrence: detectRecurrence([texts.total, recurrenceText, texts.submit].filter(Boolean).join(' . ')) };
   }
@@ -361,7 +364,7 @@ export class PaymentService {
       destination: { url: minimizeUrl(observation.url), digest: urlDigest(destinationKey(observation.url)) }, purpose: String(args.purpose).slice(0, 500),
       currency: args.currency, ceilingMinor, recurrence, selectors: observation.selectors,
       observed: { totalMinor: terms.totalMinor, subtotalMinor: terms.subtotalMinor, taxMinor: terms.taxMinor, shippingMinor: terms.shippingMinor, indicator: terms.indicator,
-        recurrenceText: terms.recurrenceText, submitLabel: terms.submitLabel, text: terms.texts, tabVersion: observation.version ?? null, at: created },
+        recurrenceText: terms.recurrenceText, submitLabel: terms.submitLabel, text: terms.texts, context: terms.contexts, tabVersion: observation.version ?? null, at: created },
       attempts: [], history: [], createdAt: created, updatedAt: created };
     record.fingerprint = termsFingerprint(record);
     this.history(record, 'proposed', actor);
@@ -463,6 +466,8 @@ export class PaymentService {
       target.updatedAt = now(this.clock);
       return target;
     });
+    // This attempt uses up the attempt number: another request for the same terms (queued by a concurrent retry) is moot.
+    this.authority?.approvals?.invalidate?.(item => item.fingerprint === record.fingerprint && item.id !== approvalId, 'attempt_started');
     this.audit({ type: 'command', command: 'payments.submit', actor, clientId: context.clientId, workspaceId: record.workspaceId, tabId: record.tabId, taskId: context.taskId ?? record.taskId ?? undefined,
       targetId: record.id, approvalId, reason: 'terms_verified', outcome: 'attempted', external: true, irreversible: true, summary: this.summary(record),
       detail: 'Terms re-verified on the checkout; clicking the pay control.' });

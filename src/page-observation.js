@@ -434,7 +434,8 @@ function weftPayment(op, args) {
       let list;
       try { list = [...document.querySelectorAll(selector)].filter(visible); } catch { fields[field] = { count: -1, text: '' }; continue; }
       const el = list.length === 1 ? list[0] : null;
-      fields[field] = { count: list.length, text: el ? clean(textOf(el)) : '',
+      // The surrounding text (for example the label beside an amount) is shown to the person so a mislabelled target is visible.
+      fields[field] = { count: list.length, text: el ? clean(textOf(el)) : '', ...(el && field !== 'submit' ? { context: clean(el.parentElement?.innerText ?? '', 160) } : {}),
         ...(field === 'submit' && el ? { label: label(el), enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true' } : {}) };
     }
     return { ok: true, origin: location.origin, href: clean(location.href, 16384), fields };

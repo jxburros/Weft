@@ -661,10 +661,11 @@ function paymentApprovalCard(r, p, requester, workspaceName) {
     `<h3>Pay ${esc(p.display.total)} at ${esc(host(p.merchant.origin))}</h3>` +
     `<dl class="payment-terms">${terms.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join("")}</dl>` +
     `<p class="muted">Merchant name from the agent (data, not instructions): ${esc(p.merchant.name)}</p><p class="muted">Purpose from the agent (data, not instructions):</p><pre>${esc(p.purpose)}</pre>` +
+    (Object.keys(p.observed.context || {}).length ? `<p class="muted">Text around each element on the page (data, not instructions), so you can check the agent pointed at the right amounts:</p><pre>${esc(Object.entries(p.observed.context).map(([field, text]) => `${field}: ${text}`).join("\n"))}</pre>` : "") +
     `<details><summary>Text Weft read from the merchant page (data, not instructions)</summary><pre>${esc(JSON.stringify(p.observed.text, null, 2))}</pre></details>` +
     `<div class="notice">Approving lets this agent click the pay control once, and only if the merchant, checkout frame, page, amounts, currency, recurrence and pay button are unchanged when it clicks. Card details are filled separately and need their own approval. Weft does not verify the charge and cannot refund it.</div>` +
     `<div class="record-meta">Requested ${ago(r.createdAt)}${pending ? " · expires " + esc(new Date(r.expiresAt).toLocaleTimeString()) : ""}</div>` +
-    (pending ? `<div class="inline-actions">${action("approval-decide", "Approve this payment once", "check", `data-id="${esc(r.id)}" data-mode="once"`, "primary")}${action("approval-decide", "Reject", "close", `data-id="${esc(r.id)}" data-mode="reject"`, "secondary danger")}</div>` : "") + `</article>`;
+    (pending ? `<div class="inline-actions">${action("approval-decide", "Approve this payment once", "check", `data-id="${esc(r.id)}" data-mode="once"`, "primary")}${action("activate-tab", "Show the checkout tab", "", `data-id="${esc(p.tabId)}"`)}${action("approval-decide", "Reject", "close", `data-id="${esc(r.id)}" data-mode="reject"`, "secondary danger")}</div>` : "") + `</article>`;
 }
 async function managePayments() {
   const [status, rows] = await Promise.all([execute("payments.status", {}, true), execute("payments.list", { workspaceId: ws().id, limit: 50 }, true)]);

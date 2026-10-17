@@ -122,6 +122,7 @@ if (process.argv.includes('--payments-smoke')) {
       assert.equal(proposed.merchant.origin, merchantOrigin);
       assert.equal(proposed.observed.totalMinor, 4999);
       assert.equal(proposed.observed.subtotalMinor, 4099);
+      assert.equal(proposed.observed.context.total, 'Total $49.99', 'the person sees the label beside each amount');
       assert.equal(proposed.observed.submitLabel, 'Pay $49.99');
       assert.equal(proposed.selectors.submit, '#pay', 'the snapshot ref became a stable selector for the re-read');
       await approve(proposed.approval.id);

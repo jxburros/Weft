@@ -404,6 +404,8 @@ if (process.argv.includes("--gui-workflows")) {
     assert.match(paymentCard, /Merchant site \(verified by Weft\)/);
     assert.match(paymentCard, /Tax4\.00 USD/);
     assert.match(paymentCard, /Purpose from the agent \(data, not instructions\)/);
+    assert.match(paymentCard, /total: Total \$49\.99/, "the label beside each amount is shown");
+    assert.notEqual(await run('document.querySelector(\'.payment-card [data-action="activate-tab"]\')'), null);
     assert.equal(await run('document.querySelector(".payment-card").textContent.includes("Approve for 1 hour")'), false, "payments are approved once, never for a period");
     await click('.payment-card [data-action="approval-decide"][data-mode="reject"]');
     await until(`(async()=> (await window.weft.execute("payments.get", {id: ${JSON.stringify(proposedPayment.result.id)}})).state === "rejected")()`);

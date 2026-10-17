@@ -323,6 +323,19 @@ test('duplicate submission: concurrent submits click once; an uncertain attempt 
   assert.ok(activityText(f).includes('duplicate_risk_accepted'));
 });
 
+test('a retry racing an attempt queues no approval that could outlive it', async t => {
+  const f = setup(t);
+  const proposed = await proposeApproved(f);
+  let raced;
+  f.page.beforeAttempt = async () => { f.page.beforeAttempt = null; raced = await submit(f, proposed.id); };
+  const done = await submit(f, proposed.id);
+  assert.equal(done.error, null, JSON.stringify(done.error));
+  // The racing call found the approval already consumed and asked for another one for the same terms.
+  assert.equal(raced.error.code, 'approval_required');
+  assert.equal(approval(f, raced.error.details.authority.approvalId).status, 'invalidated', 'the extra request is void once the attempt starts');
+  assert.equal(f.page.clicks, 1);
+});
+
 test('a pay control that vanishes after the attempt is recorded is not a submission and spends the approval', async t => {
   const f = setup(t, { checkout: { click: 'missing' } });
   const proposed = await proposeApproved(f);
