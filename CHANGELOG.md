@@ -24,6 +24,23 @@ alone is not a shipped capability.
 - Added canonical contributor instructions, a thin Claude overlay, product
   identity and architecture decisions for encryption, extensions/plugins and
   current local-only collaboration/deployment scope.
+- Enforced one authority gate in the shared dispatcher for every non-human
+  caller, including internal model read tools: human-only floors, autonomy
+  levels with workspace ceilings, and purpose-bound client grants with
+  cross-workspace, data-class, destination, usage-limit and task-binding scopes
+  that a human can edit or revoke live (#5, #43; ADR-004).
+- Added one durable approval queue bound to exact command/argument/actor/target
+  fingerprints with approve-once, standing and reject decisions in the GUI.
+  Denials are typed (`error.details.authority`); approval requests return
+  `approval_required` (HTTP 403, CLI exit 5). Unclassified commands need an
+  exact approval for every use.
+- Added a hash-chained, append-only activity log with attempted/completed/
+  partial/externally-uncertain outcome labels, model destination decisions,
+  blocks and overrides, secret exclusion and URL minimization, configurable
+  age/count retention independent of artifacts, `activity.list` cursor
+  pagination, `activity.verify` and GUI filters (#29). Bootstrap token defaults
+  to standing autonomy for compatibility; `activity.list` now returns
+  `{items, nextCursor}` instead of an array.
 
 ### Not completed
 
@@ -33,6 +50,9 @@ alone is not a shipped capability.
 - Workspace encryption, key lifecycle/recovery, extension compatibility testing,
   native plugin isolation/permissions and plugin loading remain unimplemented.
 - Hosted sync, concurrent collaboration and remote deployment are deferred.
+- Activity integrity is tamper evidence only; a process that can rewrite the
+  profile can rewrite the log. The changed agent-connections dialog needs a
+  reviewed golden update in the Linux visual CI job (local fonts differ).
 - Live-model evals, actual plugin installation in a Claude client and GUI
   first-render performance measurements have not been verified.
 
