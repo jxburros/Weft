@@ -44,7 +44,7 @@ const HUMAN_GESTURE_MS = 2000;
 const TERMINAL_TASK = new Set(['completed', 'failed', 'cancelled']);
 // Commands that work on the stored tab record; every other page/tab command restores a suspended tab first.
 const SUSPENDED_OK = new Set(['tabs.list', 'tabs.close', 'tabs.pin', 'tabs.claim', 'tabs.release', 'tabs.takeover', 'tabs.setControlMode', 'tabs.group', 'tabs.search', 'tabs.suspend', 'tabs.activate', 'tabs.duplicate', 'tabs.move', 'page.inspect']);
-/** Page-side check (isolated world) for state a reload would destroy. Cross-origin frames are not inspected. */
+/** Frame-side check for state a reload would destroy: run in the top frame's isolated world and in each subframe (see pageStateBlockers). */
 const SUSPENSION_CHECK = `(() => {
   const media = [...document.querySelectorAll('video, audio')].some(element => !element.paused && !element.ended);
   const changed = [...document.querySelectorAll('input, textarea, select')].some(element => {
@@ -58,6 +58,8 @@ const SUSPENSION_CHECK = `(() => {
   const editing = [...document.querySelectorAll('[contenteditable]')].some(element => element.isContentEditable && element.contains(document.activeElement));
   return { media, unsavedInput: changed || editing, fullscreen: Boolean(document.fullscreenElement) };
 })()`;
+// Subframes checked before suspending a tab; a page with more is not suspended (frame_not_inspected).
+const MAX_CHECKED_FRAMES = 50;
 // Schemes that are navigation denials rather than external-application launches.
 const NOT_LAUNCHES = new Set(['http', 'https', 'about', 'data', 'javascript', 'blob', 'file', 'filesystem', 'chrome', 'devtools', 'view-source']);
 
@@ -141,6 +143,8 @@ export class Browser {
     this.renderingFor = new Set();
     // Optional: total page-renderer memory in MiB, used for memory-pressure suspension (#30).
     this.rendererMemoryMb = null;
+    // System memory-pressure sampler (src/memory-pressure.js), set by the app; null disables the OS signal.
+    this.systemMemory = null;
     // Set by WorkspaceExtensions; without it, extension-originated requests are cancelled.
     this.extensionRequestAllowed = null;
     // A locked encrypted profile has no active workspace yet: sessions are created after unlock.
@@ -665,13 +669,35 @@ export class Browser {
     if (reasons.length) return reasons;
     const url = tab.view.webContents.getURL?.() || tab.url;
     if (tab.blocked || !url || url === 'about:blank') return [];
-    try {
-      const page = await bounded(this.observe(tab.view.webContents, null, {}, SUSPENSION_CHECK), 2000);
-      if (page?.media) reasons.push('media');
-      if (page?.unsavedInput) reasons.push('unsaved_input');
-      if (page?.fullscreen) reasons.push('fullscreen');
-    } catch { reasons.push('page_check_failed'); }
-    return reasons;
+    return this.pageStateBlockers(tab.view.webContents);
+  }
+
+  /**
+   * Media, edited form fields, focused editable text and fullscreen in every frame of a page. The top frame runs the
+   * check in Weft's isolated world; subframes, including cross-origin ones, run it through their own webFrameMain
+   * (Electron offers no isolated world there, so a hostile frame can only make its own tab look busier). A frame
+   * that cannot be inspected (timeout, crashed, refused) counts as possibly holding unsaved input.
+   */
+  async pageStateBlockers(contents, timeoutMs = 2000) {
+    const reasons = new Set();
+    const add = state => {
+      if (!state || typeof state !== 'object') throw new Error('No frame state');
+      if (state.media) reasons.add('media');
+      if (state.unsavedInput) reasons.add('unsaved_input');
+      if (state.fullscreen) reasons.add('fullscreen');
+    };
+    try { add(await bounded(this.observe(contents, null, {}, SUSPENSION_CHECK), timeoutMs)); } catch { reasons.add('page_check_failed'); }
+    let main = null;
+    try { main = contents.mainFrame ?? null; } catch { main = null; }
+    let subframes = [];
+    try { subframes = (main?.framesInSubtree ?? []).filter(frame => frame && frame !== main); } catch { reasons.add('frame_not_inspected'); }
+    if (subframes.length > MAX_CHECKED_FRAMES) reasons.add('frame_not_inspected');
+    await Promise.all(subframes.slice(0, MAX_CHECKED_FRAMES).map(async frame => {
+      try { if (frame.isDestroyed?.()) return; } catch { return; }
+      try { add(await bounded(frame.executeJavaScript(SUSPENSION_CHECK), timeoutMs)); }
+      catch { let gone = false; try { gone = Boolean(frame.isDestroyed?.()); } catch { gone = true; } if (!gone) reasons.add('frame_not_inspected'); }
+    }));
+    return [...reasons];
   }
 
   quickBlockers(tab) {
@@ -768,8 +794,12 @@ export class Browser {
       // Let an in-flight agent action finish before its renderer is replaced.
       for (let i = 0; i < 300 && tab.inFlight; i++) await delay(100);
       if (!this.tabs.has(tab.id) || tab.suspended) return null;
+      // true: some frame held edited input; null: a frame could not be inspected, so it is unknown.
       let unsavedInput = null;
-      try { unsavedInput = (await bounded(this.observe(tab.view.webContents, null, {}, SUSPENSION_CHECK), 1500))?.unsavedInput === true; } catch { /* unknown */ }
+      try {
+        const blockers = await this.pageStateBlockers(tab.view.webContents, 1500);
+        unsavedInput = blockers.includes('unsaved_input') ? true : blockers.some(reason => ['page_check_failed', 'frame_not_inspected'].includes(reason)) ? null : false;
+      } catch { /* unknown */ }
       await this.freeze(tab, reason);
       await this.resumeTab(tab, reason);
       return { tabId: tab.id, renderMode: target, unsavedInputLost: unsavedInput };
@@ -804,6 +834,7 @@ export class Browser {
       if (limits.idleSuspendMinutes > 0) {
         for (const tab of candidates()) if (now - (tab.lastActiveAt ?? now) >= limits.idleSuspendMinutes * 60000) results.push({ ...(await this.suspendTab(tab, 'idle')), trigger: 'idle' });
       }
+      const status = { at: new Date().toISOString() };
       if (limits.memoryBudgetMb && typeof this.rendererMemoryMb === 'function') {
         let used = await this.rendererMemoryMb();
         for (const tab of candidates()) {
@@ -812,8 +843,30 @@ export class Browser {
           results.push({ ...result, trigger: 'memory_pressure', rendererMemoryMb: Math.round(used) });
           if (result.suspended) used = await this.rendererMemoryMb();
         }
-        this.memoryStatus = { at: new Date().toISOString(), rendererMemoryMb: Math.round(used), budgetMb: limits.memoryBudgetMb, overBudget: used > limits.memoryBudgetMb };
+        Object.assign(status, { rendererMemoryMb: Math.round(used), budgetMb: limits.memoryBudgetMb, overBudget: used > limits.memoryBudgetMb });
       }
+      // The operating system's own memory pressure (src/memory-pressure.js): a few idle background tabs per cycle,
+      // more and sooner when it is critical. Every suspension blocker still applies.
+      if (limits.systemMemoryPressure && typeof this.systemMemory === 'function') {
+        let signal = await Promise.resolve().then(() => this.systemMemory()).catch(() => null);
+        const initial = signal?.level ?? 'normal';
+        if (initial !== 'normal') {
+          const critical = initial === 'critical';
+          const maxTabs = critical ? 4 : 2;
+          const minIdleMs = (critical ? 1 : 5) * 60000;
+          let released = 0;
+          for (const tab of candidates()) {
+            if (released >= maxTabs || (signal?.level ?? 'normal') === 'normal') break;
+            if (now - (tab.lastActiveAt ?? now) < minIdleMs) continue;
+            const result = await this.suspendTab(tab, 'memory_pressure');
+            results.push({ ...result, trigger: 'system_memory_pressure', level: signal.level });
+            if (result.suspended) { released++; signal = await Promise.resolve().then(() => this.systemMemory()).catch(() => signal); }
+          }
+        }
+        status.system = signal ? { level: signal.level, initialLevel: initial, available: signal.available, sources: signal.sources, reasons: signal.reasons,
+          ...(signal.availableMb !== undefined ? { availableMb: signal.availableMb, totalMb: signal.totalMb } : {}), ...(signal.psi ? { psi: signal.psi } : {}) } : { available: false, level: 'normal' };
+      }
+      if (Object.keys(status).length > 1) this.memoryStatus = status;
       return results;
     } finally { this.suspending = false; }
   }

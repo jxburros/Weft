@@ -28,6 +28,7 @@ import { WEFT_VERSION } from './version.js';
 import { CredentialService, safeStorageProtector } from './credentials.js';
 import { promptCredentialSecret } from './credential-entry.js';
 import { PaymentService } from './payments.js';
+import { createMemoryPressureSource } from './memory-pressure.js';
 
 // Lock and unlock are published as metadata-only events so connected agents can pause instead of retrying.
 registerEventType('encryption');
@@ -166,6 +167,8 @@ if (primary) app.whenReady().then(async () => {
     const gui = window && !window.isDestroyed() ? window.webContents.getOSProcessId() : null;
     return app.getAppMetrics().filter(metric => metric.type === 'Tab' && metric.pid !== gui).reduce((sum, metric) => sum + (metric.memory?.workingSetSize ?? 0), 0) / 1024;
   };
+  // The operating system's memory-pressure signal (Linux PSI and available memory, Windows available memory, a macOS free-page heuristic).
+  browser.systemMemory = createMemoryPressureSource();
   workspace.attachBrowser(browser);
   // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
   plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });

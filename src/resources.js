@@ -12,7 +12,7 @@ export const MODEL_IMAGE_LIMITS = Object.freeze({ maxBytes: 4 * 1024 * 1024, max
 export const RESOURCE_DEFAULTS = Object.freeze({
   maxAgentCommands: 8, maxPerClient: 4, maxPerTask: 2,
   captureConcurrency: 1, captureQueueLimit: 8,
-  idleSuspendMinutes: 30, memoryBudgetMb: null, maxCaptureEdge: CAPTURE_LIMITS.defaultMaxEdge,
+  idleSuspendMinutes: 30, memoryBudgetMb: null, systemMemoryPressure: true, maxCaptureEdge: CAPTURE_LIMITS.defaultMaxEdge,
 });
 export const resourceSettingsShape = z.strictObject({
   maxAgentCommands: z.number().int().min(1).max(64).optional().describe('Agent commands that may run at once across all clients (default 8).'),
@@ -22,6 +22,7 @@ export const resourceSettingsShape = z.strictObject({
   captureQueueLimit: z.number().int().min(0).max(50).optional().describe('Agent captures that may wait; more are refused with resource_busy (default 8).'),
   idleSuspendMinutes: z.number().int().min(0).max(1440).optional().describe('Suspend eligible background tabs idle this long; 0 disables (default 30).'),
   memoryBudgetMb: z.number().int().min(64).max(65536).nullable().optional().describe('When page renderers exceed this, eligible background tabs are suspended least recently used first; null disables.'),
+  systemMemoryPressure: z.boolean().optional().describe('Also suspend a few idle background tabs when the operating system reports memory pressure (Linux pressure-stall data and available memory; available memory on Windows; a conservative free-page heuristic on macOS). Default true.'),
   maxCaptureEdge: z.number().int().min(16).max(CAPTURE_LIMITS.absoluteMaxEdge).optional().describe('Largest capture width or height in pixels for any caller (default 4096).'),
 }).describe('Resource scheduling limits (human only).');
 
