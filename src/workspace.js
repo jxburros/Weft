@@ -350,10 +350,12 @@ export class WorkspaceService {
       this.data[collection].push(record);
     } else {
       record = this.record(collection, args.id, context);
+      if (!admin && collection === 'context' && [record.category, args.changes?.category].some(category => ['confirmed', 'instructions', 'decisions'].includes(category))) {
+        throw new Error('PERMISSION_REQUIRED: trusted context requires human approval');
+      }
       if (action === 'delete') this.data[collection] = this.data[collection].filter(item => item.id !== record.id);
       else if (action === 'update') {
         if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: record changed; reload before updating');
-        if (!admin && collection === 'context' && ['confirmed', 'instructions', 'decisions'].includes(args.changes.category || record.category)) throw new Error('PERMISSION_REQUIRED: trusted context requires human approval');
         if (!admin && collection === 'workflows' && record.enabled === false && args.changes.enabled === true) throw new Error('PERMISSION_REQUIRED: imported workflow requires human review');
         const updated = { ...record, ...args.changes };
         if (collection === 'siteRules') { this.validateRule(updated); updated.workspaceId = updated.scope === 'global' ? null : (record.workspaceId || workspaceId); }
