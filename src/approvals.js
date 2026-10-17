@@ -31,6 +31,13 @@ export function approvalFingerprint({ command, args, actor, workspaceId, tabId, 
 }
 const origin = value => { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.origin : null; } catch { return null; } };
 /** Human-facing preview of what is being approved; bounded. Agent-supplied text is shown as data. */
+export function previewArgs(args) { return preview(args); }
+/** Replace values a workflow run marked sensitive (kept only in memory) so they never reach the approval store. */
+export function withholdValues(shown, values) {
+  const secret = values.filter(value => typeof value === 'string' && value.length >= 2);
+  if (!secret.length) return shown;
+  return Object.fromEntries(Object.entries(shown).map(([key, value]) => [key, typeof value === 'string' ? secret.reduce((text, item) => text.split(item).join('[sensitive parameter withheld]'), value) : value]));
+}
 function preview(args) {
   const output = {};
   for (const [key, value] of Object.entries(args || {}).slice(0, 20)) {

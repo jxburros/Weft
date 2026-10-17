@@ -168,12 +168,17 @@ app.whenReady().then(async () => {
   // Scheduled checks read workspace data: they wait while an encrypted profile is locked.
   freshnessTimer = setInterval(() => { if (!admission.status.stopped && !workspace.locked) knowledge.runScheduled().catch(error => console.warn(`Weft freshness: ${error.message}`)); }, 15 * 60_000); freshnessTimer.unref?.();
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, knowledge, admission, transfers, eventLog, onEvent: event => events.emit('event', event) });
+  // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain.
+  // A locked encrypted profile sweeps after each unlock instead; nothing is scheduled while locked (ADR 014, ADR 016).
+  const startTasks = async () => { if (workspace.locked) return; await dispatch.tasks.init(); dispatch.tasks.start(); };
+  await startTasks();
   workspace.encryptionHooks = {
     // Lock: stop model turns, plugin processes and upload sessions, then close tabs so no workspace page stays loaded.
-    beforeLock: async ({ persist = true } = {}) => { providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
+    beforeLock: async ({ persist = true } = {}) => { await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
     afterUnlock: async () => {
       if (!extensionsRestored) { await extensions.restore(); extensionsRestored = true; }
       await browser.resume();
+      await startTasks();
       events.emit('event', { type: 'encryption', status: 'unlocked', createdAt: new Date().toISOString() });
       void retrieval.drain().catch(() => {});
     },
@@ -223,6 +228,7 @@ app.on('before-quit', event => {
   retrieval?.close();
   relay.close();
   plugins?.close();
+  dispatch?.tasks?.close();
   const cleanup = browser?.close();
   browser = null;
   workspace?.close();

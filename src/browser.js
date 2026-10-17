@@ -35,6 +35,7 @@ import { ThreatIntel } from './threat-intel.js';
 import { DownloadSafety, NEVER_LAUNCH, applyOriginMetadata, fileCategory, hashFile } from './download-safety.js';
 import { ruleSource } from './site-rules.js';
 import { sanitizeUrl } from './workspace.js';
+import { RECORDING_WORLD, recordingScript } from './recording-script.js';
 
 const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
@@ -493,6 +494,7 @@ export class Browser {
       if (tab.allowUrl !== this.overrideKey(contents.getURL())) { tab.allowUrl = null; tab.allowSecurity = false; }
       this.layout(); this.persist();
       this.onEvent?.({ type: 'navigation', status: 'committed', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
+      try { this.onNavigate?.({ tabId: tab.id, url: contents.getURL() }); } catch { /* recording is best effort */ }
     });
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
       if (isMainFrame === false) return;
@@ -1260,7 +1262,8 @@ export class Browser {
         for (const tab of this.tabs.values()) { this.controlBoundary(tab, 'emergency stop'); tab.view.webContents.stop(); }
         this.downloadGrants.clear();
         for (const { item } of this.downloads.values()) item?.cancel();
-        for (const task of this.workspaceService?.snapshot().tasks ?? []) if (task.status === 'running') await this.workspaceService.execute('tasks.transition', { id: task.id, status: 'paused', cause: 'Human emergency stop' }, context);
+        // Runtime tasks are paused by the task runtime (src/task-runtime.js) before this point; this covers hand-tracked records.
+        for (const task of this.workspaceService?.snapshot().tasks ?? []) if (task.status === 'running' && !task.executor) await this.workspaceService.execute('tasks.transition', { id: task.id, status: 'paused', cause: 'Human emergency stop' }, context);
         this.persist();
         return { stopped: true, automation: this.admission.status, tabs: this.tabs.size, notice: 'Future agent input requires a human handoff. Already executed page actions cannot be undone.' };
       }
@@ -1552,6 +1555,29 @@ export class Browser {
       navigationVersion: version, frame, viewport: { width: live.width, height: live.height }, devicePixelRatio: live.devicePixelRatio, zoom: contents.getZoomFactor?.() ?? 1,
       scroll: { x: live.scrollX, y: live.scrollY }, document: { width: live.documentWidth, height: live.documentHeight }, clip, image: pngSize(data), scale, cropped,
       redaction: { method: 'masked-sensitive-form-fields', applied: !!mask }, contentTrust: 'untrusted', limitations } };
+  }
+
+  /**
+   * Workflow recording (#10): report a person's trusted clicks and committed field changes in one tab
+   * from an isolated world. Values are never read. Returns a stop function, or null when unsupported.
+   */
+  startRecordingCapture(tabId, onEvent) {
+    const contents = this.tab(tabId).view?.webContents;
+    if (typeof contents?.executeJavaScriptInIsolatedWorld !== 'function') return null;
+    const nonce = randomUUID();
+    const prefix = `weft-record:${nonce}:`;
+    const inject = () => { if (!contents.isDestroyed?.()) contents.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: recordingScript(nonce) }]).catch(() => {}); };
+    const onConsole = (event, _level, legacyMessage) => {
+      const text = typeof event?.message === 'string' ? event.message : legacyMessage;
+      if (typeof text !== 'string' || !text.startsWith(prefix) || text.length > 4096) return;
+      try { onEvent(JSON.parse(text.slice(prefix.length))); } catch { /* malformed reports are ignored */ }
+    };
+    contents.on('console-message', onConsole);
+    contents.on('dom-ready', inject);
+    inject();
+    const stop = () => { contents.removeListener('console-message', onConsole); contents.removeListener('dom-ready', inject); };
+    stop.flush = () => new Promise(resolve => setTimeout(resolve, 50));
+    return stop;
   }
 
   checkControl(tab, args, context, name) {

@@ -38,14 +38,14 @@ export function registerEventType(type) {
   if (typeof type !== 'string' || !/^[a-z][a-z_]{1,31}$/.test(type)) throw new Error('Event types are short lowercase identifiers');
   EVENT_TYPES.add(type);
 }
-const RECORD_ID = /^(?:ws|mate|cont|task|conv|work|site|artifact|record|version|event|turn|handoff|approval|appr|policy|msg|coll|conflict)_[a-f0-9-]{36}$/;
+const RECORD_ID = /^(?:ws|mate|cont|task|conv|work|site|artifact|record|version|event|turn|handoff|approval|appr|policy|msg|coll|conflict|op)_[a-f0-9-]{36}$/;
 const ID_FIELDS = ['workspaceId', 'targetId', 'taskId', 'conversationId', 'artifactId', 'versionId', 'turnId', 'handoffId', 'approvalId', 'collectionId', 'conflictId'];
 
 export function sanitizeEvent(event) {
   if (!event || !EVENT_TYPES.has(event.type)) return null;
   const result = { type: event.type, createdAt: new Date().toISOString() };
   if (Object.hasOwn(commands, event.command)) result.command = event.command;
-  if (['human', 'automation', 'admin', 'model'].includes(event.actor) || /^client:[a-f0-9-]{36}$/.test(event.actor)) result.actor = event.actor;
+  if (['human', 'automation', 'admin', 'model', 'system'].includes(event.actor) || /^(?:client:|task:task_)[a-f0-9-]{36}$/.test(event.actor)) result.actor = event.actor;
   // Status is a short machine token produced by Weft itself (success, failure, blocked, started, ...).
   if (typeof event.status === 'string' && /^[a-z][a-z_]{0,31}$/.test(event.status)) result.status = event.status;
   // Stable outcome taxonomy token of the command (succeeded, partial, blocked, ...).

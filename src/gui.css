@@ -1733,3 +1733,44 @@ button { min-height: 24px; min-width: 24px; }
   margin-top: var(--space-3);
   accent-color: var(--brand);
 }
+/* Durable tasks: step timeline, history and work with an unknown outcome (ADR 016). */
+.step-timeline,
+.task-history {
+  list-style: none;
+  margin: 0 0 var(--space-12);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.step-timeline li {
+  display: flex;
+  gap: var(--space-10);
+  align-items: flex-start;
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-4);
+}
+.step-timeline li.current {
+  background: var(--brand-soft);
+}
+.step-timeline li small,
+.task-history small {
+  display: block;
+  color: var(--muted);
+}
+.step-mark {
+  width: var(--space-16);
+  text-align: center;
+  color: var(--brand);
+}
+.task-history li {
+  font-size: var(--font-size-13);
+  overflow-wrap: anywhere;
+}
+.uncertain-op {
+  border-color: var(--clay);
+  margin-bottom: var(--space-10);
+}
+.notice.proposal ol {
+  margin: var(--space-6) 0;
+}

@@ -63,6 +63,11 @@ add('administration', `collections.create collections.update collections.delete 
 // standing (optionally task-bound) approval; autonomy levels never grant it and page/record text cannot.
 add('trusted_context', 'context.promote');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Durable task runtime and workflows (#8, #58, #10): steering one's own task is local work; every step is gated separately as
+// the task identity. Rebinding identity, review decisions, outcome determinations, duplicate-risk retries and recording are human-only.
+add('local_write', 'tasks.start tasks.pause tasks.continue tasks.cancel tasks.redirect workflows.run');
+add('local_read', 'workflows.validate');
+add('administration', 'tasks.reassign tasks.review tasks.reconcile tasks.retryStep workflows.recordStart workflows.recordStop');
 // Credential references and protected login (#6): metadata reads, once-only credential use, human-only administration.
 add('local_read', 'credentials.status credentials.list credentials.get');
 add('credential_use', 'credentials.fill');

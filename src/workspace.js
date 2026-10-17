@@ -22,6 +22,7 @@ import { RRF_K, documentKey, reciprocalRankFusion } from './retrieval.js';
 import { createKeyProtector, lockedError } from './encryption.js';
 import { ProfileEncryption } from './profile-encryption.js';
 import { encryptionSchemas } from './encryption-commands.js';
+import { applyTransition, appendTimeline, isHumanContext, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -34,6 +35,7 @@ const LEGACY_FILE = 'workspace-state.json';
 const TRANSFERS_DIR = 'transfers';
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const REPLAYED = Symbol.for('weft.replayed');
+const WORKFLOW_EXECUTABLE = ['steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
 const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
@@ -173,6 +175,7 @@ const archiveSchema = z.object({ format: z.literal('weft-archive'), formatVersio
 const artifactSchema = z.object({ title: z.string().min(1).max(240), note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).default([]), versions: z.array(versionSchema).max(1000), annotations: z.array(annotationSchema).max(10000).default([]) });
 const SYSTEM_FIELDS = { common: ['id', 'workspaceId', 'createdAt', 'updatedAt', 'revision'], materials: ['history', 'size', 'sha256', 'link', 'service', 'copiedFrom', 'superseded', 'derivedFrom', 'lastOrigin'],
   context: ['history', 'proposal', 'promotedFrom', 'promotionNote', 'superseded', 'derivedFrom', 'lastOrigin'], conversations: ['messages', 'turnManifests'], artifacts: ['versions', 'annotations'],
+  tasks: ['timeline', 'operations', 'run', 'executor', 'workflowRun'],
   siteRules: ['createdBy', 'revisions', 'lastReviewedAt', 'lastReviewedBy'] };
 // Site-rule provenance (#19) travels with format 2 exports: who created the rule, its bounded revision history and review state.
 const ruleRevisionSchema = z.object({ revision: z.number().int().min(1), actor: z.string().max(200), at: timestamp, summary: z.string().max(2400), changed: z.array(z.string().max(100)).max(50).default([]),
@@ -252,6 +255,9 @@ export class WorkspaceService {
       if (!Array.isArray(data.handoffs)) data.handoffs = [];
       // Shared collections, conflicts and freshness policies (#21, #23) were also added without a schema bump.
       for (const name of KNOWLEDGE_COLLECTIONS) if (!Array.isArray(data[name])) data[name] = [];
+      // One phase vocabulary (ADR 016): the older `waiting` task state is `waiting_on_human`.
+      const legacyTasks = (data.tasks ?? []).filter(task => task.status === 'waiting');
+      for (const task of legacyTasks) { task.status = 'waiting_on_human'; appendTimeline(task, { type: 'transition', from: 'waiting', to: 'waiting_on_human', actor: 'system', reason: 'legacy', at: now() }); }
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
         rejectSecretKeys(migrated);
@@ -262,6 +268,7 @@ export class WorkspaceService {
       rejectSecretKeys(data);
       this.storage = storage;
       this.data = data;
+      if (legacyTasks.length) this.save();
     } catch (error) { storage.close(); throw error; }
   }
   /** Lossless one-time move from the JSON store; the original bytes are preserved under recovery/. */
@@ -481,6 +488,29 @@ export class WorkspaceService {
     this.queue = run.catch(() => {});
     return run;
   }
+  /** Task transitions committed by the last transaction are reported after commit (activity log, events). */
+  flushNotices() {
+    const notices = this.notices ?? [];
+    this.notices = [];
+    for (const notice of notices) try { this.onTaskTransition?.(notice); } catch (error) { console.warn(`Weft task activity: ${error.message}`); }
+  }
+  noteTransition(record, entry) { (this.notices ??= []).push({ taskId: record.id, workspaceId: record.workspaceId, ...entry }); return entry; }
+  /** Validated phase change with attribution, persisted on the record and reported after commit. */
+  transitionTask(record, to, options) {
+    const entry = applyTransition(record, to, options);
+    return this.noteTransition(record, entry);
+  }
+  /** Runtime-owned change to one task, committed in its own transaction through the mutation queue. */
+  mutateTask(id, mutate) {
+    const run = this.queue.then(() => this.transact(() => {
+      const record = this.record('tasks', id);
+      const result = mutate(record, this);
+      this.touch(record);
+      return result === undefined ? record : result;
+    }));
+    this.queue = run.catch(() => {});
+    return run;
+  }
   execute(name, args = {}, context = {}) {
     // Search reads and embedding administration wait on local model endpoints; they never hold the write queue.
     if (name.startsWith('search.')) return this.searchCommand(name, args, context);
@@ -546,14 +576,19 @@ export class WorkspaceService {
       if (dryRun) {
         const preview = { dryRun: true, applied: false, result: this.output(result), changes: this.storage.changes(this.data) };
         this.data = this.storage.revert(this.data);
+        this.notices = [];
         return preview;
       }
       output = this.output(result);
       ({ released } = this.save({ requests: request ? [{ ...request.record, result: output }] : [], deferCollection: effects.length > 0 }));
     } catch (error) {
+      this.notices = [];
+      // The profile locked while this change was prepared (ADR 014): nothing is open to revert or commit.
+      if (this.locked || !this.storage?.db) throw this.locked ? lockedError(this.encryption.lockReason ?? 'locked') : error;
       this.data = this.storage.revert(this.data);
       throw error;
     }
+    this.flushNotices();
     if (effects.length) {
       try { for (const effect of effects) await effect(); }
       catch (error) {
@@ -644,11 +679,13 @@ export class WorkspaceService {
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
     if (name === 'workspaces.export') { this.assertPlaintextExport(args); return this.exportWorkspace(args.id, args.sensitiveTerms, { captures: args.captures, reviewMetadata: args.reviewMetadata }); }
-    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item, { agent: isAgent(context) }) : collection === 'materials' ? forCaller(collection, withoutFile(item), context) : clone(item));
+    const derive = item => collection === 'tasks' && item.run?.inputs ? { ...item, staleness: staleness(item, this.data) } : item;
+    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item, { agent: isAgent(context) }) : collection === 'materials' ? forCaller(collection, withoutFile(item), context) : derive(clone(item)));
     // Shared-collection reads (#21) reach another workspace's records; restricted originals stay withheld from agents there too,
     // and reading an original or previewing a derivative of it stays within the owning workspace.
     const shared = ['materials', 'context'].includes(collection) || (collection === 'artifacts' && !['artifacts.readOriginal', 'artifacts.redact'].includes(name));
     const record = this.record(collection, args.id, context, { shared });
+    if (collection === 'tasks') return derive(this.output(record));
     if (collection === 'artifacts') return this.readArtifact(name, record, args, context);
     return forCaller(collection, this.output(record), context);
   }
@@ -776,8 +813,9 @@ export class WorkspaceService {
     if (name === 'tasks.transition') {
       const record = this.record(collection, args.id, context);
       if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw Object.assign(new Error('STALE_STATE: task changed; reload before changing its state'), { notStarted: true, details: { reason: 'revision_changed' } });
-      const prior = record.status;
-      record.status = args.status;
+      const prior = normalizePhase(record.status);
+      this.assertRecordOnlyPhase(record, args.status);
+      this.transitionTask(record, args.status, { actor, reason: admin ? 'human_request' : 'agent_request', note: args.cause ?? '' });
       if (args.checkpoint !== undefined) record.checkpoint = args.checkpoint;
       if (args.status === 'completed') record.progress = 100;
       this.touch(record); this.log(name, record.workspaceId, record.id, actor, `${prior} → ${args.status}${args.cause ? `: ${args.cause}` : ''}`);
@@ -850,7 +888,11 @@ export class WorkspaceService {
       if (!admin && collection === 'context' && TRUSTED_CATEGORIES.includes(fields.category)) throw new Error('PERMISSION_REQUIRED: only a human may establish trusted project context');
       if (collection === 'siteRules') this.validateRule(fields);
       if (collection === 'materials') this.validateMaterial(fields);
+      if (collection === 'tasks' && fields.status === 'uncertain') throw fail('invalid_arguments', 'Only the task runtime marks work uncertain', { field: 'status' });
+      // Saving a workflow never authorizes it: one written by automation waits for human review.
+      if (collection === 'workflows' && !admin) fields.enabled = false;
       record = createRecord(fields, collection === 'siteRules' && fields.scope === 'global' ? null : workspaceId, collection.slice(0, 4));
+      if (collection === 'tasks') record.timeline = [{ type: 'created', to: record.status, actor, reason: 'created', at: record.createdAt }];
       if (collection === 'siteRules') { record.createdBy = actor; record.revisions = [{ revision: 1, actor, at: record.createdAt, summary: 'Created', changed: Object.keys(fields).sort() }]; }
       if (collection === 'conversations') record.messages = [];
       if (['materials', 'context'].includes(collection)) {
@@ -869,6 +911,9 @@ export class WorkspaceService {
       if (action === 'delete') this.data[collection] = this.data[collection].filter(item => item.id !== record.id);
       else if (action === 'update') {
         if (!admin && collection === 'workflows' && record.enabled === false && args.changes.enabled === true) throw new Error('PERMISSION_REQUIRED: imported workflow requires human review');
+        // A non-human change to what a workflow does disables it until a person reviews it again.
+        if (!admin && collection === 'workflows' && WORKFLOW_EXECUTABLE.some(key => args.changes[key] !== undefined)) args.changes.enabled = false;
+        if (collection === 'tasks') this.guardTaskUpdate(record, args.changes, context, actor, admin);
         const { origin: originArg, citations: citationArgs, ...changes } = args.changes;
         const revisionOrigin = ['materials', 'context'].includes(collection) ? originFor(context, originArg, context.originExtra) : null;
         const updated = { ...record, ...changes };
@@ -888,6 +933,23 @@ export class WorkspaceService {
   /** A deleted record leaves every shared collection that listed it. */
   forgetSharedItem(type, id) {
     for (const collection of this.data.sharedCollections ?? []) if (collection.items?.some(item => item.type === type && item.id === id)) collection.items = collection.items.filter(item => !(item.type === type && item.id === id));
+  }
+  /** Runtime-managed tasks change phase and plan only through the task runtime commands. */
+  assertRecordOnlyPhase(record, to) {
+    const from = normalizePhase(record.status);
+    if (record.executor) throw fail('invalid_arguments', 'This task is run by the task runtime; use tasks.pause, tasks.continue, tasks.cancel or tasks.redirect', { field: 'status' });
+    if (to === 'uncertain' || from === 'uncertain') throw fail('invalid_arguments', 'Uncertain work is resolved only with tasks.reconcile or tasks.retryStep', { field: 'status' });
+  }
+  guardTaskUpdate(record, changes, context, actor, admin) {
+    if (changes.status !== undefined && changes.status !== normalizePhase(record.status)) {
+      this.assertRecordOnlyPhase(record, changes.status);
+      this.transitionTask(record, changes.status, { actor, reason: admin ? 'human_request' : 'agent_request' });
+    }
+    delete changes.status;
+    if (record.executor && (changes.plan !== undefined || changes.modelId !== undefined)) {
+      if (!admin && !sameIdentity(record.executor, context)) throw fail('permission_required', 'only a person or the task’s own executor may change its plan or model', { notStarted: true });
+      if (!['queued', 'paused', ...TERMINAL_PHASES].includes(record.status)) throw fail('invalid_arguments', 'Change the steps of an active task with tasks.redirect', { field: 'changes.plan' });
+    }
   }
   recordRuleRevision(record, updated, actor, summary) {
     const changed = Object.keys(updated).filter(key => !['revisions', 'updatedAt', 'revision'].includes(key) && JSON.stringify(record[key]) !== JSON.stringify(updated[key])).sort();
@@ -1391,7 +1453,9 @@ export class WorkspaceService {
             fileRef = heavy(componentRef.parse(picked.fileBase64), 'base64');
             delete picked.fileBase64;
           }
+          if (collection === 'tasks' && picked.status === 'waiting') picked.status = 'waiting_on_human';
           fields = z.strictObject(shape).parse(picked);
+          if (collection === 'tasks') this.importTaskState(item, fields, actor, loss);
           if (collection === 'siteRules') {
             if (fields.enabled || fields.scope !== 'workspace') loss(collection, 'enabled/scope', 'imported site rules are workspace-scoped and disabled until reviewed');
             fields.scope = 'workspace'; fields.enabled = false; this.validateRule(fields);
@@ -1482,6 +1546,19 @@ export class WorkspaceService {
     };
     this.log('workspaces.import', workspace.id, workspace.id, actor, `Imported format ${formatVersion} with new IDs; ${report.lossy.length} lossy mapping types reported; policies and workflows inactive; no sessions or credentials imported`);
     return { workspace, report };
+  }
+  /** Imported tasks keep their timeline as history but never their executor, run state or operations: they never resume on their own. */
+  importTaskState(item, fields, actor, loss) {
+    const timeline = z.array(z.record(z.string().max(100), z.unknown())).max(500).safeParse(item.timeline ?? []);
+    fields.timeline = timeline.success ? timeline.data.map(entry => JSON.parse(JSON.stringify(entry, (key, value) => typeof value === 'string' ? value.slice(0, 2000) : value))) : [];
+    if (!timeline.success) loss('tasks', 'timeline', 'invalid task timeline dropped');
+    if (item.executor || item.run) loss('tasks', 'executor/run', 'task runtime bindings and run state are not imported; a person starts imported tasks again');
+    if (Array.isArray(item.operations) && item.operations.length) loss('tasks', 'operations', 'operation records are local execution evidence and are not imported', item.operations.length);
+    if (['running', 'waiting_on_human', 'uncertain'].includes(fields.status) && (item.executor || item.run || fields.status === 'uncertain')) {
+      loss('tasks', 'status', `imported ${fields.status} runtime task paused for review`);
+      appendTimeline(fields, { type: 'transition', from: fields.status, to: 'paused', actor, reason: 'imported', note: 'Imported tasks never resume execution automatically.', at: now() });
+      fields.status = 'paused';
+    }
   }
   importArtifact(item, { heavy, lazy, deferred, mapping, loss, stats }) {
     const fields = artifactSchema.parse(item);

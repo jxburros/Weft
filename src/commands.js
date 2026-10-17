@@ -16,6 +16,7 @@ import { storageCommandDefinitions } from './site-storage.js';
 import { threatCommandDefinitions } from './threat-intel.js';
 import { downloadSafetyCommandDefinitions } from './download-safety.js';
 import { updateCommandDefinitions } from './updater.js';
+import { taskCommandDefinitions } from './task-commands.js';
 import { credentialCommandDefinitions, CREDENTIAL_ADMIN_COMMANDS, CREDENTIAL_REASONS } from './credentials.js';
 import { knowledgeCommandDefinitions } from './knowledge-commands.js';
 import { transferCommandDefinitions } from './transfers.js';
@@ -127,6 +128,7 @@ const definitions = {
   ...threatCommandDefinitions,
   ...downloadSafetyCommandDefinitions,
   ...updateCommandDefinitions,
+  ...taskCommandDefinitions,
   ...credentialCommandDefinitions,
   ...knowledgeCommandDefinitions,
   ...transferCommandDefinitions,
@@ -152,12 +154,13 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'collections.create', 'collections.update', 'collections.delete', 'collections.grant', 'collections.revoke', 'collections.addItem', 'collections.removeItem',
   'sources.link', 'sources.relink', 'services.create', 'services.update', 'services.setCredential', 'services.revoke', 'services.refresh', 'freshness.configure', ...CREDENTIAL_ADMIN_COMMANDS,
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview', 'search.configureEmbeddings',
-  ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status')]);
+  ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status'),
+  'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'collections.read', 'sources.read', 'services.read',
   'artifacts.compare', 'artifacts.verify', 'artifacts.review', 'artifacts.readOriginal',
-  'search.status', 'transfers.read', 'events.list', 'weft.capabilities', 'conversations.messages', 'artifacts.versions', 'encryption.status', 'encryption.checkRecoveryKey', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
+  'search.status', 'transfers.read', 'events.list', 'weft.capabilities', 'conversations.messages', 'artifacts.versions', 'encryption.status', 'encryption.checkRecoveryKey', 'workflows.validate', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
@@ -215,7 +218,7 @@ const suggest = (value, allowed) => allowed.filter(item => typeof item === 'stri
 /** HTTP status for every stable error code. Adding a code requires a status, an exit code and an outcome status. */
 export const ERROR_HTTP_STATUS = Object.freeze({ unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
   unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
-  timeout: 504, deadline_exceeded: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
+  timeout: 504, deadline_exceeded: 504, not_found: 404, duplicate_risk: 409, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
   command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422, locked: 423, key_invalid: 422 });
 /**
  * Stable outcome taxonomy shared by GUI, CLI, MCP and REST. Every outcome carries exactly one
@@ -226,7 +229,7 @@ export const ERROR_STATUS = Object.freeze({
   invalid_arguments: 'invalid', invalid_json: 'invalid', unknown_command: 'invalid', ambiguous_target: 'invalid', request_too_large: 'invalid', key_invalid: 'invalid',
   unauthorized: 'blocked', permission_required: 'blocked', locked: 'blocked', human_required: 'blocked', target_mismatch: 'blocked', site_blocked: 'blocked',
   approval_required: 'approval_required', stale_state: 'stale_state',
-  idempotency_conflict: 'conflict', already_committed: 'conflict', lease_conflict: 'conflict', tab_busy: 'conflict',
+  idempotency_conflict: 'conflict', already_committed: 'conflict', duplicate_risk: 'conflict', lease_conflict: 'conflict', tab_busy: 'conflict',
   unsupported_capability: 'unsupported', unsupported: 'unsupported', unsupported_media_type: 'unsupported',
   cancelled: 'cancelled', emergency_stop: 'cancelled', action_interrupted: 'cancelled',
   timeout: 'timed_out', deadline_exceeded: 'timed_out',
@@ -352,7 +355,7 @@ export function normalizeCommand(name, args = {}) {
   return { command, args: output, normalized };
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
-  stale_state: 3, idempotency_conflict: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
+  stale_state: 3, idempotency_conflict: 3, duplicate_risk: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
   emergency_stop: 6, timeout: 7, deadline_exceeded: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8, locked: 9 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;

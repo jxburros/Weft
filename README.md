@@ -160,7 +160,7 @@ For MCP, configure your client:
 }
 ```
 
-MCP advertises eight grouped tools, including `weft_reference` for command
+MCP advertises nine grouped tools, including `weft_reference` for command
 discovery. Execution tools accept a canonical command as `action` and its `args`;
 legacy underscore names such as `page_readable` remain accepted but unadvertised.
 Schemas and structured outcomes are shared. Screenshots retain MCP image content.

@@ -14,6 +14,7 @@ import { PluginRegistry } from './plugins/registry.js';
 import { Knowledge } from './knowledge.js';
 import { LOCK_EXEMPT } from './encryption-commands.js';
 import { lockedError } from './encryption.js';
+import { TaskRuntime, RUNTIME_COMMANDS } from './task-runtime.js';
 
 const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list'];
 // Commands that page natively; every other pageable command is paged here from its full list.
@@ -22,7 +23,7 @@ const DEADLINE = Symbol('deadline');
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
@@ -31,6 +32,9 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     authority.taskGrant ??= (...input) => credentials.taskGrant(...input);
     authority.approvalPreview ??= (...input) => credentials.approvalPreview(...input);
   }
+  // Durable task runtime (ADR 016): task steps re-enter this dispatcher as the task's bound identity.
+  tasks ??= new TaskRuntime({ workspace, browser, admission, clients, providers, credentials, onEvent });
+  const runtimeCommands = new Set(RUNTIME_COMMANDS);
 
   /** Catalog metadata, with plugins.invoke raised to the invoked plugin operation's manifest-derived class. */
   const specFor = (command, args) => {
@@ -88,10 +92,12 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     state.args = validated;
     // A locked encrypted profile answers every surface with a typed locked error, before any target lookup reads workspace data.
     if (workspace?.locked && !LOCK_EXEMPT.has(command)) throw lockedError(workspace.encryption?.lockReason ?? 'locked');
-    admission.assertAutomationAdmitted(context.actor, command);
+    // The stopped-state latch refuses before any handler runs: nothing started.
+    try { admission.assertAutomationAdmitted(context.actor, command); } catch (error) { error.notStarted = true; throw error; }
     if (context.clientId) {
       const grant = clients.current?.(context.clientId);
-      if (grant) { context.workspaceIds = [...grant.workspaceIds]; context.taskId = grant.taskId ?? undefined; }
+      // A task-bound grant names its task; the task runtime supplies the task a step belongs to.
+      if (grant) { context.workspaceIds = [...grant.workspaceIds]; context.taskId = grant.taskId ?? (context.source === 'task' ? context.taskId : undefined); }
     }
     // A single-workspace grant is already an explicit target, not human focus.
     if (context.workspaceIds?.length === 1 && commands[command]?.inputSchema?.properties?.workspaceId && validated.workspaceId == null) {
@@ -233,12 +239,17 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     }
     if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);
     if (knowledge.handles(command)) return knowledge.execute(command, args, context);
+    if (runtimeCommands.has(command)) return tasks.execute(command, args, context);
     if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
     if (command === 'browser.emergencyStop' && context.actor === 'human') {
       admission.stop();
       // Running model turns stop now and keep their partial replies, marked as stopped; plugin processes are terminated.
       if (providers.stopAll) providers.stopAll('emergency_stop'); else providers.close();
       plugins.close?.();
+      // Runtime tasks stop scheduling; steps already submitted are reported separately and recorded when they return.
+      const stopped = await tasks.emergencyStop();
+      const result = await browser.execute(command, args, context);
+      return { ...result, tasks: stopped };
     }
     const result = await browser.execute(command, args, context);
     if (command === 'browser.info' && result?.automation && ['human', 'admin'].includes(context.actor)) result.automation.pendingApprovals = authority.pendingApprovals();
@@ -331,16 +342,21 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       workspaceId: outcome.workspaceId, tabId: outcome.tabId, createdAt: new Date().toISOString() };
     // Replay polling is not itself an event (it would feed the stream it reads).
     if (outcome.command !== 'events.list') onEvent(event);
+    tasks.observe(event);
     // Handoff lifecycle changes are also published as metadata-only handoff events.
     if (outcome.execution === 'succeeded' && /^handoffs\.(create|accept|complete)$/.test(outcome.command) && outcome.result?.id) {
-      onEvent({ type: 'handoff', command: outcome.command, actor: context.actor, status: outcome.result.status, workspaceId: outcome.workspaceId ?? outcome.result.workspaceId, handoffId: outcome.result.id,
-        revision: outcome.result.revision, createdAt: event.createdAt });
+      const handoff = { type: 'handoff', command: outcome.command, actor: context.actor, status: outcome.result.status, workspaceId: outcome.workspaceId ?? outcome.result.workspaceId, handoffId: outcome.result.id,
+        revision: outcome.result.revision, createdAt: event.createdAt };
+      onEvent(handoff);
+      tasks.observe(handoff);
     }
     // Task, artifact, policy, workspace and approval changes as typed, replayable metadata events.
     for (const domain of domainEvents(outcome, { actor: context.actor, batch: state.batch })) {
       if (context.workspaceIds && domain.workspaceId && !context.workspaceIds.includes(domain.workspaceId)) continue;
       onEvent(domain);
     }
+    // A person's own commands on a recording tab become secret-free workflow steps.
+    if (tasks.recordings.size && ['human', 'admin'].includes(context.actor)) tasks.recordCommand({ command: outcome.command, args: state.args ?? {}, outcome, context });
     // Observers get sanitized metadata after the outcome is final; they cannot change or delay it.
     if (Object.hasOwn(commands, outcome.command) && (!admission.status.stopped || ['human', 'admin'].includes(context.actor))) {
       void plugins.notify('after-command', { command: outcome.command, actor: String(context.actor).slice(0, 64), status: event.status === 'success' ? 'success' : 'failure',
@@ -351,5 +367,6 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   dispatch.authority = authority;
   dispatch.plugins = plugins;
   dispatch.knowledge = knowledge;
+  dispatch.tasks = tasks.attach({ dispatch, authority, providers, clients, browser, admission });
   return dispatch;
 }

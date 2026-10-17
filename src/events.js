@@ -17,8 +17,10 @@ const status = value => typeof value === 'string' && /^[a-z][a-z_]{0,31}$/.test(
 
 function derive(command, result, base) {
   const events = [];
-  if (/^tasks\.(create|update|transition|delete)$/.test(command) && result?.id) {
-    events.push({ ...base, type: 'task', command, taskId: result.id, status: command === 'tasks.delete' ? 'deleted' : status(result.status), ...(Number.isSafeInteger(result.revision) && { revision: result.revision }),
+  // Phase changes (including tasks.transition and runtime steps) are published by the task runtime from each recorded
+  // transition (ADR 016); outcomes add only creation, other edits and deletion so no change is published twice.
+  if (/^tasks\.(create|update|delete)$/.test(command) && result?.id) {
+    events.push({ ...base, type: 'task', command, taskId: result.id, status: { 'tasks.create': 'created', 'tasks.update': 'updated', 'tasks.delete': 'deleted' }[command], ...(Number.isSafeInteger(result.revision) && { revision: result.revision }),
       workspaceId: result.workspaceId ?? base.workspaceId });
   }
   if (/^artifacts\.(create|capture|annotate|delete)$/.test(command) && result?.id) {

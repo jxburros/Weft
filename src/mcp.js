@@ -7,8 +7,10 @@ import { GUIDANCE, getGuidance, guidanceTopics } from './guidance.js';
 
 const groups = {
   tabs: ['tabs'], page: ['page'],
-  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'sources', 'services', 'encryption'],
-  records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch', 'citations', 'freshness', 'conflicts', 'collections'],
+  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'encryption'],
+  records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],
+  // Shared context, linked sources, services, citations, freshness and conflicts (ADR 013): split out so every tool stays under the size budget.
+  knowledge: ['collections', 'sources', 'services', 'citations', 'freshness', 'conflicts'],
   artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {
@@ -18,7 +20,7 @@ export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {
       action: { type: 'string', enum: actions }, args: { type: 'object', description: 'Arguments validated against the selected command schema.' },
       deadlineMs: { type: 'integer', minimum: 1, maximum: 600000, description: 'Optional deadline in ms.' },
     } }, annotations: { readOnlyHint: actions.every(name => commands[name].readOnly),
-      destructiveHint: actions.some(name => commands[name].destructive), openWorldHint: ['page', 'tabs', 'models', 'browser'].includes(group) } };
+      destructiveHint: actions.some(name => commands[name].destructive), openWorldHint: ['page', 'tabs', 'models', 'browser', 'knowledge'].includes(group) } };
 });
 mcpTools.push({ name: 'weft_reference', description: 'Get a command description, complete input schema, and authority restrictions; omit command for a compact command index.',
   inputSchema: { type: 'object', additionalProperties: false, properties: { command: { type: 'string', description: 'Canonical command name.' } } },

@@ -175,6 +175,7 @@ contracts with embeddings (ADR 018):
 | Chunked upload parts (#14) | Material and artifact upload parts are held in memory (never in `transfers/uploads/`), zeroed when committed, aborted, expired or the profile locks. Package uploads and export packages are plaintext by nature: exports need `acknowledgePlaintext`, and package folders are listed in the plaintext-copy inventory. |
 | Events (#14) | Metadata-only and in memory; locking drops the retained log, and a replay from before the lock reports the gap reason `locked`. `events.list`, MCP resources and every other command answer `locked`. |
 | Credential vault (#6) | Separate vault and key (ADR 017), outside `workspace-data`; it is not part of workspace encryption or backups. `credentials.*` commands, like every command, answer `locked` while the workspace data is locked. |
+| Task runtime (#8, #10) | Plans, timelines, operation records and workflow run state are sealed task-record fields; sensitive run parameters are memory-only. Locking pauses runtime tasks (`profile_locked`) and stops scheduling; the startup sweep runs at unlock and only a person continues (ADR 016). |
 | Scheduled work | Freshness checks, community-list checks, the embedding queue and automatic backups wait while locked; plugin processes and model turns stop at lock. |
 
 ## Not covered (documented, not claimed)

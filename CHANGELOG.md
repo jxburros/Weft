@@ -31,6 +31,15 @@ alone is not a shipped capability.
   FTS5 secure-delete. GUI: archive coverage, offline preview banner, version
   comparison, redaction editor and export capture policy. Limits: no archived
   HTML redaction, OCR, note/annotation rewriting or erasure of earlier backups.
+- Integrated the durable task runtime, phase vocabulary and workflows (#8,
+  #58, #10, ADR 016) with archives/redaction, shared context, encryption and
+  integration contracts: task identities keep restricted originals withheld and
+  need human approval for trusted-context promotion; locking pauses runtime
+  tasks and the unlock sweep records in-flight work honestly; command steps
+  accept `deadlineMs`; `duplicate_risk` joins the outcome tables; phase changes
+  are published once. MCP gains a ninth tool, `weft_knowledge`, for shared
+  collections, linked sources, services, citations, freshness and conflicts, so
+  every tool stays under the size budget.
 - Integrated workspace encryption (#26, ADR 014) with archives, redaction,
   shared context, linked sources, the credential broker, embeddings and
   transfers: embedding vectors and their queue are memory-only in encrypted
@@ -395,6 +404,38 @@ alone is not a shipped capability.
 - Encrypted-mode performance budgets (enable, write, first/repeated search,
   export, reopen, data-key rotation) in `npm run test:perf`.
 
+- Added a durable task runtime (#8, #58, ADR-016): task plans of command, model,
+  review and handoff steps run through the shared dispatcher as the task's bound
+  identity (built-in runner, the agent's own grant or the automation token), so
+  grants, approvals and emergency stop gate every step. New commands
+  `tasks.start`, `tasks.pause`, `tasks.continue`, `tasks.cancel`,
+  `tasks.redirect` and human-only `tasks.reassign`, `tasks.review`,
+  `tasks.reconcile`, `tasks.retryStep`. One phase vocabulary (`queued`,
+  `running`, `waiting_on_human`, `paused`, `completed`, `failed`, `cancelled`,
+  `uncertain`) with a transition table; every transition is stored with actor
+  and reason and logged as a `task` activity entry. The task state `waiting` is
+  renamed `waiting_on_human` (existing records are normalized on open and import).
+- Operation records are committed before every step; a startup sweep pauses
+  interrupted local work and marks attempted external work `uncertain`, shown
+  on the Overview and as a safety notice. Uncertain work is never retried
+  blindly: `duplicate_risk` (exit code 3, HTTP 409) until a person reconciles it
+  or confirms the duplicate risk. Emergency stop reports already-submitted
+  steps. Task results report staleness when their inputs change.
+- Workflows (#10) gain typed parameters, substitution, required materials,
+  allowed sites, credential references resolved through the credential broker,
+  expected-output confirmation and invalidated-step detection; `workflows.run`
+  and `workflows.validate` run them as runtime tasks under current grants.
+  Workflows written or changed by automation are inactive until a person
+  reviews them. Human-only `workflows.recordStart`/`workflows.recordStop`
+  record secret-free steps from a person's navigation, commands and trusted
+  in-page clicks and field changes.
+- Chat models with tools enabled can call `propose_task`; the proposal is shown
+  for a person to review and nothing is created or started automatically.
+- GUI: task detail with step timeline, blockers, history and controls, review
+  of uncertain work (reconcile, duplicate-risk retry), workflow editor with
+  parameters and JSON steps, run dialog and recording from the current tab.
+- Approval previews withhold sensitive workflow parameter values.
+
 ### Not completed
 
 - See [all 67 issue dispositions](docs/ISSUE-STATUS.md) for the 43 completed
@@ -417,6 +458,12 @@ alone is not a shipped capability.
   test-only key protector), the broker in packaged asar builds, and the Settings
   golden with the new Saved sign-ins section (the local visual run already
   differs from the goldens before reaching it).
+- Task runtime and workflows (#8, #58, #10) are fixture-, process-kill-, GUI- and
+  real-Chromium-tested only: not validated with real external accounts, payment
+  providers or long runs. No recorded lookup exists for page clicks, fills or
+  sign-ins (a person determines the outcome). Recording does not capture typed
+  keystrokes, drag and drop, cross-origin frames or closed shadow roots. The
+  Settings golden needs a reviewed update for the changed automation notice.
 - Live-model evals, actual plugin installation in a Claude client and GUI
   first-render performance measurements have not been verified.
 - Installers are unsigned (no signing/notarization credentials). The Windows
