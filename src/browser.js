@@ -75,7 +75,7 @@ export class Browser {
 
   block(tab, url, rule) {
     tab.blocked = { url, ruleId: rule.id, hostname: rule.hostname, reason: rule.reason,
-      scope: rule.scope, mode: rule.mode, note: rule.note || '' };
+      scope: rule.scope, mode: rule.mode, note: rule.note || '', provenance: rule.provenance ?? null };
     tab.error = `Blocked by site rule: ${rule.hostname}`;
     this.layout();
     this.persist();
