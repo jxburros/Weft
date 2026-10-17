@@ -7,12 +7,18 @@ import { Authority } from './authority.js';
 import { raiseActionClass } from './autonomy.js';
 import { executeHookCommand, pluginCommandAdminDefinitions } from './plugin-commands.js';
 import { PluginRegistry } from './plugins/registry.js';
+import { ResourceScheduler } from './resources.js';
+import { ResumeService } from './resume.js';
+import { executeBrowsingCommand } from './browsing-import.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'resources.status', 'display.status', 'display.show', 'captures.cancel'];
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, plugins = new PluginRegistry(), admission, authority, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, plugins = new PluginRegistry(), admission, authority, scheduler, resume, display, onEvent = () => {} }) {
+  // Agent concurrency, capture queue and budgets apply to every caller (#30).
+  scheduler ??= new ResourceScheduler({ settings: () => workspace?.data?.settings ?? {}, onEvent });
+  resume ??= new ResumeService({ workspace, browser });
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
 
@@ -69,6 +75,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   const run = async (command, validated, context, target, state) => {
     state.args = validated;
     admission.assertAutomationAdmitted(context.actor, command);
+    // One concurrency slot per top-level agent command; nested plugin/hook reads reuse it.
+    if (!context.slotHeld) { context.slotHeld = true; state.release = scheduler.admit(command, context); }
     if (context.clientId) {
       const grant = clients.current?.(context.clientId);
       if (grant) { context.workspaceIds = [...grant.workspaceIds]; context.taskId = grant.taskId ?? undefined; }
@@ -100,6 +108,11 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         actionClass: spec.actionClass, ...(spec.dataClasses ? { dataClasses: spec.dataClasses } : {}), recheck: true });
     };
     if (command === 'workspaces.list' && context.workspaceIds) return workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
+    if (context.clientId) {
+      // Cost and time budgets are checked after the authority gate so out-of-scope requests are still reported as denials.
+      try { clients?.assertBudgets?.(context.clientId, command, { pricing: command === 'chat.send' ? providers?.profiles?.find(profile => profile.id === args.modelId)?.pricing : undefined }); }
+      catch (error) { authority.restoreApproval(decision, { command, context, target, error }); throw error; }
+    }
     authority.recordAttempt({ command, args, context, target, decision });
     try { return await route(command, args, context, target); }
     catch (error) {
@@ -139,7 +152,12 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     catch (error) { authority.restoreApproval(decision, { command: 'batch.execute', context, target, error }); throw error; }
   };
 
-  const route = async (command, args, context, target) => {
+  /** Costly captures run through the bounded queue; everything else routes directly. */
+  const route = (command, args, context, target) => scheduler.isCapture(command)
+    ? scheduler.capture({ command, context, workspaceId: target.workspaceId, tabId: target.tabId }, () => routeCommand(command, args, context, target))
+    : routeCommand(command, args, context, target);
+
+  const routeCommand = async (command, args, context, target) => {
     const call = async (nested, input) => {
       const nestedContext = { ...context };
       const value = await execute(nested, input, nestedContext);
@@ -171,6 +189,21 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       return providers.execute(command, args, context);
     }
     if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);
+    if (command.startsWith('resume.') || command.startsWith('tabGroups.')) return resume.execute(command, args, context);
+    if (command.startsWith('browsingData.')) return executeBrowsingCommand(command, args, context, { workspace });
+    if (command.startsWith('display.')) {
+      if (!display) throw Object.assign(new Error('Display controls are available only in the Weft application'), { code: 'unavailable' });
+      return display.execute(command, args, context);
+    }
+    if (command === 'resources.status') {
+      const visible = tab => !context.workspaceIds || context.workspaceIds.includes(tab.workspaceId);
+      return { ...scheduler.status(context), memory: browser?.memoryStatus ?? null,
+        suspendedTabs: [...(browser?.tabs?.values() ?? [])].filter(tab => tab.suspended && visible(tab)).map(tab => ({ tabId: tab.id, workspaceId: tab.workspaceId, at: tab.suspended.at, reason: tab.suspended.reason })),
+        budgets: context.clientId ? clients?.budgetStatus?.(context.clientId) ?? null : null,
+        notes: ['Idle suspension never touches leased, task-bound, busy, playing or edited tabs; a suspended tab reloads when opened or used.', 'Search indexing is incremental inside each record transaction rather than a deferred job.'] };
+    }
+    if (command === 'captures.list') return scheduler.list(context.workspaceIds ? { workspaceIds: context.workspaceIds, ...(args.workspaceId && { workspaceId: args.workspaceId }) } : args.workspaceId ? { workspaceId: args.workspaceId } : {});
+    if (command === 'captures.cancel') return scheduler.cancel(args.jobId, context);
     if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
     if (command === 'browser.emergencyStop' && context.actor === 'human') {
       admission.stop();
@@ -198,7 +231,15 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     const context = { actor: 'automation', ...caller };
     const target = { workspaceId: null, tabId: null };
     const state = {};
-    const outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input);
+    const started = Date.now();
+    let outcome;
+    try { outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input); }
+    finally { state.release?.(); }
+    if (context.clientId && state.decision) {
+      // Measured consumption: run time for every admitted command, spend only from provider-reported usage and a configured price.
+      const cost = outcome.command === 'chat.send' ? outcome.result?.cost ?? null : null;
+      clients?.recordConsumption?.(context.clientId, { runtimeMs: Date.now() - started, cost: cost && { amount: cost.amount, currency: cost.currency }, unpriced: outcome.command === 'chat.send' && outcome.execution === 'succeeded' && !cost });
+    }
     outcome.workspaceId = target.workspaceId ?? outcome.workspaceId;
     outcome.tabId = target.tabId ?? outcome.tabId;
     if (context.workspaceIds && outcome.workspaceId && !context.workspaceIds.includes(outcome.workspaceId)) {
@@ -223,6 +264,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     return outcome;
   };
   dispatch.authority = authority;
+  dispatch.scheduler = scheduler;
+  dispatch.resume = resume;
   dispatch.plugins = plugins;
   return dispatch;
 }

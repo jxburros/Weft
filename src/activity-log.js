@@ -9,7 +9,7 @@ import { secretKey as exactSecretKey } from './export-safety.js';
  * reordering and deletion inside the retained window; not tamper-proof against a
  * process or user that can rewrite the profile directory. See docs/decisions/005-agent-authority-and-audit.md.
  */
-export const ACTIVITY_TYPES = Object.freeze(['command', 'decision', 'approval', 'grant', 'policy', 'model', 'block', 'override', 'artifact', 'record', 'retention', 'integrity']);
+export const ACTIVITY_TYPES = Object.freeze(['command', 'decision', 'approval', 'grant', 'policy', 'model', 'block', 'override', 'artifact', 'record', 'retention', 'integrity', 'resource', 'display']);
 export const ACTIVITY_OUTCOMES = Object.freeze(['attempted', 'completed', 'failed', 'denied', 'pending_approval', 'partial', 'externally_uncertain', 'cancelled', 'recorded']);
 export const DEFAULT_RETENTION = Object.freeze({ maxAgeDays: 90, maxEntries: 20000 });
 const GENESIS = '0'.repeat(64);

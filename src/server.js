@@ -33,13 +33,13 @@ function readJson(req) {
  * Event types any Weft component may publish on the authenticated event stream. Other components
  * register new metadata-only types here; payloads still pass the field allowlist below.
  */
-export const EVENT_TYPES = new Set(['command', 'navigation', 'workspace', 'activity', 'task', 'handoff', 'policy', 'artifact', 'turn', 'approval']);
+export const EVENT_TYPES = new Set(['command', 'navigation', 'workspace', 'activity', 'task', 'handoff', 'policy', 'artifact', 'turn', 'approval', 'capture', 'tab', 'display']);
 export function registerEventType(type) {
   if (typeof type !== 'string' || !/^[a-z][a-z_]{1,31}$/.test(type)) throw new Error('Event types are short lowercase identifiers');
   EVENT_TYPES.add(type);
 }
-const RECORD_ID = /^(?:ws|mate|cont|task|conv|work|site|artifact|record|version|event|turn|handoff|approval|policy|msg)_[a-f0-9-]{36}$/;
-const ID_FIELDS = ['workspaceId', 'targetId', 'taskId', 'conversationId', 'artifactId', 'versionId', 'turnId', 'handoffId', 'approvalId'];
+const RECORD_ID = /^(?:ws|mate|cont|task|conv|work|site|artifact|record|version|event|turn|handoff|approval|policy|msg|capture)_[a-f0-9-]{36}$/;
+const ID_FIELDS = ['workspaceId', 'targetId', 'taskId', 'conversationId', 'artifactId', 'versionId', 'turnId', 'handoffId', 'approvalId', 'jobId'];
 
 export function sanitizeEvent(event) {
   if (!event || !EVENT_TYPES.has(event.type)) return null;

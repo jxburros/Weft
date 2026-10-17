@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { resourceSettingsShape } from './resources.js';
 
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
@@ -42,7 +43,8 @@ export const commandDefinitions = {
   'settings.update': ['Update application preferences; credentials are not accepted', { theme: z.enum(['system', 'light', 'dark']).optional(), model: z.strictObject(modelShape).optional(), sidebarCollapsed: z.boolean().optional(), agentPanelOpen: z.boolean().optional(),
     automation: z.strictObject({ inputConcurrency: z.enum(['shared', 'exclusive']).optional().describe('shared lets agents act on available tabs; exclusive requires a lease.'),
       queueLimit: z.number().int().min(0).max(20).optional().describe('Agent input requests that may wait per tab; 0 rejects busy tabs immediately.'),
-      queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.') }],
+      queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.'),
+    resources: resourceSettingsShape.optional() }],
   'search.query': ['Search project records and saved text locally', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional() }],
   'conversations.message': ['Append a durable conversation message', { id, localOnly: z.boolean().optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: text, model: z.string().max(200).optional(), status: z.enum(['complete', 'interrupted', 'error']).optional(), attachments: references.optional(), turnId: id.optional(), finishReason: finishReason.optional(), continuable: z.boolean().optional() }],
   'tasks.transition': ['Change task state and record the cause', { id, status: recordShapes.tasks.status.removeDefault(), cause: z.string().max(2000).optional(), checkpoint: text.optional() }],

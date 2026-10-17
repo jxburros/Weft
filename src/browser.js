@@ -28,10 +28,28 @@ import { ThreatIntel } from './threat-intel.js';
 import { DownloadSafety, NEVER_LAUNCH, applyOriginMetadata, fileCategory, hashFile } from './download-safety.js';
 import { ruleSource } from './site-rules.js';
 import { sanitizeUrl } from './workspace.js';
+import { CAPTURE_LIMITS, resourceSettings } from './resources.js';
 
 const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
 const HUMAN_GESTURE_MS = 2000;
+const TERMINAL_TASK = new Set(['completed', 'failed', 'cancelled']);
+// Commands that work on the stored tab record; every other page/tab command restores a suspended tab first.
+const SUSPENDED_OK = new Set(['tabs.list', 'tabs.close', 'tabs.pin', 'tabs.claim', 'tabs.release', 'tabs.takeover', 'tabs.setControlMode', 'tabs.group', 'tabs.search', 'tabs.suspend', 'tabs.activate', 'tabs.duplicate', 'tabs.move', 'page.inspect']);
+/** Page-side check (isolated world) for state a reload would destroy. Cross-origin frames are not inspected. */
+const SUSPENSION_CHECK = `(() => {
+  const media = [...document.querySelectorAll('video, audio')].some(element => !element.paused && !element.ended);
+  const changed = [...document.querySelectorAll('input, textarea, select')].some(element => {
+    if (element.disabled || element.type === 'hidden') return false;
+    if (element.tagName === 'SELECT') return [...element.options].some(option => option.selected !== option.defaultSelected);
+    if (element.type === 'checkbox' || element.type === 'radio') return element.checked !== element.defaultChecked;
+    if (element.type === 'file') return Boolean(element.files && element.files.length);
+    if (['button', 'submit', 'reset', 'image'].includes(element.type)) return false;
+    return element.value !== element.defaultValue;
+  });
+  const editing = [...document.querySelectorAll('[contenteditable]')].some(element => element.isContentEditable && element.contains(document.activeElement));
+  return { media, unsavedInput: changed || editing, fullscreen: Boolean(document.fullscreenElement) };
+})()`;
 // Schemes that are navigation denials rather than external-application launches.
 const NOT_LAUNCHES = new Set(['http', 'https', 'about', 'data', 'javascript', 'blob', 'file', 'filesystem', 'chrome', 'devtools', 'view-source']);
 
@@ -77,6 +95,12 @@ export class Browser {
     this.activeId = null;
     this.viewport = null;
     this.attachedViews = new Set();
+    // Display state (#11): a hidden window renders new pages offscreen so captures keep working.
+    this.hidden = false;
+    this.offscreen = false;
+    this.renderingFor = new Set();
+    // Optional: total page-renderer memory in MiB, used for memory-pressure suspension (#30).
+    this.rendererMemoryMb = null;
     // Set by WorkspaceExtensions; without it, extension-originated requests are cancelled.
     this.extensionRequestAllowed = null;
     this.session = session ?? this.sessionFor(this.workspaceId);
@@ -263,6 +287,7 @@ export class Browser {
 
   layout() {
     if (!this.window || this.window.isDestroyed()) return;
+    if (this.hidden) return this.layoutHidden();
     const [width, height] = this.window.getContentSize();
     const requested = this.viewport ?? { x: 0, y: 112, width: Math.max(1, width - 360), height: Math.max(1, height - 112), visible: true };
     const x = Math.min(requested.x, Math.max(0, width - 1));
@@ -270,8 +295,14 @@ export class Browser {
     const bounds = { x, y, width: Math.max(1, Math.min(requested.width, width - x)), height: Math.max(1, Math.min(requested.height, height - y)) };
     const active = this.tabs.get(this.activeId);
     const split = this.tabs.get(requested.splitTabId);
-    const visible = requested.visible && requested.width > 0 && requested.height > 0 && !active?.blocked && active?.workspaceId === this.workspaceId
+    const wanted = requested.visible && requested.width > 0 && requested.height > 0 && !active?.blocked && active?.workspaceId === this.workspaceId
       ? [active, ...(split && !split.blocked && split.id !== active.id && split.workspaceId === this.workspaceId ? [split] : [])] : [];
+    // Suspended tabs reload first; pages rendered offscreen while headless are re-created on screen when shown.
+    for (const tab of wanted) {
+      if (tab.suspended) void this.resumeTab(tab, 'shown').catch(() => {});
+      else if (tab.renderMode === 'offscreen') void this.convertRenderMode(tab, 'display attached').catch(() => {});
+    }
+    const visible = wanted.filter(tab => !tab.suspended && !tab.view.placeholder && tab.renderMode !== 'offscreen');
     for (const view of this.attachedViews) if (!visible.some(tab => tab.view === view)) {
       this.window.contentView.removeChildView(view);
       this.attachedViews.delete(view);
@@ -281,6 +312,20 @@ export class Browser {
       const half = Math.floor(bounds.width / visible.length);
       tab.view.setBounds({ ...bounds, x: bounds.x + index * half, width: index === visible.length - 1 ? bounds.width - index * half : half });
     });
+  }
+
+  /** Hidden window: keep the active tab (and any tab being captured) attached so offscreen rendering has a size. */
+  layoutHidden() {
+    const [width, height] = this.window.getContentSize();
+    const keep = new Set(this.renderingFor);
+    const active = this.tabs.get(this.activeId);
+    if (active && active.workspaceId === this.workspaceId && !active.blocked) keep.add(active);
+    const views = [...keep].filter(tab => !tab.suspended && !tab.view.placeholder).map(tab => tab.view);
+    for (const view of this.attachedViews) if (!views.includes(view)) { this.window.contentView.removeChildView(view); this.attachedViews.delete(view); }
+    for (const view of views) {
+      if (!this.attachedViews.has(view)) { this.window.contentView.addChildView(view); this.attachedViews.add(view); }
+      view.setBounds({ x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) });
+    }
   }
 
   tab(tabId = this.activeId) {
@@ -302,6 +347,9 @@ export class Browser {
       loading: contents.isLoading?.() ?? false, canGoBack: contents.navigationHistory?.canGoBack() ?? false,
       canGoForward: contents.navigationHistory?.canGoForward() ?? false, zoom: contents.getZoomFactor?.() ?? 1,
       blocked: tab.blocked ?? null, error: tab.error ?? null, warning: rule?.behavior === 'warn' ? `${rule.hostname}: ${rule.reason}` : null,
+      groupId: tab.groupId ?? null, renderMode: tab.suspended ? null : tab.renderMode ?? 'onscreen',
+      suspended: tab.suspended ? { at: tab.suspended.at, reason: tab.suspended.reason, scrollX: tab.suspended.scrollX, scrollY: tab.suspended.scrollY, zoom: tab.suspended.zoom } : null,
+      restored: tab.restoredFrom ?? null, lastActiveAt: tab.lastActiveAt ? new Date(tab.lastActiveAt).toISOString() : null,
       communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId), protection: this.protection(tab) };
   }
 
@@ -345,7 +393,9 @@ export class Browser {
   }
 
   async switchWorkspace(workspaceId) {
-    const selected = [...this.tabs.values()].find(tab => tab.workspaceId === workspaceId);
+    // Resume the tab this workspace last showed (#24), else its first tab.
+    const remembered = this.workspaceService?.data?.resumeStates?.find(item => item.workspaceId === workspaceId)?.activeTabId;
+    const selected = (this.tabs.get(remembered)?.workspaceId === workspaceId ? this.tabs.get(remembered) : null) ?? [...this.tabs.values()].find(tab => tab.workspaceId === workspaceId);
     this.session = this.sessionFor(workspaceId);
     return selected ? this.activate(selected.id) : this.newTab('about:blank', workspaceId);
   }
@@ -354,6 +404,8 @@ export class Browser {
     const tab = this.tab(tabId);
     if (tab.workspaceId !== this.workspaceId && this.workspaceService) throw new Error('Switch to the tab workspace before activating it');
     this.activeId = tabId;
+    tab.lastActiveAt = Date.now();
+    if (tab.suspended) void this.resumeTab(tab, 'activated').catch(() => {});
     this.layout();
     this.persist();
     return this.describe(tab);
@@ -362,20 +414,48 @@ export class Browser {
   async newTab(url = 'about:blank', workspaceId = this.workspaceId, restored = {}) {
     if (this.workspaceService && !this.workspaceService.snapshot().workspaces.some(workspace => workspace.id === workspaceId)) throw new Error('Workspace not found');
     url = safeUrl(url);
-    const view = new this.electron.WebContentsView({
-      webPreferences: {
-        session: this.sessions.get(workspaceId)?.session ?? this.sessionFor(workspaceId), nodeIntegration: false, contextIsolation: true,
-        sandbox: true, webSecurity: true, allowRunningInsecureContent: false,
-      },
-    });
     const id = Number.isSafeInteger(restored.id) && restored.id > 0 && !this.tabs.has(restored.id) ? restored.id : this.nextTabId;
     this.nextTabId = Math.max(this.nextTabId, id + 1);
     // Human ownership persists across restarts; agent leases end with the agent's connection.
     const humanHeld = restored.controller === 'human';
-    const tab = { id, workspaceId, view, url, title: restored.title, pinned: !!restored.pinned, version: restored.version || 1,
+    const group = typeof restored.groupId === 'string' ? this.workspaceService?.data?.tabGroups?.find(item => item.id === restored.groupId && item.workspaceId === workspaceId) : null;
+    const tab = { id, workspaceId, view: null, url, title: restored.title, pinned: !!restored.pinned, version: restored.version || 1,
       controller: humanHeld ? 'human' : 'available', assistant: humanHeld && typeof restored.assistant === 'string' ? restored.assistant.slice(0, 200) : null,
-      openerTabId: restored.openerTabId ?? null, openedBy: restored.openedBy ?? null };
+      openerTabId: restored.openerTabId ?? null, openedBy: restored.openedBy ?? null, groupId: group?.id ?? null, lastActiveAt: Date.now() };
     this.tabs.set(tab.id, tab);
+    if (restored.suspended && typeof restored.suspended === 'object') {
+      // A tab suspended before restart stays unloaded until it is opened or used.
+      const saved = restored.suspended;
+      tab.suspended = { at: typeof saved.at === 'string' ? saved.at : new Date().toISOString(), reason: typeof saved.reason === 'string' ? saved.reason.slice(0, 60) : 'restart',
+        scrollX: Number(saved.scrollX) || 0, scrollY: Number(saved.scrollY) || 0, zoom: Number(saved.zoom) || 1 };
+      tab.view = this.placeholderView(tab);
+      this.persist();
+      return this.describe(tab);
+    }
+    this.createView(tab);
+    if (workspaceId === this.workspaceId) this.activate(tab.id);
+    this.persist();
+    try { await tab.view.webContents.loadURL(this.allowedUrl(url, workspaceId, tab)); }
+    catch (error) {
+      tab.error = error.message; this.persist();
+      const blocked = error.code === 'site_blocked' ? error : tab.blocked ? this.blockedError(tab.blocked) : null;
+      throw Object.assign(new Error(`Navigation failed: ${(blocked ?? error).message}`), blocked ? { code: 'site_blocked', details: blocked.details } : {});
+    }
+    this.persist();
+    return this.describe(tab);
+  }
+
+  /** Create and wire a page view for a tab, on screen or (while the window is hidden) offscreen. */
+  createView(tab) {
+    const offscreen = this.offscreen;
+    const view = new this.electron.WebContentsView({
+      webPreferences: {
+        session: this.sessions.get(tab.workspaceId)?.session ?? this.sessionFor(tab.workspaceId), nodeIntegration: false, contextIsolation: true,
+        sandbox: true, webSecurity: true, allowRunningInsecureContent: false, ...(offscreen ? { offscreen: true } : {}),
+      },
+    });
+    tab.view = view;
+    tab.renderMode = offscreen ? 'offscreen' : 'onscreen';
     const contents = view.webContents;
     const guard = (event, target) => {
       try { this.allowedUrl(target, tab.workspaceId, tab); } catch (error) {
@@ -394,7 +474,7 @@ export class Browser {
       if (this.consumeSynthetic(tab, input)) return;
       // Any human interaction invalidates element refs and coordinates observed before it.
       if (['mouseDown', 'keyDown', 'rawKeyDown', 'mouseWheel'].includes(input.type)) tab.inputSerial = (tab.inputSerial ?? 0) + 1;
-      if (['mouseDown', 'keyDown', 'rawKeyDown'].includes(input.type)) { this.downloadGrants.set(tab.id, Date.now() + HUMAN_GESTURE_MS); tab.lastHumanInput = Date.now(); }
+      if (['mouseDown', 'keyDown', 'rawKeyDown'].includes(input.type)) { this.downloadGrants.set(tab.id, Date.now() + HUMAN_GESTURE_MS); tab.lastHumanInput = Date.now(); tab.lastActiveAt = Date.now(); }
       if (tab.controller !== 'human' && tab.controller !== 'available') {
         // Real native input is a human takeover at the next input boundary.
         // Already executed page scripts cannot be rolled back.
@@ -444,16 +524,7 @@ export class Browser {
       } catch (error) { tab.error = error.message; }
       return { action: 'deny' };
     });
-    if (workspaceId === this.workspaceId) this.activate(tab.id);
-    this.persist();
-    try { await contents.loadURL(this.allowedUrl(url, workspaceId, tab)); }
-    catch (error) {
-      tab.error = error.message; this.persist();
-      const blocked = error.code === 'site_blocked' ? error : tab.blocked ? this.blockedError(tab.blocked) : null;
-      throw Object.assign(new Error(`Navigation failed: ${(blocked ?? error).message}`), blocked ? { code: 'site_blocked', details: blocked.details } : {});
-    }
-    this.persist();
-    return this.describe(tab);
+    return view;
   }
 
   closeTab(tabId) {
@@ -463,6 +534,7 @@ export class Browser {
       this.attachedViews.delete(tab.view);
     }
     if (this.activeId === tabId) this.activeId = null;
+    this.renderingFor.delete(tab);
     this.cancelQueue(tab, 'tab closed');
     this.tabs.delete(tabId);
     const contents = tab.view.webContents;
@@ -473,6 +545,213 @@ export class Browser {
     }
     this.persist();
     return { closed: tabId };
+  }
+
+  // ---- Suspension, restoration and render modes (#30, #11) ---------------------------
+  /** Stand-in for a released renderer: the tab keeps its id, URL, title, version and ownership. */
+  placeholderView(tab) {
+    const contents = { id: -tab.id, placeholder: true, getURL: () => tab.url, getTitle: () => tab.title || '', isLoading: () => false,
+      navigationHistory: { canGoBack: () => false, canGoForward: () => false }, getZoomFactor: () => tab.suspended?.zoom ?? 1,
+      isDestroyed: () => true, isCurrentlyAudible: () => false, stop() {}, close() {}, on() {}, removeListener() {} };
+    return { placeholder: true, webContents: contents, setBounds() {} };
+  }
+
+  /** Reasons a tab cannot be suspended now. Empty means a reload would lose nothing Weft can detect. */
+  async suspensionBlockers(tab) {
+    if (tab.suspended) return ['already_suspended'];
+    const reasons = this.quickBlockers(tab);
+    if (reasons.length) return reasons;
+    const url = tab.view.webContents.getURL?.() || tab.url;
+    if (tab.blocked || !url || url === 'about:blank') return [];
+    try {
+      const page = await bounded(this.observe(tab.view.webContents, null, {}, SUSPENSION_CHECK), 2000);
+      if (page?.media) reasons.push('media');
+      if (page?.unsavedInput) reasons.push('unsaved_input');
+      if (page?.fullscreen) reasons.push('fullscreen');
+    } catch { reasons.push('page_check_failed'); }
+    return reasons;
+  }
+
+  quickBlockers(tab) {
+    const reasons = [];
+    if (tab.id === this.activeId && tab.workspaceId === this.workspaceId) reasons.push('active');
+    if (this.viewport?.splitTabId === tab.id) reasons.push('split_view');
+    if (this.renderingFor.has(tab)) reasons.push('capturing');
+    if (tab.pinned) reasons.push('pinned');
+    if (tab.controller && !['human', 'available'].includes(tab.controller)) reasons.push('agent_lease');
+    if (tab.assistant) reasons.push('agent_assist');
+    if (tab.inFlight || tab.inputQueue?.length) reasons.push('input_in_flight');
+    if (tab.protectedOperation) reasons.push('protected_operation');
+    if (tab.resuming || tab.converting) reasons.push('restoring');
+    if ((this.workspaceService?.data?.tasks ?? []).some(task => !TERMINAL_TASK.has(task.status) && Array.isArray(task.tabIds) && task.tabIds.includes(tab.id))) reasons.push('active_task');
+    if ([...this.downloads.values()].some(({ record }) => record.sourceTabId === tab.id && ['progressing', 'retrying'].includes(record.state))) reasons.push('download');
+    try { if (tab.view.webContents.isCurrentlyAudible?.()) reasons.push('media'); } catch { /* destroyed contents are handled by the caller */ }
+    return reasons;
+  }
+
+  /** Release a tab's renderer, keeping URL, title, scroll, zoom and every durable record. */
+  async freeze(tab, reason) {
+    const contents = tab.view.webContents;
+    let scroll = { scrollX: 0, scrollY: 0 };
+    try { const live = await bounded(this.observe(contents, 'viewport'), 2000); scroll = { scrollX: Number(live?.scrollX) || 0, scrollY: Number(live?.scrollY) || 0 }; } catch { /* restored at the top */ }
+    tab.url = tab.blocked?.url || contents.getURL() || tab.url;
+    tab.title = contents.getTitle() || tab.title;
+    const zoom = contents.getZoomFactor?.() ?? 1;
+    if (this.attachedViews.has(tab.view)) {
+      if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(tab.view);
+      this.attachedViews.delete(tab.view);
+    }
+    tab.suspended = { at: new Date().toISOString(), reason, ...scroll, zoom };
+    tab.view = this.placeholderView(tab);
+    tab.observations = null;
+    tab.version = (tab.version ?? 1) + 1;
+    this.stateBoundary(tab, `renderer released (${reason})`);
+    if (!contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
+  }
+
+  /** Suspend an idle background tab. Never suspends leased, task-bound, busy, playing or edited tabs. */
+  async suspendTab(tab, reason = 'requested') {
+    const blockedBy = await this.suspensionBlockers(tab);
+    // State may change while the page check runs: re-check the fast conditions.
+    if (!blockedBy.length) blockedBy.push(...this.quickBlockers(tab));
+    if (blockedBy.length || !this.tabs.has(tab.id)) return { suspended: false, tabId: tab.id, blockedBy: blockedBy.length ? blockedBy : ['closed'] };
+    await this.freeze(tab, reason);
+    this.onAudit?.({ type: 'resource', reason: 'tab_suspended', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, summary: { reason } });
+    this.onEvent?.({ type: 'tab', status: 'suspended', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
+    this.persist();
+    return { suspended: true, tabId: tab.id, tab: this.describe(tab),
+      notice: 'The page renderer was released. Opening or using the tab reloads its URL: sites may ask you to sign in again, and in-page state is not restored.' };
+  }
+
+  /** Reload a suspended tab from its checkpoint. Resolves when the page has loaded (or failed to). */
+  resumeTab(tab, reason = 'activated') {
+    if (tab.resuming) return tab.resuming;
+    if (!tab.suspended) return Promise.resolve(this.describe(tab));
+    const saved = tab.suspended;
+    tab.suspended = null;
+    this.createView(tab);
+    const contents = tab.view.webContents;
+    tab.version = (tab.version ?? 1) + 1;
+    this.stateBoundary(tab, `restored (${reason}): the page reloaded from its URL`);
+    tab.restoredFrom = { at: new Date().toISOString(), releasedAt: saved.at, releaseReason: saved.reason, reason,
+      notice: 'Reloaded from its URL. Sites may require signing in again; unsent form input and in-page script state are not restored.' };
+    tab.lastActiveAt = Date.now();
+    this.onEvent?.({ type: 'tab', status: 'restored', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
+    tab.resuming = (async () => {
+      try {
+        this.layout();
+        this.persist();
+        await contents.loadURL(this.allowedUrl(tab.url, tab.workspaceId, tab));
+        if (saved.zoom && saved.zoom !== 1) contents.setZoomFactor(saved.zoom);
+        if (saved.scrollX || saved.scrollY) await bounded(this.observe(contents, null, {}, `(() => { scrollTo(${Number(saved.scrollX) || 0}, ${Number(saved.scrollY) || 0}); return true; })()`), 2000).catch(() => {});
+      } catch (error) { tab.error = `Restore failed: ${error.message}`; }
+      finally { tab.resuming = null; this.layout(); this.persist(); }
+      return this.describe(tab);
+    })();
+    return tab.resuming;
+  }
+
+  /** Re-create a tab's renderer in the current display mode (offscreen while hidden). The page reloads. */
+  async convertRenderMode(tab, reason) {
+    const target = this.offscreen ? 'offscreen' : 'onscreen';
+    if (tab.suspended || tab.resuming || tab.converting || (tab.renderMode ?? 'onscreen') === target) return null;
+    tab.converting = true;
+    try {
+      // Let an in-flight agent action finish before its renderer is replaced.
+      for (let i = 0; i < 300 && tab.inFlight; i++) await delay(100);
+      if (!this.tabs.has(tab.id) || tab.suspended) return null;
+      let unsavedInput = null;
+      try { unsavedInput = (await bounded(this.observe(tab.view.webContents, null, {}, SUSPENSION_CHECK), 1500))?.unsavedInput === true; } catch { /* unknown */ }
+      await this.freeze(tab, reason);
+      await this.resumeTab(tab, reason);
+      return { tabId: tab.id, renderMode: target, unsavedInputLost: unsavedInput };
+    } finally { tab.converting = false; }
+  }
+
+  /** Switch between a visible window and a hidden (headless) one. Returns per-tab transition details. */
+  async setDisplayHidden(hidden, reason) {
+    this.hidden = hidden;
+    this.offscreen = hidden;
+    this.layout();
+    const converted = [];
+    // Hidden: every live page must render offscreen to stay capturable. Shown: only what the person sees now; others convert when opened.
+    const tabs = hidden ? [...this.tabs.values()] : [this.tabs.get(this.activeId), this.tabs.get(this.viewport?.splitTabId)].filter(Boolean);
+    for (const tab of tabs) {
+      const result = await this.convertRenderMode(tab, reason);
+      if (result) converted.push(result);
+    }
+    this.layout();
+    return { converted, pendingOnOpen: [...this.tabs.values()].filter(tab => !tab.suspended && (tab.renderMode ?? 'onscreen') !== (hidden ? 'offscreen' : 'onscreen')).map(tab => tab.id) };
+  }
+
+  /** Suspend background tabs idle beyond the configured time, then (with a memory budget) least recently used first until renderers fit. */
+  async suspendIdle({ now = Date.now() } = {}) {
+    if (this.suspending || this.closing) return [];
+    this.suspending = true;
+    try {
+      const limits = resourceSettings(this.workspaceService?.data?.settings);
+      const results = [];
+      const candidates = () => [...this.tabs.values()].filter(tab => !tab.suspended && !tab.resuming).sort((a, b) => (a.lastActiveAt ?? 0) - (b.lastActiveAt ?? 0));
+      if (limits.idleSuspendMinutes > 0) {
+        for (const tab of candidates()) if (now - (tab.lastActiveAt ?? now) >= limits.idleSuspendMinutes * 60000) results.push({ ...(await this.suspendTab(tab, 'idle')), trigger: 'idle' });
+      }
+      if (limits.memoryBudgetMb && typeof this.rendererMemoryMb === 'function') {
+        let used = await this.rendererMemoryMb();
+        for (const tab of candidates()) {
+          if (used <= limits.memoryBudgetMb) break;
+          const result = await this.suspendTab(tab, 'memory_pressure');
+          results.push({ ...result, trigger: 'memory_pressure', rendererMemoryMb: Math.round(used) });
+          if (result.suspended) used = await this.rendererMemoryMb();
+        }
+        this.memoryStatus = { at: new Date().toISOString(), rendererMemoryMb: Math.round(used), budgetMb: limits.memoryBudgetMb, overBudget: used > limits.memoryBudgetMb };
+      }
+      return results;
+    } finally { this.suspending = false; }
+  }
+
+  startResourceScheduler(intervalMs = 30000) {
+    clearInterval(this.resourceTimer);
+    this.resourceTimer = setInterval(() => { void this.suspendIdle().catch(() => {}); }, intervalMs);
+    this.resourceTimer.unref?.();
+  }
+
+  /** Tab quick switcher: titles and URLs with group, ownership and task indicators as text. */
+  searchTabs(query, workspaceIds) {
+    const terms = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const data = this.workspaceService?.data ?? {};
+    const groups = new Map((data.tabGroups ?? []).map(group => [group.id, group]));
+    const names = new Map((data.workspaces ?? []).map(item => [item.id, item.name]));
+    const tasks = (data.tasks ?? []).filter(task => !TERMINAL_TASK.has(task.status));
+    const label = state => state.controlMode === 'you-drive' ? 'You drive' : state.controlMode === 'assist' ? `Assist: ${state.assistant === 'any-agent' || !state.assistant ? 'an agent' : state.assistant} observes`
+      : state.controlMode === 'agent-drives' ? `Agent drives: ${state.controller}` : 'Available to agents';
+    const results = [];
+    for (const tab of this.tabs.values()) {
+      if (!workspaceIds.includes(tab.workspaceId)) continue;
+      const state = this.describe(tab);
+      const group = groups.get(tab.groupId);
+      let host = '';
+      try { host = new URL(state.url).hostname; } catch { /* about:blank */ }
+      const title = pageString(state.title, 300);
+      const haystack = `${title}\n${state.url}\n${group?.name ?? ''}`.toLowerCase();
+      if (!terms.every(term => haystack.includes(term))) continue;
+      const score = (terms.length && title.toLowerCase().startsWith(terms[0]) ? 4 : 0) + (terms.every(term => title.toLowerCase().includes(term)) ? 2 : 0) + (state.active ? 1 : 0);
+      results.push({ tabId: tab.id, workspaceId: tab.workspaceId, workspaceName: names.get(tab.workspaceId) ?? null, title, url: state.url, host, active: state.active, pinned: state.pinned,
+        suspended: Boolean(state.suspended), group: group ? { id: group.id, name: group.name, color: group.color } : null,
+        control: { mode: state.controlMode, controller: state.controller, label: label(state) }, activity: state.activity, queued: state.queued.length,
+        tasks: tasks.filter(task => task.tabIds?.includes(tab.id)).map(task => ({ id: task.id, title: task.title, status: task.status })), score });
+    }
+    results.sort((a, b) => b.score - a.score || a.tabId - b.tabId);
+    return { query: String(query || ''), count: results.length, contentTrust: 'untrusted', results: results.slice(0, 200).map(({ score, ...item }) => item) };
+  }
+
+  /** While headless, attach a tab long enough to render one capture. */
+  async renderForCapture(tab) {
+    if (!this.hidden || this.attachedViews.has(tab.view)) return () => {};
+    if ((tab.renderMode ?? 'onscreen') !== 'offscreen') await this.convertRenderMode(tab, 'offscreen capture');
+    this.renderingFor.add(tab);
+    this.layout();
+    await bounded(this.observe(tab.view.webContents, null, {}, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))'), 3000).catch(() => {});
+    return () => { this.renderingFor.delete(tab); this.layout(); };
   }
 
   async captureArtifact({ tabId, kind, workspaceId }, context = { actor: 'human' }) {
@@ -572,6 +851,12 @@ export class Browser {
   async execute(name, args = {}, context = { actor: 'human' }) {
     this.admission.assertAutomationAdmitted(context.actor, name);
     const human = isHuman(context.actor);
+    // Using a tab keeps it active; a suspended or still-restoring tab reloads before page work (#30).
+    const used = args.tabId != null ? this.tabs.get(args.tabId) : name.startsWith('page.') ? this.tabs.get(this.activeId) : null;
+    if (used && (name.startsWith('page.') || name.startsWith('tabs.') || name === 'downloads.approve')) {
+      used.lastActiveAt = Date.now();
+      if ((used.suspended || used.resuming) && !SUSPENDED_OK.has(name)) await this.resumeTab(used, name);
+    }
     const tab = mutatingCommands.has(name) ? this.tab(args.tabId) : null;
     const slot = tab ? await this.acquireInput(tab, name, context.actor, human) : null;
     const epoch = tab?.controlEpoch ?? 0;
@@ -909,6 +1194,28 @@ export class Browser {
       case 'tabs.close': return this.closeTab(args.tabId);
       case 'tabs.duplicate': { const tab = this.tab(args.tabId); return this.newTab(this.describe(tab).url, tab.workspaceId); }
       case 'tabs.pin': { const tab = this.tab(args.tabId); tab.pinned = args.pinned; tab.version++; this.persist(); return this.describe(tab); }
+      case 'tabs.group': {
+        const tab = this.tab(args.tabId);
+        if (args.groupId !== null) {
+          const group = (this.workspaceService?.data?.tabGroups ?? []).find(item => item.id === args.groupId);
+          if (!group) throw failure('not_found', 'Tab group not found');
+          if (group.workspaceId !== tab.workspaceId) throw failure('target_mismatch', 'Tab groups hold tabs from their own workspace only');
+        }
+        tab.groupId = args.groupId;
+        this.persist();
+        return this.describe(tab);
+      }
+      case 'tabs.search': {
+        // All-workspace search is for the person and the unscoped local token; scoped clients search their workspace.
+        const all = args.allWorkspaces === true && (human || !context.workspaceIds);
+        const workspaces = all ? (this.workspaceService?.data?.workspaces ?? []).filter(item => !item.archived).map(item => item.id) : [workspaceId];
+        return this.searchTabs(args.query, workspaces);
+      }
+      case 'tabs.suspend': {
+        const tab = this.tab(args.tabId);
+        if (args.expectedVersion != null && args.expectedVersion !== tab.version) throw stale('version', 'Stale tab version; inspect current state');
+        return this.suspendTab(tab, human ? 'person' : 'agent request');
+      }
       case 'tabs.move': {
         const old = this.tab(args.tabId);
         const replacement = await this.newTab(this.describe(old).url, workspaceId, { pinned: old.pinned });
@@ -1120,10 +1427,26 @@ export class Browser {
     } catch { return null; }
   }
 
-  /** Viewport, full-page, element or region PNG with complete capture geometry. */
+  /**
+   * Viewport, full-page, element or region PNG with complete capture geometry. The human-set
+   * resource limit caps every caller's resolution; while headless the tab renders offscreen.
+   */
   async screenshot(tab, args, context) {
+    const edge = resourceSettings(this.workspaceService?.data?.settings).maxCaptureEdge ?? CAPTURE_LIMITS.defaultMaxEdge;
+    const limited = { ...args, maxWidth: Math.min(args.maxWidth ?? edge, edge), maxHeight: Math.min(args.maxHeight ?? edge, edge) };
+    if (!this.hidden && !this.attachedViews.has(tab.view)) throw new Error('Show the tab before capturing a screenshot');
+    const before = tab.version;
+    const release = await this.renderForCapture(tab);
+    try {
+      const result = await this.screenshotRendered(tab, limited, context);
+      if (this.hidden) result.capture.limitations.push('Rendered offscreen while Weft has no visible window.');
+      if (result.capture.navigationVersion !== before) result.capture.limitations.push('The tab reloaded to render offscreen before this capture.');
+      return result;
+    } finally { release(); }
+  }
+
+  async screenshotRendered(tab, args, context) {
     const contents = tab.view.webContents;
-    if (!this.attachedViews.has(tab.view)) throw new Error('Show the tab before capturing a screenshot');
     if ([args.ref != null, args.rect != null, !!args.fullPage].filter(Boolean).length > 1) throw failure('invalid_arguments', 'Choose at most one of fullPage, ref or rect');
     await this.assertObservable(tab, 'page.screenshot', context);
     const mode = args.ref != null ? 'element' : args.rect ? 'region' : args.fullPage ? 'fullPage' : 'viewport';
@@ -1216,6 +1539,7 @@ export class Browser {
     if (this.closing) return null;
     this.persist();
     this.closing = true;
+    clearInterval(this.resourceTimer);
     this.window?.removeListener('resize', this.onResize);
     for (const id of [...this.tabs.keys()]) this.closeTab(id);
     for (const { item } of this.downloads.values()) item?.cancel();

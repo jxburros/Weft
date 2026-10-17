@@ -20,6 +20,7 @@ import { WorkspaceExtensions } from './extensions.js';
 import { PluginRegistry } from './plugins/registry.js';
 import { UpdateService, createElectronTransport, createWindowsSignatureVerifier, detectInstall } from './updater.js';
 import { WEFT_VERSION } from './version.js';
+import { DisplayController, displayEnvironment, profileFingerprint } from './display.js';
 
 let browser;
 let workspace;
@@ -31,6 +32,8 @@ let lists;
 let listTimer;
 let plugins;
 let updates;
+let display;
+let quitting = false;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const relay = new TurnRelay();
@@ -40,6 +43,15 @@ applyEngineHardening(app);
 let quitCleanupDone = false;
 // Packaged builds keep the same profile folder as source runs ("weft"), whatever the product name.
 if (app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) app.setPath('userData', join(app.getPath('appData'), 'weft'));
+// Headless sessions (#11, ADR 015): the same profile, GUI renderer, policies and commands with the window hidden.
+const launchHeadless = process.argv.includes('--headless') || ['1', 'true'].includes(String(process.env.WEFT_HEADLESS || '').toLowerCase());
+// One Weft process per profile. Launching again hands the request to the running session (display handoff)
+// instead of opening a second, unrelated browser on the same profile.
+const primary = app.requestSingleInstanceLock({ weft: 1, show: !launchHeadless });
+if (!primary) {
+  console.log(launchHeadless ? 'Weft is already running with this profile; nothing else was started.' : 'Weft is already running with this profile; its window was asked to show.');
+  app.exit(0);
+}
 
 function createUpdates() {
   const install = detectInstall({ isPackaged: app.isPackaged, platform: process.platform, arch: process.arch, env: process.env, resourcesPath: process.resourcesPath });
@@ -68,7 +80,7 @@ function trusted(event) {
   }
 }
 
-app.whenReady().then(async () => {
+if (primary) app.whenReady().then(async () => {
   const port = Number(process.env.WEFT_PORT ?? 9222);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('WEFT_PORT must be between 1 and 65535');
   const token = process.env.WEFT_TOKEN || randomBytes(32).toString('hex');
@@ -110,7 +122,7 @@ app.whenReady().then(async () => {
   await providers.init();
   window = new BrowserWindow({
     width: 1480, height: 960, minWidth: 1000, minHeight: 640,
-    title: 'Weft', backgroundColor: '#F4F1EA',
+    title: 'Weft', backgroundColor: '#F4F1EA', show: !launchHeadless,
     icon: fileURLToPath(new URL('../assets/logo/icons/app-icon-plum-512.png', import.meta.url)),
     webPreferences: {
       preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)),
@@ -123,6 +135,13 @@ app.whenReady().then(async () => {
   browser = new Browser({ window, workspaceService: workspace, admission });
   browser.onAudit = entry => activity.append(entry);
   browser.onEvent = event => events.emit('event', event);
+  // A hidden window renders pages offscreen so captures keep working without a display (ADR 015).
+  if (launchHeadless) { browser.hidden = true; browser.offscreen = true; }
+  // Page renderer memory (the GUI renderer excluded) drives memory-pressure suspension when a budget is set (#30).
+  browser.rendererMemoryMb = () => {
+    const gui = window && !window.isDestroyed() ? window.webContents.getOSProcessId() : null;
+    return app.getAppMetrics().filter(metric => metric.type === 'Tab' && metric.pid !== gui).reduce((sum, metric) => sum + (metric.memory?.workingSetSize ?? 0), 0) / 1024;
+  };
   workspace.attachBrowser(browser);
   // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
   plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
@@ -133,7 +152,30 @@ app.whenReady().then(async () => {
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, onEvent: event => events.emit('event', event) });
+  const environment = displayEnvironment({ ozone: app.commandLine.getSwitchValue('ozone-platform') });
+  if (!environment.supported) console.warn(`Weft display: ${environment.reason}`);
+  display = new DisplayController({ window, browser, launchedHeadless: launchHeadless, userData: app.getPath('userData'), environment,
+    pendingApprovals: () => authority.pendingApprovals(), audit: entry => activity.append(entry), onEvent: event => events.emit('event', event) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, display, onEvent: event => events.emit('event', event) });
+  // Launching Weft again attaches a person to this session; a second headless launch changes nothing.
+  app.on('second-instance', (_event, argv, _cwd, data) => {
+    if (data?.show === false || argv.includes('--headless')) return;
+    void display.show({ source: 'relaunch' }).catch(error => console.error('Weft display:', error.message));
+  });
+  // Closing the window of a session started headless detaches the person; Weft keeps running.
+  window.on('close', event => {
+    if (!launchHeadless || quitting) return;
+    event.preventDefault();
+    void display.hide({ source: 'window closed' }).catch(error => console.error('Weft display:', error.message));
+  });
+  // A human decision needed while no window is visible is announced where the operator can see it.
+  let announced = 0;
+  events.on('event', event => {
+    if (display.visible || event.type !== 'command' || event.status !== 'blocked') return;
+    const pending = authority.pendingApprovals();
+    if (pending > announced) console.log(`Weft (headless): ${pending} agent request${pending === 1 ? ' needs' : 's need'} a human decision. Run "weft attach" or launch Weft again to show the window.`);
+    announced = pending;
+  });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
@@ -144,6 +186,7 @@ app.whenReady().then(async () => {
     return dispatch(name, args, { actor: 'human', source: 'gui' });
   });
   await browser.restore();
+  browser.startResourceScheduler();
   await window.loadURL(guiUrl);
   server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, turns: relay, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
   await new Promise((resolve, reject) => {
@@ -153,6 +196,7 @@ app.whenReady().then(async () => {
   server.on('error', error => { console.error('Weft API error:', error.message); app.quit(); });
   console.log(`Weft API: http://127.0.0.1:${port}`);
   if (!process.env.WEFT_TOKEN) console.log(`Generated WEFT_TOKEN (local access only): ${token}`);
+  if (launchHeadless) console.log(`Weft is running headless (profile ${profileFingerprint(app.getPath('userData'))}). Attach with "weft attach" or by launching Weft again.`);
   // Health check for the first launches of a new version: GUI loaded, API listening, store open.
   updates?.confirmHealthy({ gui: !window.isDestroyed() && window.webContents.getURL() === guiUrl, api: server.listening, workspace: Boolean(workspace.data) });
   updates?.startBackground();
@@ -163,7 +207,10 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
+// A headless session stopped from a terminal or service manager still exits cleanly (lock, temporary data).
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => app.quit());
 app.on('before-quit', event => {
+  quitting = true;
   clearInterval(listTimer);
   updates?.stopBackground();
   server?.close();

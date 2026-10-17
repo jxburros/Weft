@@ -37,9 +37,12 @@ const ID_TOKEN = /\b[a-z]{2,12}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 const EXPORT_EXCLUDED = Object.freeze(['Browser sessions, tabs, cookies and site storage', 'Credentials, provider keys and model connection settings', 'Global site rules', 'Activity log and browsing history', 'Local search index and request identities', 'Local backups',
   'Site storage modes and exceptions: browser privacy policy for this profile; set them again after import',
   'Community list subscriptions: signed list state is verified on install; subscribe again to receive and track rules',
-  'Approvals, autonomy ceilings and agent connection grants: authority is never transferred with data']);
+  'Approvals, autonomy ceilings and agent connection grants: authority is never transferred with data',
+  'Tab groups and the last-view resume record: they describe this profile’s open tabs and layout, not project records']);
 // Workspace-scoped profile state that is deliberately not part of the export format (listed above with the reason).
-const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists']);
+const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists', 'tabGroups', 'resumeStates']);
+// Workspace-scoped view state removed with its workspace.
+const VIEW_STATE = ['tabGroups', 'resumeStates'];
 
 export function sanitizeUrl(value) {
   try {
@@ -89,7 +92,7 @@ function createWorkspace(name = 'My workspace') {
 }
 function initialState() {
   const initial = createWorkspace();
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [] };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [], tabGroups: [], resumeStates: [] };
 }
 function artifactSummary(record) {
   const copy = clone(record);
@@ -187,6 +190,8 @@ export class WorkspaceService {
       for (const name of collections) if (data[name] === undefined) data[name] = [];
       // Handoffs were added without a schema bump; older stores start with none.
       if (!Array.isArray(data.handoffs)) data.handoffs = [];
+      // Tab groups and resume records (#24) likewise start empty in older stores.
+      for (const key of VIEW_STATE) if (!Array.isArray(data[key])) data[key] = [];
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
         rejectSecretKeys(migrated);
@@ -262,7 +267,7 @@ export class WorkspaceService {
         const current = this.data.history.filter(item => item.workspaceId === workspaceId);
         if (current.length > 1000) { const remove = new Set(current.slice(0, current.length - 1000).map(item => item.id)); this.data.history = this.data.history.filter(item => !remove.has(item.id)); }
       }
-      this.save();
+      this.save({ only: ['history'] });
     } catch (error) { this.data.history = before; throw error; }
   }
 
@@ -288,11 +293,15 @@ export class WorkspaceService {
   persistSession(session) {
     const before = this.data.browserSession;
     this.data.browserSession = {
-      tabs: session.tabs.map(tab => ({ id: tab.id, workspaceId: tab.workspaceId, url: sanitizeUrl(tab.url) || 'about:blank', title: String(tab.title || '').slice(0, 1000), pinned: Boolean(tab.pinned), version: tab.version || 0, group: String(tab.group || '').slice(0, 100),
+      tabs: session.tabs.map(tab => ({ id: tab.id, workspaceId: tab.workspaceId, url: sanitizeUrl(tab.url) || 'about:blank', title: String(tab.title || '').slice(0, 1000), pinned: Boolean(tab.pinned), version: tab.version || 0,
+        ...(typeof tab.groupId === 'string' && { groupId: tab.groupId.slice(0, 128) }),
+        // A suspended tab is restored unloaded at its saved scroll position (#30).
+        ...(tab.suspended && { suspended: { at: String(tab.suspended.at || '').slice(0, 40), reason: String(tab.suspended.reason || '').slice(0, 60), scrollX: Number(tab.suspended.scrollX) || 0, scrollY: Number(tab.suspended.scrollY) || 0, zoom: Number(tab.suspended.zoom) || 1 } }),
         controller: tab.controller === 'human' ? 'human' : 'available', ...(tab.controller === 'human' && tab.assistant && { assistant: String(tab.assistant).slice(0, 200) }) })),
       activeId: session.activeId ?? null,
     };
-    try { this.save(); } catch (error) { this.data.browserSession = before; throw error; }
+    // Only the session row is written: frequent tab updates never re-serialize every record (#30).
+    try { this.save({ only: ['browserSession'] }); } catch (error) { this.data.browserSession = before; throw error; }
   }
   snapshot() {
     return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(artifactSummary), materials: this.data.materials.map(withoutFile) };
@@ -520,7 +529,8 @@ export class WorkspaceService {
     }
     if (collection === 'workspaces') return this.mutateWorkspace(action, args, actor, effects);
     if (name === 'settings.update') {
-      this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }) };
+      this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }),
+        ...(args.resources && { resources: { ...this.data.settings.resources, ...args.resources } }) };
       this.log(name, workspaceId, workspaceId, actor);
       return this.data.settings;
     }
@@ -586,7 +596,7 @@ export class WorkspaceService {
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
       if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
       if (this.data.storagePolicies) this.data.storagePolicies = this.data.storagePolicies.filter(item => item.workspaceId !== record.id);
-      for (const key of [...collections, 'activity', 'history', 'handoffs']) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
+      for (const key of [...collections, 'activity', 'history', 'handoffs', ...VIEW_STATE]) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
       effects.push(() => this.browser?.closeWorkspace?.(record.id), switchBrowser);
     } else if (action === 'duplicate') {

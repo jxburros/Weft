@@ -51,6 +51,10 @@ add('administration', 'update.check update.install update.rollback update.config
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Resume state, tab groups and search (#24); scheduling, suspension and capture queue (#30); display handoff (#11).
+add('local_read', 'resume.get tabGroups.list tabs.search resources.status captures.list display.status');
+add('local_write', 'resume.save tabGroups.create tabGroups.update tabGroups.delete tabs.group tabs.suspend captures.cancel display.show');
+add('administration', 'display.hide browsingData.sources browsingData.preview browsingData.import');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -99,9 +103,9 @@ export function sensitiveCategoriesForCommand(name) {
 /** Resource a command writes: decides which client write scope applies. Derived from namespace so new commands are covered. */
 export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
-  if (['tabs', 'page', 'downloads'].includes(namespace)) return 'tabs';
+  if (['tabs', 'page', 'downloads', 'captures'].includes(namespace)) return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
-  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions'].includes(namespace)) return 'browser';
+  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions', 'display', 'browsingData'].includes(namespace)) return 'browser';
   return 'records';
 }
 
@@ -116,6 +120,7 @@ const dataOverrides = {
   'chat.send': ['conversations', 'workspace_records'], 'conversations.message': ['conversations'],
   'workspace.snapshot': ['workspace_records', 'conversations', 'browsing_history', 'activity'],
   'search.query': ['workspace_records', 'conversations'],
+  'tabs.search': ['workspace_records'], 'display.status': [], 'resources.status': [], 'captures.list': [],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];

@@ -71,7 +71,7 @@ export function checkExamples(markdown, source = '<markdown>') {
       const count = words[0] === 'node' ? 2 : words[0] === 'npm' ? 4 : 1;
       const [command = 'help', json, ...extra] = words.slice(count);
       if (extra.length) throw new Error(`${source}:${line}: unsupported shell syntax; use a docs-test skip marker with a reason`);
-      if (['commands', 'help', '--help', '-h', 'mcp'].includes(command)) {
+      if (['commands', 'help', '--help', '-h', 'mcp', 'attach'].includes(command)) {
         if (json) throw new Error(`${source}:${line}: unexpected arguments to ${command}`);
         checked.push({ source, line, command });
       } else validate(command, json ? JSON.parse(json) : {});

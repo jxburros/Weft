@@ -317,17 +317,23 @@ export class MetadataStore {
     this.defineLazy(object, name, marker);
     return marker;
   }
-  plan(state) {
+  /**
+   * Rows and settings a commit would write. `only` restricts the plan to the named top-level keys
+   * (for example the browser session or history) so frequent small writes do not re-serialize
+   * every record, and never commit unrelated in-memory changes that are still in progress.
+   */
+  plan(state, only = null) {
     if (!state || typeof state !== 'object') throw failure('STORE_INVALID', 'Workspace state must be an object');
     const plan = { meta: [], metaDeletes: [], collections: new Map(), upserts: [], reseq: [], deletes: [], layout: null };
-    const keys = Object.keys(state).filter(key => state[key] !== undefined);
+    const considered = key => !only || only.includes(key);
+    const keys = Object.keys(state).filter(key => state[key] !== undefined && considered(key));
     const collections = keys.filter(key => isRecordArray(state[key]));
     for (const key of keys) {
       if (collections.includes(key)) continue;
       const json = JSON.stringify(state[key]);
       if (this.meta.get(key) !== json) plan.meta.push({ key, json, value: state[key] });
     }
-    for (const key of this.meta.keys()) if (!keys.includes(key) || collections.includes(key)) plan.metaDeletes.push(key);
+    for (const key of this.meta.keys()) if (considered(key) && (!keys.includes(key) || collections.includes(key))) plan.metaDeletes.push(key);
     for (const name of collections) {
       const previous = this.docs.get(name) || new Map();
       let maxSeq = this.maxSeq.get(name) || 0;
@@ -347,8 +353,8 @@ export class MetadataStore {
       const ids = new Set(state[name].map(record => record.id));
       for (const id of previous.keys()) if (!ids.has(id)) plan.deletes.push({ collection: name, id });
     }
-    for (const name of this.layout) if (!collections.includes(name)) for (const id of (this.docs.get(name) || new Map()).keys()) plan.deletes.push({ collection: name, id });
-    const layout = [...collections].sort();
+    for (const name of this.layout) if (considered(name) && !collections.includes(name)) for (const id of (this.docs.get(name) || new Map()).keys()) plan.deletes.push({ collection: name, id });
+    const layout = only ? [...new Set([...[...this.layout].filter(name => !considered(name)), ...collections])].sort() : [...collections].sort();
     if (canonicalJson(layout) !== canonicalJson([...this.layout].sort())) plan.layout = layout;
     return plan;
   }
@@ -363,10 +369,10 @@ export class MetadataStore {
       state: [...plan.meta.map(item => item.key), ...plan.metaDeletes].sort(),
     };
   }
-  commit(state, { requests = [], removeRequests = [], deferCollection = false } = {}) {
+  commit(state, { requests = [], removeRequests = [], deferCollection = false, only = null } = {}) {
     this.assertOpen();
     this.assertOwned();
-    const plan = this.plan(state);
+    const plan = this.plan(state, only);
     // Secret checks precede any component or row write.
     for (const row of plan.upserts) rejectSecretKeys(row.record);
     for (const item of plan.meta) rejectSecretKeys(item.value);

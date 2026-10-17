@@ -16,6 +16,10 @@ import { storageCommandDefinitions } from './site-storage.js';
 import { threatCommandDefinitions } from './threat-intel.js';
 import { downloadSafetyCommandDefinitions } from './download-safety.js';
 import { updateCommandDefinitions } from './updater.js';
+import { resourceCommandDefinitions } from './resources.js';
+import { resumeCommandDefinitions } from './resume.js';
+import { displayCommandDefinitions } from './display.js';
+import { browsingCommandDefinitions } from './browsing-import.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -49,6 +53,12 @@ const definitions = {
   'tabs.move': ['Reopen a tab in another workspace isolated container', { tabId: tabId.unwrap(), workspaceId: workspaceId.unwrap(), expectedVersion }],
   'tabs.pin': ['Pin or unpin a tab', { tabId: tabId.unwrap(), pinned: z.boolean(), expectedVersion }],
   'tabs.duplicate': ['Duplicate a tab in its workspace', { tabId: tabId.unwrap() }],
+  'tabs.group': ['Put a tab in a tab group of its workspace, or remove it from its group with null', { tabId: tabId.unwrap(),
+    groupId: z.string().min(1).max(128).nullable().describe('Tab group id from tabGroups.list; null ungroups the tab.') }],
+  'tabs.search': ['Search open tab titles and URLs with group, ownership, task and suspension indicators', {
+    query: z.string().max(500).describe('Words that must all appear in the title, URL or group name; empty lists every tab.'),
+    allWorkspaces: z.boolean().optional().describe('Search every workspace (the person and the unscoped local token only).') }],
+  'tabs.suspend': ['Release an idle background tab renderer, keeping its URL, scroll and records; refused for leased, task-bound, busy, playing or edited tabs', { tabId: tabId.unwrap(), expectedVersion }],
   'tabs.claim': ['Claim tab input control', { tabId: tabId.unwrap(), controller: z.string().min(1).max(100).optional(), expectedVersion }],
   'tabs.takeover': ['Human takes control and revokes old versions', { tabId: tabId.unwrap() }],
   'tabs.release': ['Release tab input control', { tabId: tabId.unwrap() }],
@@ -120,6 +130,10 @@ const definitions = {
   ...threatCommandDefinitions,
   ...downloadSafetyCommandDefinitions,
   ...updateCommandDefinitions,
+  ...resourceCommandDefinitions,
+  ...resumeCommandDefinitions,
+  ...displayCommandDefinitions,
+  ...browsingCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -133,7 +147,8 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
   'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
-  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+  'display.hide', ...Object.keys(browsingCommandDefinitions)]);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
@@ -214,7 +229,7 @@ export function toCommandError(error, commandName, input) {
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
     unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
-    command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 };
+    command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422, resource_busy: 429, budget_exhausted: 429 };
   let code = error?.code === 'SITE_BLOCKED' ? 'site_blocked' : Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
     if (/stale|STALE_STATE/i.test(message)) code = 'stale_state';
@@ -257,6 +272,14 @@ export function toCommandError(error, commandName, input) {
       hostname: text(error.details.hostname, 253), source: text(error.details.source, 50), mode: text(error.details.mode, 30), reason: text(error.details.reason), category: text(error.details.category, 50),
       stale: typeof error.details.stale === 'boolean' ? error.details.stale : null, exception: text(error.details.exception), explain: text(error.details.explain, 50) };
   }
+  // Backpressure and budgets (#30): fixed resource names and numbers only.
+  const count = value => Number.isFinite(value) && value >= 0 ? Math.round(value * 1e6) / 1e6 : null;
+  if (code === 'resource_busy' && error.details) details.busy = { resource: ['agent_commands', 'client', 'task', 'capture_queue'].includes(error.details.resource) ? error.details.resource : null,
+    limit: count(error.details.limit), active: count(error.details.active), queued: count(error.details.queued), retryAfterMs: count(error.details.retryAfterMs) };
+  if (code === 'budget_exhausted' && error.details) details.budget = { budget: ['runtime', 'cost', 'actions'].includes(error.details.budget) ? error.details.budget : null,
+    limit: count(error.details.limit), used: count(error.details.used), unit: typeof error.details.unit === 'string' && /^[A-Za-z]{1,10}$/.test(error.details.unit) ? error.details.unit : null,
+    reason: ['unpriced_model', 'currency_mismatch'].includes(error.details.reason) ? error.details.reason : null };
+  if (code === 'cancelled' && typeof error.details?.jobId === 'string' && /^capture_[0-9a-f-]{36}$/.test(error.details.jobId)) details.jobId = error.details.jobId;
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   if (code === 'unsupported_capability') {
     if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback'].includes(error.details?.capability)) details.capability = error.details.capability;
@@ -296,7 +319,7 @@ export function normalizeCommand(name, args = {}) {
   return { command, args: output, normalized };
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
-  stale_state: 3, idempotency_conflict: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
+  stale_state: 3, idempotency_conflict: 3, resource_busy: 3, budget_exhausted: 4, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
   emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;

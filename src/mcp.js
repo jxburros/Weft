@@ -5,10 +5,10 @@ import { commands, executeOutcome, errorOutcome, CommandError, normalizeCommand 
 import { WEFT_VERSION } from './version.js';
 
 const groups = {
-  tabs: ['tabs'], page: ['page'],
-  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups'],
+  tabs: ['tabs', 'tabGroups'], page: ['page'],
+  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'resume', 'resources'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],
-  artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update'], models: ['models', 'chat'],
+  artifacts: ['artifacts', 'captures'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'display', 'browsingData'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {
   const actions = Object.keys(commands).filter(name => namespaces.includes(name.split('.')[0]));
