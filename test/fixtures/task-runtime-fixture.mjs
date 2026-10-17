@@ -40,7 +40,7 @@ export function createRuntimeFixture({ directory, providers = null, credentials,
     page.urls[id] = url;
     browser.tabs.set(id, { id, workspaceId, version: 1, controller: 'available', view: { webContents: {
       getURL: () => page.urls[id], getTitle: () => 'Fixture', stop: () => {}, reload: () => {}, isDestroyed: () => false, close: () => {},
-      loadURL: async url => { page.urls[id] = url; }, navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      loadURL: async url => { page.urls[id] = url; }, sendInputEvent: () => {}, focus: () => {}, navigationHistory: { canGoBack: () => false, canGoForward: () => false },
       executeJavaScript: async source => {
         scripts.push({ tabId: id, source });
         const held = holds.get(id);

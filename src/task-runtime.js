@@ -330,7 +330,8 @@ export class TaskRuntime {
     const cursor = task.run.cursor;
     const current = task.plan[cursor];
     // Steps that started (or hold uncertain work) stay; everything not started may be replaced.
-    const keep = current && (this.active.get(task.id)?.inFlight || this.lastOperation(task, current.id)) ? cursor + 1 : cursor;
+    const last = current ? this.lastOperation(task, current.id) : null;
+    const keep = current && (this.active.get(task.id)?.inFlight || this.unresolved(last) || last?.status === 'interrupted') ? cursor + 1 : cursor;
     let replacement;
     if (args.steps) replacement = this.validatePlan(args.steps, new Set(task.plan.slice(0, keep).map(step => step.id)), { allowPlaceholders: Boolean(task.workflowRun) });
     const changed = ['objective', 'nextStep', 'modelId'].filter(key => args[key] !== undefined).concat(args.steps ? ['steps'] : []);
@@ -860,7 +861,7 @@ export class TaskRuntime {
     }
     for (const parameter of parameters) {
       const supplied = values && Object.hasOwn(values, parameter.name) ? values[parameter.name] : parameter.default;
-      if (supplied === undefined || supplied === '') { if (parameter.required && values) errors.push(`Parameter ${parameter.name} is required`); continue; }
+      if (supplied === undefined || (supplied === '' && parameter.required)) { if (parameter.required && values) errors.push(`Parameter ${parameter.name} is required`); continue; }
       const problem = this.checkParameter(parameter, supplied, workflow.workspaceId);
       if (problem) errors.push(`Parameter ${parameter.name}: ${problem}`);
       else resolved[parameter.name] = parameter.type === 'number' ? Number(supplied) : parameter.type === 'boolean' ? supplied === true || supplied === 'true' : supplied;
@@ -892,8 +893,8 @@ export class TaskRuntime {
         }
         const url = step.args?.url;
         if (typeof url === 'string' && !placeholders(url).size && (workflow.allowedSites ?? []).length && !matchDestination(workflow.allowedSites, url)) issues.push(`${minimizeUrl(url)} is outside the allowed sites`);
-        if (step.recorded?.note) warnings.push(`Step ${index + 1}: ${step.recorded.note}`);
       }
+      if (step.recorded?.note) warnings.push(`Step ${index + 1}: ${step.recorded.note}`);
       if (kind === 'model' && !step.prompt) issues.push('model steps need a prompt');
       if (kind === 'command' && !step.command) issues.push('command steps need a command');
       for (const issue of issues) errors.push(`Step ${index + 1} (${step.title}): ${issue}`);
