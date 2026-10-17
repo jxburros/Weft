@@ -112,6 +112,14 @@ test('request identities are atomic with the mutation, survive restart and expir
   assert.equal((await reopened.execute('materials.list')).length, 2);
 });
 
+test('oversized results are not retained but retries still never apply twice', async t => {
+  const { workspace } = service(t);
+  const args = { title: 'Large file', kind: 'file', filename: 'large.bin', fileBase64: Buffer.alloc(1536 * 1024, 7).toString('base64'), requestId: 'large-1' };
+  await workspace.execute('materials.create', args);
+  await assert.rejects(workspace.execute('materials.create', args), error => error.code === 'already_committed' && /1 MiB/.test(error.message));
+  assert.equal((await workspace.execute('materials.list')).length, 1);
+});
+
 test('batches validate everything first and apply all-or-nothing in one transaction', async t => {
   const { workspace } = service(t);
   const before = workspace.storage.contentDigest();

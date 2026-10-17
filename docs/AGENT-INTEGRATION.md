@@ -36,7 +36,7 @@ Retrying the same command with the same arguments returns the original result,
 and the outcome carries `idempotency: {"requestId": ..., "replayed": true}`.
 Reusing an ID with different arguments fails with `idempotency_conflict` (exit 3)
 and applies nothing. Identities are scoped to the calling client, kept with
-their result for 7 days and as fingerprints for 30; a retry whose stored result
+their result for 7 days (results over 1 MiB are not kept) and as fingerprints for 30; a retry whose stored result
 has expired fails with `already_committed` (read current state instead).
 A command that failed recorded nothing and may be retried.
 

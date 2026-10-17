@@ -7,7 +7,7 @@ import { workspaceSchemas, recordShapes } from './workspace-commands.js';
 import { acquireProfileLock, storageWarnings, syncDirectory } from './storage-safety.js';
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
-import { MetadataStore, RECOVERY_DIR, canonicalJson } from './store.js';
+import { MetadataStore, OMITTED_RESULT, RECOVERY_DIR, canonicalJson } from './store.js';
 import { componentPath, sha256 } from './components.js';
 import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 
@@ -376,6 +376,7 @@ export class WorkspaceService {
     if (!existing) return { record: { scope, requestId, command: name, fingerprint, workspaceId: args.workspaceId ?? context.workspaceId ?? null } };
     if (existing.fingerprint !== fingerprint || existing.command !== name) throw fail('idempotency_conflict', 'requestId was already used with a different command or arguments; nothing was applied. Use a new requestId for a different request.');
     if (existing.result === null) throw fail('already_committed', 'requestId was already committed, but its result is no longer retained. Read current state instead of retrying.');
+    if (existing.result === OMITTED_RESULT) throw fail('already_committed', 'requestId was already committed; its result exceeded the 1 MiB retention limit. Read current state instead of retrying.');
     return { replay: markReplayed(JSON.parse(existing.result)) };
   }
   async runBatch(input, context) {

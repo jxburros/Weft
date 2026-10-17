@@ -139,14 +139,24 @@ test('older exports without format version import with reported initialization',
   }
 });
 
-test('duplicate copies revisions and stored components without reading them into the export', async t => {
-  const { service } = fixture(t);
+test('duplicate and package import keep component-backed files and captures across restart', async t => {
+  const { service, directory } = fixture(t);
   const source = await project(service);
   const copy = await service.execute('workspaces.duplicate', { id: service.activeWorkspaceId, name: 'Copy' });
-  const [artifact] = await service.execute('artifacts.list', { workspaceId: copy.id });
-  assert.equal((await service.execute('artifacts.get', { id: artifact.id })).versions[0].pngBase64, (await service.execute('artifacts.get', { id: source.capture.id })).versions[0].pngBase64);
-  const [material] = (await service.execute('materials.list', { workspaceId: copy.id })).filter(item => item.title === 'Paper');
-  assert.equal(material.history.length, 2);
+  await service.execute('workspaces.exportPackage', { id: source.material.workspaceId, name: 'restart-check' });
+  const packaged = await service.execute('workspaces.importPackage', { name: 'restart-check' });
+  service.close();
+  const reopened = new WorkspaceService({ directory, onWarning() {} });
+  t.after(() => reopened.close());
+  for (const workspaceId of [copy.id, packaged.id]) {
+    const [artifact] = await reopened.execute('artifacts.list', { workspaceId });
+    const full = await reopened.execute('artifacts.get', { id: artifact.id });
+    assert.equal(full.versions[0].pngBase64, PNG('one'));
+    assert.equal(full.versions[1].text, 'second capture');
+    const [material] = (await reopened.execute('materials.list', { workspaceId })).filter(item => item.title === 'Paper');
+    assert.equal(material.history.length, 2);
+    assert.equal(Buffer.from((await reopened.execute('materials.get', { id: material.id })).fileBase64, 'base64').toString(), 'file body');
+  }
 });
 
 test('package transfer moves projects larger than the REST limit with verified components', async t => {

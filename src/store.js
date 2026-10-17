@@ -12,6 +12,7 @@ export const COMPONENTS_DIR = 'components';
 export const RECOVERY_DIR = 'recovery';
 export const MAX_DOCUMENT_BYTES = 64 * 1024 * 1024;
 const MAX_RETAINED_RESULT = 1024 * 1024;
+export const OMITTED_RESULT = '{"$omitted":"size"}';
 export const REQUEST_RETENTION = Object.freeze({ resultMs: 7 * 24 * 3600 * 1000, fingerprintMs: 30 * 24 * 3600 * 1000, maxEntries: 50000 });
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
 const recordKey = (collection, id) => `${collection}\u0000${id}`;
@@ -273,7 +274,8 @@ export class MetadataStore {
   serialize(collection, record, { write }) {
     const key = recordKey(collection, record.id);
     const registered = this.markers.get(key);
-    if (!registered && collection !== 'artifacts') {
+    // Fast path: no registered or newly attached (non-enumerable) component fields.
+    if (!registered && collection !== 'artifacts' && Object.getOwnPropertyNames(record).length === Object.keys(record).length) {
       const doc = JSON.stringify(record);
       if (!doc.includes('Base64"')) return { doc, markers: [] };
     }
@@ -405,7 +407,7 @@ export class MetadataStore {
         for (const item of removeRequests) db.prepare('DELETE FROM requests WHERE scope = ? AND request_id = ?').run(item.scope, item.requestId);
         for (const item of requests) {
           const result = item.result === undefined ? null : JSON.stringify(item.result);
-          db.prepare('INSERT INTO requests(scope, request_id, command, fingerprint, workspace_id, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(item.scope, item.requestId, item.command, item.fingerprint, item.workspaceId ?? null, result && Buffer.byteLength(result) <= MAX_RETAINED_RESULT ? result : null, this.clock());
+          db.prepare('INSERT INTO requests(scope, request_id, command, fingerprint, workspace_id, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(item.scope, item.requestId, item.command, item.fingerprint, item.workspaceId ?? null, result && Buffer.byteLength(result) > MAX_RETAINED_RESULT ? OMITTED_RESULT : result, this.clock());
         }
         this.pruneRequests();
       });
