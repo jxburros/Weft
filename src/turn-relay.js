@@ -20,7 +20,7 @@ export const turnFrameSchema = z.discriminatedUnion('type', [
   z.strictObject({ ...frameBase, type: z.literal('delta'), text: z.string() }),
   z.strictObject({ ...frameBase, type: z.literal('end'), status: z.enum(TURN_STATUSES), finishReason: z.string().max(40).nullish(), continuable: z.boolean().optional(),
     partialSaved: z.boolean().optional(), usage: usage.optional(), cost: z.strictObject({ estimate: z.literal(true), amount: z.number(), currency: z.string().max(3), basis: z.string().max(200) }).nullable().optional(),
-    deadline: z.enum(['first_token', 'idle', 'total']).optional(), error: z.string().max(500).optional() }),
+    deadline: z.enum(['first_token', 'idle', 'total', 'request']).optional(), error: z.string().max(500).optional() }),
 ]);
 
 /**

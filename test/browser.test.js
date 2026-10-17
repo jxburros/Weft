@@ -159,9 +159,13 @@ if (mainSmoke) {
           assert.equal(count, Object.keys(commands).length);
           const guiInfo = await window.webContents.executeJavaScript('window.weft.executeOutcome("browser.info")');
           const rawInfo = await window.webContents.executeJavaScript('window.weft.execute("browser.info")');
-          assert.deepEqual(guiInfo, await executeOutcome(() => rawInfo, 'browser.info'));
+          // The dispatcher adds the authenticated request linkage; everything else is the shared outcome.
+          const { request, ...guiOutcome } = guiInfo;
+          assert.deepEqual(request, { apiVersion: 1, requestId: null, actor: 'human', clientId: null, taskId: null, deadlineMs: null });
+          assert.deepEqual(guiOutcome, await executeOutcome(() => rawInfo, 'browser.info'));
           const invalidInput = { tab_id: -1 };
-          const guiInvalid = await window.webContents.executeJavaScript(`window.weft.executeOutcome('tabs.close', ${JSON.stringify(invalidInput)})`);
+          const { request: invalidRequest, ...guiInvalid } = await window.webContents.executeJavaScript(`window.weft.executeOutcome('tabs.close', ${JSON.stringify(invalidInput)})`);
+          assert.equal(invalidRequest.actor, 'human');
           assert.deepEqual(guiInvalid, await executeOutcome(() => assert.fail('invalid input must not execute'), 'tabs.close', invalidInput));
           const preferences = window.webContents.getLastWebPreferences();
           assert.equal(preferences.sandbox, true);

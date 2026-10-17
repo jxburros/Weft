@@ -351,7 +351,7 @@ export class Knowledge {
     let credential = null;
     if (service.credentialState === 'stored') credential = this.credentials.get(record.id);
     if (service.credentialState === 'revoked') throw denied('this service reference was revoked; store a new credential before refreshing');
-    const result = await fetchService(service, { credential, fetchImpl: this.fetchImpl });
+    const result = await fetchService(service, { credential, fetchImpl: this.fetchImpl, signal: context.signal ?? null });
     return this.inQueue(context, () => {
       const current = this.service(id, context);
       const live = current.service;

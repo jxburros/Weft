@@ -102,7 +102,7 @@ async function fixture(t) {
   const url = `http://127.0.0.1:${server.address().port}`;
   const rest = async (command, args = {}, bearer = token) => {
     const response = await fetch(`${url}/v1/execute`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify({ command, args }) });
-    return { status: response.status, ...(await response.json()) };
+    return { ...(await response.json()), status: response.status };
   };
   const cli = async (command, args = {}, bearer = token) => {
     let result;

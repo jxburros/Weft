@@ -13,6 +13,8 @@ import { createDispatcher } from '../src/dispatch.js';
 import { createApiServer } from '../src/server.js';
 import { Knowledge } from '../src/knowledge.js';
 import { ServiceCredentials } from '../src/linked-sources.js';
+import { domainEvents } from '../src/events.js';
+import { sanitizeEvent } from '../src/server.js';
 
 const human = { actor: 'human', source: 'gui' };
 const fakeSafeStorage = { isEncryptionAvailable: () => true, getSelectedStorageBackend: () => 'test_keyring',
@@ -41,7 +43,7 @@ async function fixture(t) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const rest = async (command, args, bearer) => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/execute`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify({ command, args }) });
-    return { status: response.status, ...(await response.json()) };
+    return { ...(await response.json()), status: response.status };
   };
   const run = async (command, args, context = human) => {
     const outcome = await dispatch(command, args, context);
@@ -480,4 +482,35 @@ test('restricted capture originals stay withheld through shared collections, cit
   const raw = await f.rest('artifacts.readOriginal', { id: capture.id, versionId: original }, partner.token);
   assert.notEqual(raw.error, null);
   assert.equal(leaks(raw), false);
+});
+
+test('integration contracts reach knowledge commands: deadlines stop service refreshes, new collections page, and grants emit metadata events', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  let release;
+  const server = createServer((request, response) => { release = () => { response.writeHead(200, { 'content-type': 'text/plain' }); response.end('late body'); }; });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { release?.(); server.closeAllConnections?.(); return new Promise(resolve => server.close(resolve)); });
+  const reference = await f.run('services.create', { workspaceId: f.a, title: 'Slow policy', url: `http://127.0.0.1:${server.address().port}/policy` });
+  const stopped = await f.dispatch('services.refresh', { id: reference.id }, { ...human, deadlineMs: 150 });
+  assert.equal(stopped.error?.code, 'deadline_exceeded', JSON.stringify(stopped.error));
+  assert.equal(stopped.error.details.effect, 'stopped', 'the request was aborted instead of reported as uncertain');
+  const material = f.workspace.data.materials.find(item => item.id === reference.id);
+  assert.equal(material.service.versions.length, 0);
+  assert.equal(material.service.lastAttemptAt, undefined, 'a stopped refresh records nothing');
+
+  for (const name of ['One', 'Two', 'Three']) await f.run('collections.create', { workspaceId: f.a, name });
+  const first = await f.run('collections.list', { workspaceId: f.a, page: { limit: 2 } });
+  assert.equal(first.total, 3);
+  assert.equal(first.items.length, 2);
+  const second = await f.run('collections.list', { workspaceId: f.a, page: { cursor: first.nextCursor } });
+  assert.deepEqual([...first.items, ...second.items].map(item => item.name), ['One', 'Two', 'Three']);
+  assert.equal(second.nextCursor, null);
+  assert.ok(Array.isArray(await f.run('collections.list', { workspaceId: f.a })), 'without page the established list is unchanged');
+  const conflicts = await f.run('conflicts.list', { workspaceId: f.a, page: { limit: 5 } });
+  assert.deepEqual([conflicts.items, conflicts.total], [[], 0]);
+  // Grants become metadata-only events: collection id, status and owner workspace, never names or members.
+  const granted = await f.dispatch('collections.grant', { id: first.items[0].id, memberWorkspaceId: f.b, role: 'read' }, human);
+  const [event] = domainEvents(granted, { actor: 'human' }).map(sanitizeEvent);
+  assert.deepEqual({ type: event.type, status: event.status, collectionId: event.collectionId, workspaceId: event.workspaceId }, { type: 'collection', status: 'granted', collectionId: first.items[0].id, workspaceId: f.a });
+  assert.equal(JSON.stringify(event).includes('One'), false);
 });

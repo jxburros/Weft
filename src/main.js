@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser, applyEngineHardening } from './browser.js';
 import { commands, CommandError } from './commands.js';
-import { createApiServer } from './server.js';
+import { createApiServer, EventLog, sanitizeEvent } from './server.js';
+import { Transfers } from './transfers.js';
+import { Retrieval } from './retrieval.js';
 import { WorkspaceService } from './workspace.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
@@ -37,6 +39,7 @@ let freshnessTimer;
 let plugins;
 let updates;
 let credentials;
+let retrieval;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const relay = new TurnRelay();
@@ -111,9 +114,17 @@ app.whenReady().then(async () => {
       return image.resize({ width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)), quality: 'good' }).toPNG();
     },
     readPage: ({ tabId, workspaceId }) => modelTool('page.readable', { tabId, workspaceId }, workspaceId),
-    searchWorkspace: ({ workspaceId, query }) => modelTool('search.query', { workspaceId, query, limit: 20 }, workspaceId),
+    // Page mode returns citations plus coverage and the verified-absence signal for "not found" answers.
+    searchWorkspace: ({ workspaceId, query, limit = 20 }) => modelTool('search.query', { workspaceId, query, page: { limit } }, workspaceId),
   });
   await providers.init();
+  // Optional embeddings: inert until a person enables them for a workspace with an existing connection.
+  retrieval = new Retrieval({ workspace, providers, audit: entry => activity.append(entry) });
+  workspace.attachRetrieval(retrieval);
+  const transfers = new Transfers({ workspace });
+  // One retained, sanitized event log serves /v1/events replay and events.list for CLI/MCP.
+  const eventLog = new EventLog();
+  events.on('event', event => eventLog.append(sanitizeEvent(event)));
   window = new BrowserWindow({
     width: 1480, height: 960, minWidth: 1000, minHeight: 640,
     title: 'Weft', backgroundColor: '#F4F1EA',
@@ -147,7 +158,7 @@ app.whenReady().then(async () => {
   // Service credentials live only in OS-protected storage; scheduled freshness checks are opt-in per workspace.
   const knowledge = new Knowledge({ workspace, credentials: new ServiceCredentials({ directory, safeStorage }), audit: entry => activity.append(entry), protectedPaths: [app.getPath('userData')] });
   freshnessTimer = setInterval(() => { if (!admission.status.stopped) knowledge.runScheduled().catch(error => console.warn(`Weft freshness: ${error.message}`)); }, 15 * 60_000); freshnessTimer.unref?.();
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, knowledge, admission, onEvent: event => events.emit('event', event) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, knowledge, admission, transfers, eventLog, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
@@ -165,7 +176,7 @@ app.whenReady().then(async () => {
   });
   await browser.restore();
   await window.loadURL(guiUrl);
-  server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, turns: relay, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
+  server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, turns: relay, eventLog, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
@@ -190,6 +201,7 @@ app.on('before-quit', event => {
   server?.close();
   providers?.close();
   credentials?.close();
+  retrieval?.close();
   relay.close();
   plugins?.close();
   const cleanup = browser?.close();

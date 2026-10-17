@@ -12,7 +12,7 @@ contextBridge.exposeInMainWorld('weft', {
   executeOutcome: (name, args = {}) => ipcRenderer.invoke('weft:execute', name, args),
   execute: async (name, args = {}) => {
     const outcome = await ipcRenderer.invoke('weft:execute', name, args);
-    if (outcome.error) throw Object.assign(new Error(outcome.error.message), outcome.error);
+    if (outcome.error) throw Object.assign(new Error(outcome.error.message), outcome.error, { status: outcome.status });
     return outcome.result;
   },
 });

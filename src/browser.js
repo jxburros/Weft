@@ -264,6 +264,8 @@ export class Browser {
         summary: { url, category: finding.category, source: finding.source, listId: finding.listId, stale: Boolean(finding.stale) } }
       : { type: 'block', reason: 'site_rule', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, targetId: rule.id,
         summary: { hostname: rule.hostname, scope: rule.scope, mode: rule.mode, source: ruleSource(rule) } });
+    // Metadata only: never the URL, rule reason or finding text.
+    this.onEvent?.({ type: 'navigation', status: 'blocked', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
     this.layout();
     this.persist();
   }
@@ -464,8 +466,13 @@ export class Browser {
       // An exact-visit exception ends as soon as the tab commits any other destination.
       if (tab.allowUrl !== this.overrideKey(contents.getURL())) { tab.allowUrl = null; tab.allowSecurity = false; }
       this.layout(); this.persist();
+      this.onEvent?.({ type: 'navigation', status: 'committed', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
     });
-    contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame === false) return; tab.version++; this.stateBoundary(tab, 'in-page navigation'); this.persist(); });
+    contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
+      if (isMainFrame === false) return;
+      tab.version++; this.stateBoundary(tab, 'in-page navigation'); this.persist();
+      this.onEvent?.({ type: 'navigation', status: 'in_page', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version });
+    });
     contents.on('did-start-navigation', details => {
       if (!details?.isMainFrame || details.isSameDocument || (details.frame && details.frame !== contents.mainFrame)) return;
       tab.navigating = details.url;
@@ -568,6 +575,12 @@ export class Browser {
     // screenshot bypass the per-command checks, so protection is checked before capture, before serialization and after.
     const agent = !isHuman(context.actor);
     if (agent) await this.assertObservable(tab, 'page.snapshot', context);
+    // A caller deadline (ADR 018) stops the capture between steps; nothing is saved because the record transaction then rolls back.
+    const signal = context.signal ?? null;
+    const assertRunning = () => { if (signal?.aborted) throw failure('cancelled', 'Archive capture stopped: the request deadline passed; nothing was saved'); };
+    const stopping = new Promise((_, reject) => { if (signal) signal.addEventListener('abort', () => reject(failure('cancelled', 'Archive capture stopped: the request deadline passed; nothing was saved')), { once: true }); });
+    stopping.catch(() => {});
+    const abortable = promise => signal ? Promise.race([promise, stopping]) : promise;
     const protectionAtStart = tab.protectionSerial ?? 0;
     const fillAtStart = tab.credentialFill ?? null;
     const assertUnprotected = () => {
@@ -603,11 +616,12 @@ export class Browser {
       for (;;) {
         let complete = false;
         try { complete = !contents.isLoading() && (await bounded(this.observe(contents, null, {}, 'document.readyState'), 1000)) === 'complete'; } catch { complete = false; }
+        assertRunning();
         if (complete) { readiness = { state: 'ready', waitedMs: Date.now() - readyStart, timeoutMs: readyLimit }; break; }
         if (Date.now() - readyStart >= readyLimit) { readiness = { state: 'timeout', waitedMs: Date.now() - readyStart, timeoutMs: readyLimit }; incomplete.push('page-not-ready'); break; }
         await delay(100);
       }
-      readable = await bounded(this.execute('page.readable', { tabId: tab.id }, context), remaining());
+      readable = await abortable(bounded(this.execute('page.readable', { tabId: tab.id }, context), remaining()));
       try {
         const raw = await bounded(this.observe(contents, 'snapshot', { maxNodes: 3000, includeBoxes: false }), remaining());
         coverage = { virtualized: raw.virtualized ?? [], lazyImages: raw.counts?.lazyImages ?? 0, busyRegions: raw.counts?.busy ?? 0, inaccessibleFrames: raw.counts?.inaccessibleFrames ?? 0,
@@ -617,11 +631,12 @@ export class Browser {
       try { screenshot = await bounded(this.execute('page.screenshot', { tabId: tab.id }, context), remaining()); }
       catch (error) { incomplete.push('screenshot-unavailable'); limitations.push(`Screenshot unavailable: ${String(error.message).slice(0, 200)}`); }
       assertUnprotected();
+      assertRunning();
       const temp = this.captureTempDirectory();
       const file = join(temp, 'page.mhtml');
       const maxResourceBytes = options.maxResourceBytes ?? ARCHIVE_LIMITS.maxResourceBytes;
       try {
-        await bounded(contents.savePage(file, 'MHTML'), remaining());
+        await abortable(bounded(contents.savePage(file, 'MHTML'), remaining()));
         const size = statSync(file).size;
         // Base64 and quoted-printable inflate the file; refuse files far beyond what the archive could store.
         if (size > ARCHIVE_LIMITS.maxArchiveBytes * 2) throw Object.assign(new Error(`Serialized page is ${size} bytes, beyond the archive limit`), { code: 'archive_too_large' });
@@ -632,6 +647,7 @@ export class Browser {
         archive = buildArchive({ mhtml: readFileSync(file), references, resourceLog: log, limits: { maxResourceBytes } });
         if (!archive.complete) incomplete.push('resources-not-stored');
       } catch (error) {
+        if (signal?.aborted) throw error;
         incomplete.push(/timed out/i.test(error.message) ? 'archive-timeout' : 'archive-failed');
         archive = { format: ARCHIVE_FORMAT, formatVersion: ARCHIVE_FORMAT_VERSION, status: 'failed', reason: String(error.message).slice(0, 300), resources: [], counts: {}, complete: false };
       } finally { rmSync(temp, { recursive: true, force: true }); }
@@ -639,6 +655,7 @@ export class Browser {
       for (const [event, listener] of Object.entries(listeners)) contents.removeListener(event, listener);
     }
     assertUnprotected();
+    assertRunning();
     const finishedAt = new Date();
     if (finishedAt.getTime() > deadline) incomplete.push('capture-time-limit');
     if (tab.version !== startVersion || stateChanges.some(item => item.kind !== 'in-page-navigation')) incomplete.push('page-changed-during-capture');
@@ -1588,6 +1605,8 @@ export class Browser {
         if (authorized.length > 1 || authorized[0].count > 1) throw refuse('ambiguous_login_form', 'Several login forms are present; pass ref with the password field from your latest page.snapshot', 'ambiguous_target');
         target = authorized[0];
       }
+      // A caller deadline (ADR 018) that passed before the secret left the broker stops the fill with nothing filled.
+      if (context.signal?.aborted) throw Object.assign(failure('cancelled', 'The request deadline passed before the fill; nothing was filled', { credential: 'interrupted' }), { notStarted: true });
       released = true;
       const secret = await release(topOrigin, target.origin);
       const unchanged = () => tab.version === version && contents.mainFrame === main && main.origin === topOrigin && !target.frame.isDestroyed?.() && target.frame.origin === target.origin
@@ -1596,6 +1615,7 @@ export class Browser {
       let navigation = null;
       try {
         if ((tab.controlEpoch ?? 0) !== epoch) throw refuse('interrupted', 'Tab control changed before the fill; nothing was filled', 'action_interrupted');
+        if (context.signal?.aborted) throw refuse('interrupted', 'The request deadline passed before the fill; nothing was filled', 'cancelled');
         if (!unchanged()) throw refuse('navigated', 'The page changed between the origin check and the fill; nothing was filled');
         navigation = this.watchNavigation(tab, tab.blocked);
         // From here the secret may be in the page: residue protections apply even if the script reports a failure.

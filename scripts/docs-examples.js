@@ -68,6 +68,15 @@ export function checkExamples(markdown, source = '<markdown>') {
       const text = raw.trim().replace(/^\$\s+/, '');
       if (!/^(?:weft(?:\s|$)|node\s+(?:\.\/)?bin\/weft\.js(?:\s|$)|npm\s+run\s+cli\s+--(?:\s|$))/.test(text)) continue;
       const words = shellWords(text);
+      // CLI options are not command arguments: --deadline-ms <ms> or --deadline-ms=<ms>.
+      for (let index = 0; index < words.length; index++) {
+        const option = /^--deadline-ms(?:=(.*))?$/.exec(words[index]);
+        if (!option) continue;
+        const value = option[1] ?? words[index + 1];
+        if (!/^\d{1,6}$/.test(value ?? '') || Number(value) < 1 || Number(value) > 600000) throw new Error(`${source}:${line}: --deadline-ms needs 1-600000`);
+        words.splice(index, option[1] === undefined ? 2 : 1);
+        index--;
+      }
       const count = words[0] === 'node' ? 2 : words[0] === 'npm' ? 4 : 1;
       const [command = 'help', json, ...extra] = words.slice(count);
       if (extra.length) throw new Error(`${source}:${line}: unsupported shell syntax; use a docs-test skip marker with a reason`);

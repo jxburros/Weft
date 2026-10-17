@@ -6,6 +6,7 @@ import { ComponentStore, sha256 } from './components.js';
 import { syncDirectory } from './storage-safety.js';
 import { rejectSecretKeys } from './export-safety.js';
 import { SEARCH_INDEX_VERSION, compileQuery, indexable, recordDocument, versionDocument } from './search-index.js';
+import { VectorIndex } from './vector-index.js';
 
 export const STORE_FILE = 'workspace.sqlite';
 export const COMPONENTS_DIR = 'components';
@@ -124,7 +125,11 @@ export class MetadataStore {
     this.db = db;
     this.readOnly = readOnly;
     try {
-      if (!readOnly) { this.migrate(); this.ensureSearchIndex(); }
+      if (!readOnly) {
+        this.migrate(); this.ensureSearchIndex();
+        this.vectors = new VectorIndex(db);
+        this.vectors.ensure(key => this.info(key), (key, value) => this.setInfo(key, value));
+      }
       else if (this.version() > STORE_SCHEMA_VERSION) throw failure('STORE_UNSUPPORTED', 'Workspace database was written by a newer Weft version');
       const stat = statSync(this.path);
       this.identity = `${stat.dev}:${stat.ino}`;
@@ -401,6 +406,8 @@ export class MetadataStore {
           db.prepare('DELETE FROM component_refs WHERE collection = ? AND record_id = ?').run(row.collection, id);
           for (const [hash, size] of next) db.prepare('INSERT INTO component_refs(sha256, collection, record_id, size) VALUES (?, ?, ?, ?)').run(hash, row.collection, id, size);
           this.indexRecord(row.collection, row.record);
+          if (row.collection === 'artifacts') this.vectors?.pruneUnindexed(row.collection, id);
+          if (indexable(row.collection, row.record)) this.vectors?.enqueue(row.collection, row.record, this.clock());
         }
         for (const row of plan.reseq) db.prepare('UPDATE records SET seq = ? WHERE collection = ? AND id = ?').run(row.seq, row.collection, row.record.id);
         for (const item of plan.deletes) {
@@ -408,6 +415,7 @@ export class MetadataStore {
           for (const hash of refsOf(item.collection, item.id)) released.add(hash);
           db.prepare('DELETE FROM component_refs WHERE collection = ? AND record_id = ?').run(item.collection, item.id);
           this.unindexRecord(item.collection, item.id);
+          this.vectors?.remove(item.collection, item.id);
         }
         if (plan.layout) this.setInfo('layout', JSON.stringify(plan.layout));
         for (const item of removeRequests) db.prepare('DELETE FROM requests WHERE scope = ? AND request_id = ?').run(item.scope, item.requestId);
@@ -543,6 +551,20 @@ export class MetadataStore {
     this.db.prepare('DELETE FROM search_docs WHERE rowid = ?').run(rowid);
   }
   /** BM25-ranked full-text search, scoped to one workspace inside the SQL query. */
+  /** Title, excerpt and citation fields of one indexed document (vector-only results). */
+  document({ collection, recordId, versionId = '', start = 0 }) {
+    const row = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, f.title AS title, substr(f.body, ?, 300) AS excerpt
+      FROM search_docs d JOIN search_fts f ON f.rowid = d.rowid WHERE d.collection = ? AND d.record_id = ? AND d.version_id = ?`).get(Math.max(1, start + 1), collection, recordId, versionId);
+    return row ? { ...row, excerpt: `${start ? '…' : ''}${String(row.excerpt || '').replace(/\s+/g, ' ').trim()}` } : null;
+  }
+  /** Number of documents a query matches in a workspace (all or any terms). */
+  searchCount({ workspaceId, query }) {
+    const compiled = compileQuery(query);
+    if (!compiled || typeof workspaceId !== 'string') return 0;
+    return this.db.prepare('SELECT count(*) AS count FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid WHERE search_fts MATCH ? AND d.workspace_id = ?').get(compiled.any ?? compiled.all, workspaceId).count;
+  }
+  /** Indexed documents of a workspace (lexical coverage). */
+  documentCount(workspaceId) { return this.db.prepare('SELECT count(*) AS count FROM search_docs WHERE workspace_id = ?').get(workspaceId).count; }
   search({ workspaceId, query, limit = 50 }) {
     this.assertOpen();
     const compiled = compileQuery(query);

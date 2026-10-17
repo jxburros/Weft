@@ -199,6 +199,29 @@ test('explicit read-only tool loop uses fixed tab/workspace scope, persists evid
   assert.ok(requests[3].messages.some(message => message.content?.includes('Previous read-only tool result')));
 });
 
+test('search results returned to a model tool are capped at 0.4 of the window after the reserved reply', async t => {
+  const requests = [];
+  const items = Array.from({ length: 60 }, (_, index) => ({ id: `context-${index}`, title: `Result ${index}`, content: 'evidence '.repeat(40), citation: { recordId: `context-${index}` } }));
+  const fixtureData = await fixture(t, (_req, res, body) => {
+    requests.push(body);
+    if (requests.length === 1) reply(res, toolReply('workspace_search', { query: 'evidence' }));
+    else reply(res, { choices: [{ message: { content: 'Summarized.' } }] });
+  }, { searchWorkspace: async () => ({ items, nextCursor: null, total: 60, absence: null }) });
+  const { providers, model, conversations } = fixtureData;
+  conversations.get('conversation-1').workspaceId = 'project-a';
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: model.endpoint, model: model.model, tools: true,
+    capabilities: { contextWindow: 8192, maxOutputTokens: 2048 } });
+  await fixtureData.send({ allowReadTools: true });
+  const tool = JSON.parse(requests[1].messages.at(-1).content);
+  const framed = JSON.parse(tool.result.split('\n')[1]);
+  const sent = JSON.parse(framed.content);
+  const cap = Math.floor(0.4 * (8192 - 2048));
+  assert.equal(sent.retrievalCap.capTokens, cap);
+  assert.ok(sent.retrievalCap.sentTokens <= cap);
+  assert.ok(sent.retrievalCap.omitted > 0 && sent.items.length === 60 - sent.retrievalCap.omitted);
+  assert.deepEqual(sent.items.map(item => item.id), items.slice(0, sent.items.length).map(item => item.id), 'highest-ranked results are kept whole');
+});
+
 test('tools need explicit request consent plus enabled model capability', async t => {
   let reads = 0;
   const fixtureData = await fixture(t, (_req, res) => reply(res, toolReply('page_readable')), {

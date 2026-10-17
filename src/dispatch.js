@@ -1,4 +1,8 @@
-import { commands, executeOutcome, normalizeCommand, validateCommand, CommandError } from './commands.js';
+import { commands, executeOutcome, normalizeCommand, validateCommand, errorOutcome, CommandError, API_VERSION, OUTCOME_STATUSES, ERROR_HTTP_STATUS, ERROR_STATUS, exitCodes } from './commands.js';
+import { PAGEABLE, pageItems } from './pagination.js';
+import { describeCapabilities, MAX_DEADLINE_MS, DEADLINE_GRACE_MS } from './capabilities.js';
+import { domainEvents, listEvents } from './events.js';
+import { EVENT_TYPES } from './server.js';
 import { BATCHABLE } from './workspace.js';
 import { commandDefinitions as workspaceCommands } from './workspace-commands.js';
 import { resolveCommandTargets } from './admission.js';
@@ -9,11 +13,14 @@ import { executeHookCommand, pluginCommandAdminDefinitions } from './plugin-comm
 import { PluginRegistry } from './plugins/registry.js';
 import { Knowledge } from './knowledge.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list'];
+// Commands that page natively; every other pageable command is paged here from its full list.
+const NATIVE_PAGED = new Set(['search.query', 'conversations.messages', 'artifacts.versions', 'transfers.list']);
+const DEADLINE = Symbol('deadline');
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, plugins = new PluginRegistry(), knowledge, admission, authority, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
@@ -26,6 +33,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   /** Catalog metadata, with plugins.invoke raised to the invoked plugin operation's manifest-derived class. */
   const specFor = (command, args) => {
     const spec = commands[command] ?? {};
+    // Package folders can hold any workspace's records: reading them is human administration.
+    if (command === 'transfers.read' && args?.source?.kind === 'package') return { ...spec, actionClass: 'administration', dataClasses: [...new Set([...(spec.dataClasses ?? []), 'workspace_records', 'conversations'])] };
     if (command !== 'plugins.invoke') return spec;
     const classified = plugins.classify?.(args.name, args.operation);
     if (!classified) return spec;
@@ -48,7 +57,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         const args = validateCommand(prepared.command, prepared.args);
         if (context.workspaceIds?.length === 1 && commands[prepared.command]?.inputSchema?.properties?.workspaceId && args.workspaceId == null) args.workspaceId = context.workspaceIds[0];
         const placeholder = JSON.stringify(args).match(/"\$(\d+)\.id"/);
-        const resolved = resolveCommandTargets(prepared.command, args, context, { workspace, browser, commands });
+        const resolved = resolveCommandTargets(prepared.command, args, context, { workspace, browser, commands, transfers });
         return { index, command: prepared.command, args: resolved.args, target: resolved.target, spec: specFor(prepared.command, resolved.args), placeholder: placeholder ? Number(placeholder[1]) : null };
       } catch (error) {
         const details = error instanceof CommandError ? error.toJSON() : null;
@@ -85,7 +94,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       validated.workspaceId = context.workspaceIds[0];
     }
     if (command === 'batch.execute') return runBatch(validated, context, target, state);
-    const resolved = resolveCommandTargets(command, validated, context, { workspace, browser, commands });
+    const resolved = resolveCommandTargets(command, validated, context, { workspace, browser, commands, transfers });
     const args = resolved.args;
     Object.assign(target, resolved.target);
     if (context.workspaceIds && !['human', 'admin'].includes(context.actor)) {
@@ -106,9 +115,28 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       clients?.assertAllowed(command, context, { workspaceId: target.workspaceId, workspaceIds: authority.touchedWorkspaces(command, args, target),
         actionClass: spec.actionClass, ...(spec.dataClasses ? { dataClasses: spec.dataClasses } : {}), recheck: true });
     };
-    if (command === 'workspaces.list' && context.workspaceIds) return workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
     authority.recordAttempt({ command, args, context, target, decision });
-    try { return await route(command, args, context, target); }
+    const scopedWorkspaces = () => workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
+    // Workspace-queued commands mark their own start when dequeued; everything else starts here.
+    const queued = Object.hasOwn(workspaceCommands, command) || command.startsWith('handoffs.');
+    const start = () => {
+      if (context.signal?.aborted) throw Object.assign(new Error('The request deadline passed before the command started'), { code: context.signal.reason?.code === 'deadline_exceeded' ? 'deadline_exceeded' : 'cancelled', notStarted: true, details: { started: false, effect: 'not_started' } });
+      if (!queued) context.markStarted?.();
+    };
+    try {
+      start();
+      if (args.page !== undefined && PAGEABLE.has(command) && !NATIVE_PAGED.has(command)) {
+        const { page, ...rest } = args;
+        if (rest.limit !== undefined) throw Object.assign(new Error('Use page.limit with page; limit is the unpaged result size'), { code: 'invalid_arguments', field: 'limit', notStarted: true });
+        context.allItems = true;
+        const items = command === 'workspaces.list' && context.workspaceIds ? scopedWorkspaces() : await route(command, rest, context, target);
+        if (!Array.isArray(items)) throw new Error('This command did not return a list to page');
+        const { workspaceId: ignored, ...filters } = rest;
+        return pageItems(items, page, { command, scope: { workspaceId: target.workspaceId ?? null, filters } });
+      }
+      if (command === 'workspaces.list' && context.workspaceIds) return scopedWorkspaces();
+      return await route(command, args, context, target);
+    }
     catch (error) {
       // A one-time approval is spent only by a command that started; a pre-execution refusal gives it back.
       authority.restoreApproval(decision, { command, context, target, error });
@@ -158,6 +186,14 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     };
     context.resolvedWorkspaceId = target.workspaceId;
     if (command === 'guide.get') return getGuidance(args.topic);
+    if (command === 'weft.capabilities') return describeCapabilities({ commands, outcomeStatuses: OUTCOME_STATUSES, errorHttpStatus: ERROR_HTTP_STATUS, errorStatus: ERROR_STATUS, exitCodes,
+      apiVersion: API_VERSION, eventTypes: EVENT_TYPES, eventRetention: eventLog ? { maxEvents: eventLog.maxEvents, maxAgeMs: eventLog.maxAgeMs, maxBytes: eventLog.maxBytes } : null,
+      context, embeddings: Boolean(workspace.retrieval) });
+    if (command === 'events.list') return listEvents(eventLog, args, context);
+    if (command.startsWith('transfers.')) {
+      if (!transfers) throw Object.assign(new Error('Chunked transfers are not available in this process'), { code: 'unavailable' });
+      return transfers.execute(command, args, context);
+    }
     if (command.startsWith('update.')) {
       if (!updates) throw Object.assign(new Error('Updates are not available in this process'), { code: 'unavailable' });
       return updates.execute(command, args, context);
@@ -206,26 +242,90 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     return outcome.result;
   };
 
+  /**
+   * Run with an optional caller deadline. Before the command starts, an expired deadline means it
+   * never will (every start point checks the signal); after it started, the signal asks it to stop
+   * and the outcome reports whether it rolled back, stopped, or is still uncertain after a grace period.
+   */
+  const withDeadline = async (deadlineMs, context, state, work) => {
+    const begun = Date.now();
+    let timer;
+    const expired = new Promise(resolve => { timer = setTimeout(() => resolve(DEADLINE), deadlineMs); timer.unref?.(); });
+    const running = work();
+    const first = await Promise.race([running, expired]);
+    clearTimeout(timer);
+    if (first !== DEADLINE) {
+      // The command observed the expired signal itself (for example a rollback just before commit).
+      if (first.error?.code === 'deadline_exceeded' && first.error.details) Object.assign(first.error.details, { deadlineMs, elapsedMs: Date.now() - begun });
+      return first;
+    }
+    const started = state.started === true;
+    context.abortForDeadline();
+    let settled = null;
+    if (started) {
+      let grace;
+      settled = await Promise.race([running, new Promise(resolve => { grace = setTimeout(() => resolve(null), DEADLINE_GRACE_MS); grace.unref?.(); })]);
+      clearTimeout(grace);
+    }
+    const details = { started, deadlineMs, elapsedMs: Date.now() - begun };
+    // Completed just after the deadline: report the real (completed) result.
+    if (settled && !settled.error) return { ...settled, deadline: { deadlineMs, exceeded: true } };
+    if (settled?.error?.code === 'deadline_exceeded') { Object.assign(settled.error.details ??= {}, { deadlineMs, elapsedMs: details.elapsedMs }); return settled; }
+    if (settled?.error && ['cancelled', 'timeout'].includes(settled.error.code)) {
+      Object.assign(details, { effect: 'stopped', ...(settled.error.details?.turnId && { turnId: settled.error.details.turnId, partialSaved: settled.error.details.partialSaved }) });
+    } else if (settled?.error) return settled;
+    else details.effect = started ? 'uncertain' : 'not_started';
+    const message = !started ? 'The request deadline passed before the command started; it will not run.'
+      : details.effect === 'stopped' ? 'The request deadline passed; the command was stopped.' : 'The request deadline passed while the command was running; its effect is uncertain. Inspect current state before retrying.';
+    return errorOutcome(Object.assign(new Error(message), { code: 'deadline_exceeded', details }), state.command ?? state.name ?? null, state.args ?? {}, state.normalized ?? []);
+  };
+
   const dispatch = async (name, input = {}, caller = {}) => {
-    const context = { actor: 'automation', ...caller };
+    const { deadlineMs, ...identity } = caller;
+    const context = { actor: 'automation', ...identity };
     const target = { workspaceId: null, tabId: null };
-    const state = {};
-    const outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input);
+    const state = { name, started: false };
+    context.markStarted = () => { state.started = true; };
+    let outcome;
+    if (deadlineMs !== undefined && deadlineMs !== null) {
+      if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > MAX_DEADLINE_MS) {
+        outcome = errorOutcome(Object.assign(new Error(`deadlineMs must be an integer from 1 to ${MAX_DEADLINE_MS}`), { code: 'invalid_arguments' }), name, input, [], 'failed');
+        outcome.error.field = 'deadlineMs';
+      } else {
+        // The deadline signal also follows the originating request's own cancellation.
+        const controller = new AbortController();
+        const upstream = identity.signal;
+        if (upstream?.aborted) controller.abort(upstream.reason);
+        else upstream?.addEventListener('abort', () => controller.abort(upstream.reason), { once: true });
+        context.signal = controller.signal;
+        context.abortForDeadline = () => controller.abort(Object.assign(new Error('Request deadline exceeded'), { code: 'deadline_exceeded' }));
+        outcome = await withDeadline(deadlineMs, context, state, () => executeOutcome((command, validated) => { state.command = command; return run(command, validated, context, target, state); }, name, input));
+      }
+    } else outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input);
     outcome.workspaceId = target.workspaceId ?? outcome.workspaceId;
     outcome.tabId = target.tabId ?? outcome.tabId;
     if (context.workspaceIds && outcome.workspaceId && !context.workspaceIds.includes(outcome.workspaceId)) {
       outcome.workspaceId = null;
       outcome.tabId = null;
     }
+    // Versioned request envelope: authenticated identity and linkage, never caller-asserted.
+    outcome.request = { apiVersion: API_VERSION, requestId: typeof state.args?.requestId === 'string' ? state.args.requestId : null, actor: typeof context.actor === 'string' ? context.actor.slice(0, 64) : null,
+      clientId: context.clientId ?? null, taskId: context.taskId ?? null, deadlineMs: Number.isSafeInteger(deadlineMs) ? deadlineMs : null };
     authority.recordOutcome({ command: outcome.command, args: state.args ?? {}, context, outcome, decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {}, batch: state.batch });
     const event = { type: 'command', command: outcome.command, actor: context.actor,
-      status: outcome.execution === 'succeeded' ? 'success' : outcome.error?.code === 'approval_required' || outcome.error?.details?.authority ? 'blocked' : 'failure',
+      status: outcome.execution === 'succeeded' ? 'success' : outcome.error?.code === 'approval_required' || outcome.error?.details?.authority ? 'blocked' : 'failure', outcome: outcome.status,
       workspaceId: outcome.workspaceId, tabId: outcome.tabId, createdAt: new Date().toISOString() };
-    onEvent(event);
+    // Replay polling is not itself an event (it would feed the stream it reads).
+    if (outcome.command !== 'events.list') onEvent(event);
     // Handoff lifecycle changes are also published as metadata-only handoff events.
     if (outcome.execution === 'succeeded' && /^handoffs\.(create|accept|complete)$/.test(outcome.command) && outcome.result?.id) {
       onEvent({ type: 'handoff', command: outcome.command, actor: context.actor, status: outcome.result.status, workspaceId: outcome.workspaceId ?? outcome.result.workspaceId, handoffId: outcome.result.id,
         revision: outcome.result.revision, createdAt: event.createdAt });
+    }
+    // Task, artifact, policy, workspace and approval changes as typed, replayable metadata events.
+    for (const domain of domainEvents(outcome, { actor: context.actor, batch: state.batch })) {
+      if (context.workspaceIds && domain.workspaceId && !context.workspaceIds.includes(domain.workspaceId)) continue;
+      onEvent(domain);
     }
     // Observers get sanitized metadata after the outcome is final; they cannot change or delay it.
     if (Object.hasOwn(commands, outcome.command) && (!admission.status.stopped || ['human', 'admin'].includes(context.actor))) {

@@ -238,14 +238,24 @@ export const serviceAdapters = Object.freeze({ http: httpAdapter });
  */
 export const EVALUATED_ADAPTERS = Object.freeze(['byauthorx', 'vixl', 'ai-server-studio', 'qai-ality']);
 
-export async function fetchService(service, { credential, fetchImpl, timeout = SERVICE_TIMEOUT } = {}) {
+export async function fetchService(service, { credential, fetchImpl, timeout = SERVICE_TIMEOUT, signal = null } = {}) {
   const adapter = serviceAdapters[service.adapter];
   if (!adapter) return { outcome: 'failed', detail: `Adapter ${service.adapter} is not installed` };
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
-  try { return await adapter.fetch({ url: service.url, credential, previous: service.versions?.at(-1), fetchImpl, signal: controller.signal }); }
-  catch (error) { return { outcome: 'failed', detail: controller.signal.aborted ? 'Timed out' : String(error.message || error).slice(0, 300) }; }
-  finally { clearTimeout(timer); }
+  // A caller deadline or cancellation (ADR 018) stops the request; nothing is recorded for a stopped refresh.
+  const stop = () => controller.abort();
+  if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
+  const stopped = () => Object.assign(new Error('Service refresh stopped before a response was recorded; nothing changed'), { code: 'cancelled' });
+  try {
+    if (signal?.aborted) throw stopped();
+    return await adapter.fetch({ url: service.url, credential, previous: service.versions?.at(-1), fetchImpl, signal: controller.signal });
+  }
+  catch (error) {
+    if (signal?.aborted) throw stopped();
+    return { outcome: 'failed', detail: controller.signal.aborted ? 'Timed out' : String(error.message || error).slice(0, 300) };
+  }
+  finally { clearTimeout(timer); signal?.removeEventListener?.('abort', stop); }
 }
 
 const HEADER_NAMES = ['Authorization', 'X-API-Key'];
