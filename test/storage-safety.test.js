@@ -178,6 +178,8 @@ test('local-only metadata and turn manifests persist for provider routing', asyn
 test('sync locations, copy and placeholder warnings surface without changing copies', t => {
   assert.equal(storageWarnings('/home/me/OneDrive - Company/profile', {}).some(item => item.code === 'SYNC_FOLDER'), true);
   assert.equal(storageWarnings('/home/me/Dropbox/profile', {}).some(item => item.code === 'SYNC_FOLDER'), true);
+  assert.equal(storageWarnings('/Users/me/Library/CloudStorage/OneDrive-Personal/profile', {}).some(item => item.code === 'SYNC_FOLDER'), true);
+  assert.equal(storageWarnings('/Users/me/Library/CloudStorage/GoogleDrive-me@example.com/profile', {}).some(item => item.code === 'SYNC_FOLDER'), true);
   assert.equal(storageWarnings('/home/me/local', { OneDrive: '/home/me/local' }).some(item => item.code === 'SYNC_FOLDER'), true);
   assert.deepEqual(storageWarnings('/home/me/NotDropbox/profile', {}), []);
   const warnings = [];
@@ -185,10 +187,11 @@ test('sync locations, copy and placeholder warnings surface without changing cop
   const conflict = join(directory, 'workspace-state (conflicted copy).json');
   writeFileSync(conflict, 'keep these original bytes');
   writeFileSync(join(directory, 'workspace-state.json.icloud'), 'placeholder');
-  assert.equal(service.snapshot().storageWarnings.length, 2);
+  writeFileSync(join(directory, 'workspace-state-MY-LAPTOP.json'), 'device copy');
+  assert.equal(service.snapshot().storageWarnings.length, 3);
   service.save();
   assert.equal(readFileSync(conflict, 'utf8'), 'keep these original bytes');
-  assert.equal(warnings.length, 2);
+  assert.equal(warnings.length, 3);
 });
 
 test('a conflicted copy without a canonical file blocks silent creation', t => {

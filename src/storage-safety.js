@@ -85,7 +85,7 @@ export function writeVerifiedJson(path, serialized, expectedStamp) {
 export function storageWarnings(directory, environment = process.env) {
   const resolved = existsSync(directory) ? realpathSync(directory) : resolve(directory);
   const normalized = resolved.replaceAll('\\', '/').toLowerCase();
-  const knownFolder = normalized.split('/').some(part => /^(dropbox(?: \(.+\))?|onedrive(?: - .+)?|google drive|googledrive|iclouddrive|mobile documents|com~apple~clouddocs)$/.test(part));
+  const knownFolder = normalized.split('/').some(part => /^(dropbox(?: \(.+\))?|onedrive(?: ?- ?.+)?|google drive|googledrive(?:-.+)?|icloud ?drive|mobile documents|com~apple~clouddocs)$/.test(part));
   const configuredFolder = ['OneDrive', 'OneDriveConsumer', 'OneDriveCommercial', 'DROPBOX_HOME', 'GOOGLE_DRIVE_HOME', 'ICLOUD_DRIVE_HOME'].some(key => {
     if (!environment[key]) return false;
     const root = resolve(environment[key]).replaceAll('\\', '/').toLowerCase().replace(/\/$/, '');
@@ -95,7 +95,8 @@ export function storageWarnings(directory, environment = process.env) {
   if (knownFolder || configuredFolder) warnings.push({ code: 'SYNC_FOLDER', message: 'This profile appears to be in a cloud-synced folder. Chromium sessions and the JSON workspace store are not sync-safe. Move the profile to a local folder with Weft closed.' });
   if (existsSync(directory)) {
     for (const name of readdirSync(directory)) {
-      if (/workspace-state/i.test(name) && /conflict|conflicted|copy|copie|konflikt/i.test(name) && /\.json$/i.test(name)) warnings.push({ code: 'SYNC_CONFLICT_COPY', file: name, message: `Conflicted workspace copy requires human review: ${name}. It has been preserved; Weft will not merge or overwrite it.` });
+      // OneDrive can append only a device name, without the word "conflict".
+      if (name !== 'workspace-state.json' && /^workspace-state.*\.json$/i.test(name)) warnings.push({ code: 'SYNC_CONFLICT_COPY', file: name, message: `Possible conflicted workspace copy requires human review: ${name}. It has been preserved; Weft will not merge or overwrite it.` });
       if (/workspace-state/i.test(name) && /\.(icloud|placeholder)$/i.test(name)) warnings.push({ code: 'SYNC_PLACEHOLDER', file: name, message: `Workspace placeholder requires download and human review: ${name}.` });
     }
   }
