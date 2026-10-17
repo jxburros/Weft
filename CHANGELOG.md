@@ -214,6 +214,13 @@ alone is not a shipped capability.
   other stale-state checks). Such pre-execution refusals now give the approval
   back for the identical retry (recorded as `approval_restored`); a command
   that starts keeps it consumed.
+- Fixed: the chat disclosure review could end as cancelled when a "close"
+  event queued by the previous dialog (the attachment picker) arrived after the
+  review opened, so the reviewed message was silently not sent (seen as a
+  flaky GUI test under load). The review now ends only when it is closed or
+  replaced. The GUI test waits for the durable reply rather than the streaming
+  bubble, checks the message was sent once, and waits for the dark wordmark
+  image to load instead of sampling it once.
 - Backups contain the workspace database and its components only; approvals,
   grants, autonomy policy, the activity log, browser security state, plugin and
   extension state and updater state are deliberately not restored (see

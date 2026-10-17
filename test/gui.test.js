@@ -232,7 +232,9 @@ if (process.argv.includes("--gui-workflows")) {
     await until('document.getElementById("acknowledge-disclosure")?.disabled === false');
     assert.match(await run('document.getElementById("dialog-content").textContent'), /excluded by you/);
     await click("#acknowledge-disclosure");
-    await until(`document.querySelectorAll("#chat-messages .chat-message.assistant").length === 2`);
+    // The reply must be durable: the transient streaming bubble also carries the assistant class.
+    await until(`document.getElementById("chat-live") === null && document.querySelectorAll("#chat-messages .chat-message.assistant:not(#chat-live)").length === 2`);
+    assert.equal(modelRequests.length, 2, "the reviewed message was sent exactly once");
     const attached = JSON.stringify(modelRequests.at(-1));
     assert.match(attached, /Keep this useful source/);
     assert.match(attached, /Evidence saved for the project/);
@@ -284,10 +286,9 @@ if (process.argv.includes("--gui-workflows")) {
     await click('[data-action="close-dialog"]');
     await click("#theme-toggle");
     await until('document.documentElement.dataset.theme==="dark"');
-    assert.ok(
-      await run(
-        'document.querySelector(".wordmark img").complete && document.querySelector(".wordmark img").naturalWidth>0',
-      ),
+    // The dark wordmark is a different image; wait for it to load rather than sampling once.
+    await until(
+      'document.querySelector(".wordmark img").complete && document.querySelector(".wordmark img").naturalWidth>0',
     );
     await new Promise((resolve) => setTimeout(resolve, 180));
     if (process.env.WEFT_SAVE_SCREENSHOTS)

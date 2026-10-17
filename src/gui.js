@@ -1419,11 +1419,14 @@ function disclosureBody(d, exclude) {
     + (d.requiresAcknowledgement ? `<p>${reasons.includes("destination") ? "This acknowledgement applies to this workspace and this model destination. " : ""}${reasons.some((r) => r !== "destination") ? "Images and vision fallback use need acknowledgement every time. " : ""}Review your selections before each request.</p>` : "");
 }
 // Item-level review: unchecked items are excluded; "Update preview" recomputes delivery and limits.
+let reviewSerial = 0;
 function reviewDisclosure(disclosure, request) {
   return new Promise((resolve) => {
     let result = null;
     let d = disclosure;
     let exclude = [];
+    let done = false;
+    const token = String(++reviewSerial);
     const collect = () => [...document.querySelectorAll("#dialog-content .disclosure-item")].filter((box) => !box.checked).map((box) => box.value);
     const render = () => {
       const selectable = (d.items || []).some((item) => item.key && item.kind !== "message");
@@ -1435,10 +1438,25 @@ function reviewDisclosure(disclosure, request) {
         try { d = (await execute("chat.preview", { ...request, ...(exclude.length ? { exclude } : {}) }, true)).disclosure; render(); }
         catch (error) { $("form-error").textContent = errorMessage(error); }
       };
-      $("acknowledge-disclosure").onclick = () => { result = { exclude: collect(), acknowledged: Boolean(d.requiresAcknowledgement) }; closeDialog(); };
+      $("acknowledge-disclosure").dataset.review = token;
+      $("acknowledge-disclosure").onclick = () => { result = { exclude: collect(), acknowledged: Boolean(d.requiresAcknowledgement) }; closeDialog(); finish(); };
     };
+    const finish = () => {
+      if (done) return;
+      done = true;
+      $("dialog").removeEventListener("close", onClose);
+      resolve(result);
+    };
+    // A "close" event is dispatched asynchronously. One queued by the dialog that closed just
+    // before this review opened (for example the attachment picker) can arrive after it is
+    // showing; it must not end this review as cancelled. Only a close of this review, or its
+    // replacement by another dialog, ends it.
+    const onClose = () => {
+      if ($("dialog").open && $("acknowledge-disclosure")?.dataset.review === token) return;
+      finish();
+    };
+    $("dialog").addEventListener("close", onClose);
     render();
-    $("dialog").addEventListener("close", () => resolve(result), { once: true });
   });
 }
 function importReportHtml(report) {
