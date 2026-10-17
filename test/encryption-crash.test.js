@@ -11,7 +11,7 @@ import { createKeyProtector, KEYRING_FILE } from '../src/encryption.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
 import { closeAfter, removeAfter } from './temp-profile.js';
 
-// Real crashes: a child process runs the operation and SIGKILLs itself at a named step.
+// Real crashes: a child process runs the operation and SIGKILLs itself (TerminateProcess on Windows) at a named step.
 const child = fileURLToPath(new URL('./fixtures/encryption-crash.mjs', import.meta.url));
 const human = { actor: 'human', source: 'gui' };
 const NEEDLES = ['CRASH-NOTE-CONTENT', 'CRASH-CAPTURE-TEXT', 'CRASH-FILE-BODY'];
@@ -31,7 +31,14 @@ async function seeded(t, count = 12) {
 }
 function crashAt(directory, operation, step, unlockMode = 'os') {
   const result = spawnSync(process.execPath, [child, directory, operation, step, unlockMode], { encoding: 'utf8', timeout: 60000 });
-  assert.equal(result.signal, 'SIGKILL', `expected a crash at ${step}: ${result.stdout}${result.stderr}`);
+  const output = `${result.stdout}${result.stderr}`;
+  assert.equal(result.error, undefined, `the crash child at ${step} did not start or timed out: ${output}`);
+  assert.ok(result.stderr.includes(`WEFT_CRASH_AT ${step}\n`), `expected a crash at ${step}: ${output}`);
+  assert.ok(!result.stdout.includes('COMPLETED_WITHOUT_CRASH'), `expected a crash at ${step}: ${output}`);
+  // POSIX reports the self-inflicted SIGKILL. Windows has no signals: libuv implements the kill as
+  // TerminateProcess(handle, 1), which reports exit code 1 and no signal.
+  if (process.platform === 'win32') assert.deepEqual({ status: result.status, signal: result.signal }, { status: 1, signal: null }, `expected a crash at ${step}: ${output}`);
+  else assert.equal(result.signal, 'SIGKILL', `expected a crash at ${step}: ${output}`);
   // A killed process leaves its ownership lock; a person removes it after checking no Weft process runs.
   rmSync(join(directory, '.workspace.lock'), { force: true });
 }

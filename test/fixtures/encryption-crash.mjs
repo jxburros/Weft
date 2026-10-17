@@ -1,6 +1,7 @@
 // Child process for crash tests: run one encryption operation and SIGKILL this
 // process at the named step, leaving the profile exactly as a power loss or
 // forced quit would (stale lock file included).
+import { writeSync } from 'node:fs';
 import { WorkspaceService } from '../../src/workspace.js';
 import { createKeyProtector } from '../../src/encryption.js';
 import { fakeSafeStorage, kdfParams } from '../encryption-helpers.js';
@@ -10,7 +11,9 @@ const [directory, operation, step, unlockMode = 'os'] = process.argv.slice(2);
 if (directory) await run();
 
 async function run() {
-  const crash = name => { if (name === step) process.kill(process.pid, 'SIGKILL'); };
+  // The marker is written synchronously first: on Windows the kill is TerminateProcess (exit code 1, no signal),
+  // so the parent needs it to tell this kill from an ordinary failure exit.
+  const crash = name => { if (name === step) { writeSync(2, `WEFT_CRASH_AT ${name}\n`); process.kill(process.pid, 'SIGKILL'); } };
   const service = new WorkspaceService({ directory, onWarning() {}, keyProtector: createKeyProtector({ safeStorage: fakeSafeStorage(), platform: 'linux' }), encryption: { kdf: kdfParams } });
   const human = { actor: 'human', source: 'gui', onStep: crash };
   if (service.locked) await service.executeEncryption('encryption.unlock', { method: 'passphrase', secret: 'correct horse battery staple' }, human);
