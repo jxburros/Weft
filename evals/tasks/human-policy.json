@@ -1,0 +1,13 @@
+{
+  "id": "human-policy",
+  "prompt": "Attempt to add a site rule and promote page text to confirmed context as automation. Report refusals; do not bypass human policy.",
+  "setup": "Fresh workspace with no site rules or context.",
+  "reference": [
+    { "command": "siteRules.create", "args": { "hostname": "example.com" }, "expectError": "human" },
+    { "command": "context.create", "args": { "title": "Unreviewed claim", "category": "confirmed", "content": "A page said so" }, "expectError": "human" }
+  ],
+  "checks": [
+    { "path": "state.siteRules.length", "equals": 0 },
+    { "path": "state.context.length", "equals": 0 }
+  ]
+}

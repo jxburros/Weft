@@ -11,6 +11,13 @@ import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 
 const smoke = process.argv.includes('--workspace-smoke');
+async function until(check) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (check()) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error('Browser security condition timed out');
+}
 if (smoke) {
   const { app, BrowserWindow } = electron;
   app.setPath('userData', process.env.WEFT_TEST_PROFILE);
@@ -26,7 +33,9 @@ if (smoke) {
       if (request.url === '/blocked/redirect') { response.writeHead(302, { location: '/blocked/next' }); response.end(); return; }
       if (request.url === '/redirect') { response.writeHead(302, { location: '/blocked/destination' }); response.end(); return; }
       response.setHeader('content-type', 'text/html');
-      response.end('<!doctype html><title>Workspace fixture</title><main>Saved evidence</main><button id="change" onclick="document.title=\'Changed\'">Change</button>');
+      if (request.url === '/meta') { response.end('<meta http-equiv="refresh" content="0;url=/blocked/meta">'); return; }
+      if (request.url === '/script') { response.end('<script>setTimeout(() => location.href="/blocked/script", 20)</script>'); return; }
+      response.end('<!doctype html><title>Workspace fixture</title><main>Saved evidence<input type="password" value="password-secret"><input autocomplete="cc-number" value="card-secret"><textarea autocomplete="one-time-code">otp-secret</textarea></main><button id="change" onclick="document.title=\'Changed\'">Change</button>');
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const origin = `http://127.0.0.1:${server.address().port}`;
@@ -60,6 +69,14 @@ if (smoke) {
       assert.equal((await browser.execute('cookies.list', { url: origin }))[0].value, 'first');
       assert.equal(await browser.execute('page.evaluate', { expression: 'localStorage.getItem("project")' }), 'first');
       assert.equal((await browser.execute('page.readable')).text, 'Saved evidence');
+      assert.doesNotMatch(await browser.execute('page.content'), /password-secret|card-secret|otp-secret/);
+      const currentVersion = browser.tab(firstTab).version;
+      await assert.rejects(browser.execute('page.evaluate', { tabId: firstTab, expression: '42' }, { actor: 'automation' }), /expectedVersion/);
+      const pending = browser.execute('page.evaluate', { tabId: firstTab, expectedVersion: currentVersion, expression: 'new Promise(resolve => setTimeout(() => resolve(42), 150))' }, { actor: 'automation' });
+      await assert.rejects(browser.execute('page.evaluate', { tabId: firstTab, expectedVersion: browser.tab(firstTab).version, expression: '43' }, { actor: 'automation' }), { code: 'tab_busy' });
+      await browser.execute('tabs.takeover', { tabId: firstTab });
+      await assert.rejects(pending, { code: 'action_interrupted' });
+      await browser.execute('tabs.release', { tabId: firstTab });
       assert.equal((await browser.execute('tabs.list')).length, 1);
       await browser.execute('tabs.pin', { tabId: firstTab, pinned: true });
       const claimed = await browser.execute('tabs.claim', { tabId: firstTab }, { actor: 'automation' });
@@ -92,6 +109,19 @@ if (smoke) {
       await browser.execute('page.navigate', { url: origin });
       assert.equal(await browser.execute('page.evaluate', { expression: `fetch(${JSON.stringify(`${origin}/blocked/background`)}).then(()=>true,()=>false)` }), false);
       assert.equal(hits.includes('/blocked/background'), false, 'background connection is blocked');
+      for (const route of ['meta', 'script']) {
+        await browser.execute('page.navigate', { url: `${origin}/${route}` }).catch(error => { if (!/Blocked|ERR_ABORTED|ERR_FAILED/.test(error.message)) throw error; });
+        await until(() => browser.tab().blocked?.url === `${origin}/blocked/${route}`);
+        assert.equal(hits.includes(`/blocked/${route}`), false, `${route} redirect blocked before contact`);
+        await browser.execute('page.navigate', { url: origin });
+      }
+      await browser.execute('page.evaluate', { expression: `document.body.insertAdjacentHTML("beforeend", '<a id="blocked-link" href="/blocked/click">Blocked link</a>')` });
+      const click = await browser.execute('page.click', { selector: '#blocked-link' }).catch(error => ({ error }));
+      assert.ok(click.submitted || click.error?.code === 'site_blocked');
+      assert.notEqual(click.success, true);
+      await until(() => browser.tab().blocked?.url === `${origin}/blocked/click`);
+      assert.equal(hits.includes('/blocked/click'), false, 'link destination blocked before contact');
+      await browser.execute('page.navigate', { url: origin });
       await browser.execute('page.evaluate', { expression: `window.open(${JSON.stringify(`${origin}/blocked/popup`)})` });
       assert.equal((await browser.execute('tabs.list')).length, 1);
       assert.throws(() => browser.setLayout({ x: -1, y: 0, width: 500, height: 500, visible: true }), /Invalid/);
@@ -132,7 +162,10 @@ if (smoke) {
       await assert.rejects(browser.execute('browser.emergencyStop', {}, { actor: 'automation' }), /trusted/);
       const stopped = await browser.execute('browser.emergencyStop');
       assert.equal(stopped.stopped, true);
-      await assert.rejects(browser.execute('page.navigate', { tabId: moved.id, expectedVersion: lease.version, url: origin }, { actor: 'automation' }), /Stale/);
+      await assert.rejects(browser.execute('page.navigate', { tabId: moved.id, expectedVersion: lease.version, url: origin }, { actor: 'automation' }), { code: 'emergency_stop' });
+      await assert.rejects(browser.execute('tabs.new', {}, { actor: 'automation' }), { code: 'emergency_stop' });
+      await browser.execute('browser.resumeAutomation');
+      assert.equal((await browser.execute('browser.info')).automation.stopped, false);
       assert.ok((await restoredWorkspace.execute('history.list', { workspaceId: firstWorkspace })).length);
       await restoredWorkspace.execute('history.clear', { workspaceId: firstWorkspace });
       assert.equal((await restoredWorkspace.execute('history.list', { workspaceId: firstWorkspace })).length, 0);

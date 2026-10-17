@@ -17,6 +17,7 @@ Requires **Node.js 22.12+**, npm, and a desktop session. Electron supplies Chrom
 
 ```sh
 npm ci
+node node_modules/electron/install.js
 npm start
 ```
 
@@ -114,8 +115,9 @@ node bin/weft.js artifacts.capture '{"kind":"bundle","title":"Source reference"}
 ```
 
 `npm run cli -- <command> '<JSON arguments>'` is equivalent. `npm link` optionally
-installs the `weft` command. Output is JSON; errors use stderr and a nonzero exit
-code. Screenshots require a visible tab. Hidden-tab bundles retain readable text
+installs the `weft` command. Command outcomes, including command failures, are
+JSON on stdout; process/protocol diagnostics use stderr. See
+[the command contract](docs/COMMANDS.md) for stable error and exit codes. Screenshots require a visible tab. Hidden-tab bundles retain readable text
 and report an unavailable image rather than inventing one.
 
 For MCP, configure your client:
@@ -135,9 +137,11 @@ For MCP, configure your client:
 }
 ```
 
-Command dots become underscores (`page.readable` → `page_readable`), and schemas
-are shared. Screenshots use MCP image content. The bridge writes only protocol
-messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
+MCP advertises eight grouped tools, including `weft_reference` for command
+discovery. Execution tools accept a canonical command as `action` and its `args`;
+legacy underscore names such as `page_readable` remain accepted but unadvertised.
+Schemas and structured outcomes are shared. Screenshots retain MCP image content.
+The bridge writes only protocol messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
 do not follow redirects.
 
 ## REST and authority
@@ -149,17 +153,23 @@ Requests require `Authorization: Bearer <token>`:
 - `GET /v1/events` streams authenticated command metadata through SSE, without
   arguments, page content, model messages, credentials, or results.
 - `POST /v1/execute` accepts `{ "command": "...", "args": {} }` and returns
-  `{ "result": ... }` or `{ "error": { "message": "..." } }`.
+  a versioned outcome with `schemaVersion`, `command`, `execution`, `validation`,
+  `review`, `workspaceId`, `tabId`, `normalized`, `result` and `error`.
+  See [the command contract](docs/COMMANDS.md) for status and error meanings.
 
 Discovery is the authoritative list of available commands and arguments. Unknown
 fields are rejected. API request bodies are capped at 1 MiB, so large file imports
 should use the GUI. REST rejects browser-origin requests and does not enable CORS.
 
 Human-only policy, configuration, storage-administration, override, and takeover
-commands appear in discovery but reject automation callers. The local token
-otherwise provides broad access to workspace data and browser content. API
-clients share one automation identity; this is not a fine-grained, multi-user
-permission service. Takeovers revoke leases and state versions, but cannot undo
+commands appear in discovery but reject automation callers. The bootstrap token
+retains broad access. In Settings → Agent connections, issue a separate token for
+each client with workspace restrictions, read/record-write/tab-control scopes and
+a finite lifetime. Revocation takes effect on every subsequent command and event;
+idle event streams close at their next heartbeat. Tokens are displayed once and
+never stored in the project. Scoped clients cannot execute arbitrary JavaScript,
+configure providers, change site policy, or mint other tokens. This remains a
+local single-user application, not a remote multi-user service. Takeovers revoke leases and state versions, but cannot undo
 an external action or arbitrary page script that already executed.
 
 ## Persistence and portability
@@ -215,6 +225,9 @@ Chromium security fixes.
 
 ```sh
 npm test
+npm run test:docs
+npm run evals
+npm run test:perf
 # Include actual Chromium and GUI tests on headless Linux:
 xvfb-run -a npm test
 ```
@@ -226,5 +239,16 @@ including a real offline capture. Display tests explicitly skip when no display
 is available. Test subprocesses use `--no-sandbox` only for CI environments without
 a configured sandbox helper; normal application startup does not.
 
+Agent contributors should read [AGENTS.md](AGENTS.md). The packaged
+[Weft skill and MCP plugin](docs/AGENT-INTEGRATION.md) use a shared guidance
+registry. [Offline task evals](evals/README.md) measure reference success and tool
+calls; [performance budgets](perf/README.md) cover large-store writes, capture
+search and catalog generation. [Architecture decisions](docs/decisions/) record
+current scope and outstanding encryption/plugin work.
+
 The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
 variants are documented in [assets/logo/README.md](assets/logo/README.md).
+
+Command and tool changes are checked by the [offline evals](evals/README.md),
+[generated reference](docs/COMMANDS.md), and [validation pipeline](docs/VALIDATION.md).
+The [issue disposition](docs/ISSUE-STATUS.md) records completed work and remaining gaps.

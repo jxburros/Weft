@@ -131,6 +131,7 @@ if (process.argv.includes("--gui-workflows")) {
       '(async()=> (await window.weft.execute("tabs.list")).find(t=>t.active).title==="Reference fixture")()',
     );
     await click("#save-page");
+    await until('document.getElementById("dialog").open && document.getElementById("dialog-title").textContent === "Save page to workspace"');
     await fill("title", "Saved source");
     await fill("note", "Fixture evidence for the capture test.");
     await submit();

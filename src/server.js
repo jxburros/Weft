@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
-import { commands, validateCommand } from './commands.js';
+import { commands, executeOutcome, errorOutcome, resultHttpStatus } from './commands.js';
 import { createOpenApiDocument } from './openapi.js';
 
 const MAX_BODY = 1024 * 1024;
@@ -33,7 +33,7 @@ export function sanitizeEvent(event) {
   if (!event || !['command', 'navigation', 'workspace', 'activity'].includes(event.type)) return null;
   const result = { type: event.type, createdAt: new Date().toISOString() };
   if (Object.hasOwn(commands, event.command)) result.command = event.command;
-  if (['human', 'automation', 'admin'].includes(event.actor)) result.actor = event.actor;
+  if (['human', 'automation', 'admin'].includes(event.actor) || /^client:[a-f0-9-]{36}$/.test(event.actor)) result.actor = event.actor;
   if (['success', 'failure', 'blocked'].includes(event.status)) result.status = event.status;
   for (const key of ['workspaceId', 'targetId']) {
     const value = event[key];
@@ -44,8 +44,8 @@ export function sanitizeEvent(event) {
   return result;
 }
 
-export function createApiServer({ execute, token, subscribe }) {
-  if (typeof token !== 'string' || !token.trim()) throw new Error('An API token is required');
+export function createApiServer({ execute, token, subscribe, authenticate, executeReturnsOutcome = false }) {
+  if (!authenticate && (typeof token !== 'string' || !token.trim())) throw new Error('An API token is required');
   const expected = Buffer.from('Bearer ' + token);
   const streams = new Set();
   const fallbackListeners = new Set();
@@ -60,14 +60,21 @@ export function createApiServer({ execute, token, subscribe }) {
       });
       res.end(JSON.stringify(body));
     };
-    const supplied = Buffer.from(req.headers.authorization || '');
-    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
-      reply(401, { error: { message: 'Unauthorized' } });
+    const fail = (status, code, message) => reply(status, errorOutcome(Object.assign(new Error(message), { code }), null, {}, [], 'not_run'));
+    const authorization = req.headers.authorization || '';
+    const supplied = Buffer.from(authorization);
+    let context;
+    try {
+      context = authenticate ? await authenticate(authorization.startsWith('Bearer ') ? authorization.slice(7) : '')
+        : supplied.length === expected.length && timingSafeEqual(supplied, expected) ? { actor: 'automation' } : null;
+    } catch { context = null; }
+    if (!context) {
+      fail(401, 'unauthorized', 'Unauthorized');
       return;
     }
     // Browser pages, including pages being automated, must not access the control plane.
     if (req.headers.origin || req.headers['sec-fetch-site']) {
-      reply(403, { error: { message: 'Browser-origin requests are not allowed' } });
+      fail(403, 'permission_required', 'Browser-origin requests are not allowed');
       return;
     }
     if (req.method === 'GET' && req.url === '/v1/openapi.json') {
@@ -75,7 +82,8 @@ export function createApiServer({ execute, token, subscribe }) {
       return;
     }
     if (req.method === 'GET' && req.url === '/v1/events') {
-      if (streams.size >= 16) { reply(503, { error: { message: 'Event subscriber limit reached' } }); return; }
+      if (context.scopes && !context.scopes.includes('read')) { fail(403, 'permission_required', 'The read scope is required for events'); return; }
+      if (streams.size >= 16) { fail(503, 'unavailable', 'Event subscriber limit reached'); return; }
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', connection: 'keep-alive' });
       res.write(': connected\n\n');
       let unsubscribe;
@@ -87,13 +95,24 @@ export function createApiServer({ execute, token, subscribe }) {
         streams.delete(res);
         if (typeof unsubscribe === 'function') unsubscribe();
       };
-      const heartbeat = setInterval(() => { if (!res.destroyed) res.write(': heartbeat\n\n'); }, 15000);
+      const currentIdentity = async () => {
+        if (!authenticate) return context;
+        try {
+          const current = await authenticate(authorization.slice(7));
+          if (!current) { cleanup(); res.end(); return null; }
+          return current;
+        } catch { cleanup(); res.end(); return null; }
+      };
+      const heartbeat = setInterval(async () => { if (await currentIdentity() && !res.destroyed && !closed) res.write(': heartbeat\n\n'); }, 15000);
       heartbeat.unref();
       streams.add(res);
       res.on('close', cleanup);
       try {
-        unsubscribe = sourceSubscribe(event => {
+        unsubscribe = sourceSubscribe(async event => {
+          const identity = await currentIdentity();
+          if (!identity) return;
           const safe = sanitizeEvent(event);
+          if (identity.workspaceIds && (!safe?.workspaceId || !identity.workspaceIds.includes(safe.workspaceId))) return;
           if (!safe || closed || res.destroyed) return;
           if (res.writableLength > 65536) { res.destroy(); return; }
           res.write(`event: weft\ndata: ${JSON.stringify(safe)}\n\n`);
@@ -106,11 +125,11 @@ export function createApiServer({ execute, token, subscribe }) {
       return;
     }
     if (req.method !== 'POST' || req.url !== '/v1/execute') {
-      reply(404, { error: { message: 'Not found' } });
+      fail(404, 'not_found', 'Not found');
       return;
     }
     if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') {
-      reply(415, { error: { message: 'Expected application/json' } });
+      fail(415, 'unsupported_media_type', 'Expected application/json');
       return;
     }
     let command;
@@ -123,19 +142,14 @@ export function createApiServer({ execute, token, subscribe }) {
         throw new Error('Expected {command, args}');
       }
       command = body.command;
-      args = validateCommand(command, body.args);
+      args = body.args;
     } catch (error) {
-      reply(error.status || 400, { error: { message: error.message } });
+      fail(error.status || 400, error.status === 413 ? 'request_too_large' : 'invalid_json', error.message);
       return;
     }
-    try {
-      const result = await execute(command, args);
-      publish({ type: 'command', command, status: 'success', actor: 'automation', workspaceId: args.workspaceId });
-      reply(200, { result: result ?? null });
-    } catch (error) {
-      publish({ type: 'command', command, status: 'failure', actor: 'automation', workspaceId: args.workspaceId });
-      reply(422, { error: { message: error.message || 'Command failed' } });
-    }
+    const outcome = await executeOutcome((name, input) => execute(name, input, context), command, args, { returnsOutcome: executeReturnsOutcome });
+    publish({ type: 'command', command: outcome.command, status: outcome.error ? 'failure' : 'success', actor: context.actor, workspaceId: outcome.workspaceId });
+    reply(resultHttpStatus(outcome), outcome);
   });
   const close = server.close.bind(server);
   server.close = (...args) => { for (const response of streams) response.end(); return close(...args); };

@@ -19,12 +19,15 @@ export const providerCommandDefinitions = {
   'models.delete': ['Delete a saved model connection and its encrypted key', { modelId: id }],
   'chat.send': ['Send text/context to the selected model, with optional scoped read-only tools', {
     conversationId: id, modelId: id, text: z.string().trim().min(1).max(100000),
+    disclosureAck: z.boolean().optional(),
     allowReadTools: z.boolean().optional(), tabId: z.number().int().positive().optional(),
     context: z.array(z.strictObject({
       title: z.string().max(300), content: z.string().max(100000),
+      id: id.optional(), recordType: z.enum(['context', 'materials']).optional(), source: z.string().max(2048).optional(), localOnly: z.boolean().optional(),
     })).max(12).optional(),
   }],
   'chat.cancel': ['Cancel a running model request', { conversationId: id }],
 };
+providerCommandDefinitions['chat.preview'] = ['Preview destination and itemized outbound disclosure without sending', providerCommandDefinitions['chat.send'][1]];
 export const providerSchemas = Object.fromEntries(Object.entries(providerCommandDefinitions)
   .map(([name, [, shape]]) => [name, z.strictObject(shape)]));

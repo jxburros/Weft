@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "weft": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/weft.js", "mcp"],
+      "env": {
+        "WEFT_TOKEN": "${WEFT_TOKEN}",
+        "WEFT_API_URL": "${WEFT_API_URL:-http://127.0.0.1:9222}"
+      }
+    }
+  }
+}

@@ -86,6 +86,8 @@ async function runSmoke() {
     await until(() => !browser.tab().view.webContents.isLoading());
     await browser.execute('page.stop');
     assert.equal(await browser.execute('page.evaluate', { expression: 'Notification.requestPermission()' }), 'denied');
+    // Navigation completion precedes the compositor's first frame on hosted runners.
+    await browser.tab().view.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     const shot = await browser.execute('page.screenshot');
     assert.equal(Buffer.from(shot.data, 'base64').subarray(1, 4).toString(), 'PNG');
     const full = await browser.execute('page.screenshot', { fullPage: true });
@@ -153,8 +155,14 @@ if (mainSmoke) {
       if (window && !window.webContents.isLoading()) {
         const count = await window.webContents.executeJavaScript('document.getElementById("command")?.options.length ?? 0');
         if (count > 0 && await window.webContents.executeJavaScript('document.getElementById("status")?.textContent === "Ready"')) {
-          const { commands } = await import('../src/commands.js');
+          const { commands, executeOutcome } = await import('../src/commands.js');
           assert.equal(count, Object.keys(commands).length);
+          const guiInfo = await window.webContents.executeJavaScript('window.weft.executeOutcome("browser.info")');
+          const rawInfo = await window.webContents.executeJavaScript('window.weft.execute("browser.info")');
+          assert.deepEqual(guiInfo, await executeOutcome(() => rawInfo, 'browser.info'));
+          const invalidInput = { tab_id: -1 };
+          const guiInvalid = await window.webContents.executeJavaScript(`window.weft.executeOutcome('tabs.close', ${JSON.stringify(invalidInput)})`);
+          assert.deepEqual(guiInvalid, await executeOutcome(() => assert.fail('invalid input must not execute'), 'tabs.close', invalidInput));
           const preferences = window.webContents.getLastWebPreferences();
           assert.equal(preferences.sandbox, true);
           assert.equal(preferences.contextIsolation, true);
@@ -165,7 +173,7 @@ if (mainSmoke) {
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("tabs.list")')).length === 2);
           await until(async () => (await window.webContents.executeJavaScript('document.querySelectorAll("#tabs .tab").length')) === 2);
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
-          await window.webContents.executeJavaScript('document.getElementById("address").value = "about:blank"; document.getElementById("navigation").requestSubmit()');
+          await window.webContents.executeJavaScript('document.getElementById("status").textContent = "Pending navigation"; document.getElementById("address").value = "about:blank"; document.getElementById("navigation").requestSubmit()');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
           await window.webContents.executeJavaScript('document.getElementById("command").value = "browser.info"; document.getElementById("command").dispatchEvent(new Event("change")); document.getElementById("run").click()');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("result").textContent')).includes('chromium'));
@@ -207,7 +215,12 @@ if (mainSmoke) {
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready');
           await window.webContents.executeJavaScript(`document.getElementById('address').value = ${JSON.stringify(fixtureUrl)}; document.getElementById('navigation').requestSubmit()`);
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("page.title")')) === 'GUI fixture');
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
           await until(() => window.contentView.children.length > 0);
+          // A title and attached view precede the first composited page frame.
+          const page = window.contentView.children.find(view => view.webContents?.getURL() === fixtureUrl + '/');
+          assert.ok(page, 'the fixture page must be visible before MCP captures it');
+          await page.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
           console.log('WEFT_GUI_SMOKE_OK');
           if (process.argv.includes('--weft-close-gui')) window.close();
           return;
@@ -302,16 +315,18 @@ if (mainSmoke) {
         });
         const url = `http://127.0.0.1:${port}/v1/execute`;
         assert.equal((await fetch(url)).status, 401);
-        const request = command => fetch(url, {
+        const request = (command, args = {}) => fetch(url, {
           method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command, args: {} }),
+          body: JSON.stringify({ command, args }),
         });
         assert.equal((await (await request('browser.info')).json()).result.electron, '44.9.0');
         assert.equal((await (await request('tabs.list')).json()).result.length, 1);
+        const cliTab = (await (await request('page.inspect')).json()).result;
         const cli = await promisify(execFile)(process.execPath, [
-          fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'page.evaluate', '{"expression":"6 * 7"}',
+          fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'page.evaluate', JSON.stringify({ tabId: cliTab.id, expectedVersion: cliTab.version, expression: '6 * 7' }),
         ], { env: { ...process.env, WEFT_API_URL: `http://127.0.0.1:${port}`, WEFT_TOKEN: token } });
-        assert.equal(JSON.parse(cli.stdout), 42);
+        assert.equal(JSON.parse(cli.stdout).result, 42);
+        assert.equal(JSON.parse(cli.stdout).execution, 'succeeded');
         const mcp = new Client({ name: 'chromium-smoke', version: '1.0.0' });
         const transport = new StdioClientTransport({
           command: process.execPath,
@@ -320,13 +335,17 @@ if (mainSmoke) {
         });
         try {
           await mcp.connect(transport);
-          const { commands } = await import('../src/commands.js');
-          assert.equal((await mcp.listTools()).tools.length, Object.keys(commands).length);
-          const answer = await mcp.callTool({ name: 'page_evaluate', arguments: { expression: '21 * 2' } });
-          assert.equal(JSON.parse(answer.content[0].text), 42);
-          const screenshot = await mcp.callTool({ name: 'page_screenshot', arguments: {} });
-          assert.equal(screenshot.content[0].type, 'image');
-          assert.equal(Buffer.from(screenshot.content[0].data, 'base64').subarray(1, 4).toString(), 'PNG');
+          const { mcpTools } = await import('../src/mcp.js');
+          assert.deepEqual((await mcp.listTools()).tools.map(tool => tool.name), mcpTools.map(tool => tool.name));
+          const mcpTab = (await (await request('page.inspect')).json()).result;
+          const answer = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.evaluate', args: { tabId: mcpTab.id, expectedVersion: mcpTab.version, expression: '21 * 2' } } });
+          assert.equal(JSON.parse(answer.content[0].text).result, 42);
+          assert.equal(answer.structuredContent.execution, 'succeeded');
+          const screenshot = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.screenshot', args: { tabId: mcpTab.id } } });
+          assert.equal(screenshot.isError, undefined, JSON.stringify(screenshot.structuredContent ?? screenshot.content));
+          assert.equal(screenshot.content[0].type, 'text');
+          assert.equal(screenshot.content[1]?.type, 'image', JSON.stringify(screenshot.structuredContent ?? screenshot.content));
+          assert.equal(Buffer.from(screenshot.content[1].data, 'base64').subarray(1, 4).toString(), 'PNG');
         } finally { await mcp.close(); }
         assert.equal((await request('browser.close')).status, 200);
         await new Promise(resolve => main.once('exit', resolve));

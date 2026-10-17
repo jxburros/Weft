@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { errorOutcome, resultExitCode } from '../src/commands.js';
 import { createClient } from '../src/client.js';
 
 const [command, json = '{}', ...extra] = process.argv.slice(2);
@@ -12,19 +13,25 @@ Examples:
   weft page.screenshot '{"tabId":1}'`);
 } else {
   try {
-    if (extra.length) throw new Error('Pass command arguments as one JSON object');
-    const client = createClient();
+    if (extra.length) throw Object.assign(new Error('Pass command arguments as one JSON object'), { code: 'invalid_arguments' });
+    let client;
+    try { client = createClient(); }
+    catch (error) { error.code = 'invalid_arguments'; throw error; }
     if (command === 'mcp') {
       const { startMcp } = await import('../src/mcp.js');
       await startMcp(client);
     } else {
       const result = command === 'commands'
         ? await client.listCommands()
-        : await client.execute(command, JSON.parse(json));
+        : await client.executeOutcome(command, JSON.parse(json));
       console.log(JSON.stringify(result, null, 2));
+      if (command !== 'commands') process.exitCode = resultExitCode(result);
     }
   } catch (error) {
-    console.error(`weft: ${error.message}`);
-    process.exitCode = 1;
+    if (error instanceof SyntaxError) error.message = 'Invalid JSON arguments. Supply one JSON object.';
+    const outcome = errorOutcome(Object.assign(error, { code: error instanceof SyntaxError ? 'invalid_json' : error.code || 'transport_error' }), command, {}, [], error instanceof SyntaxError || error.code === 'invalid_arguments' ? 'failed' : 'not_run');
+    const write = command === 'mcp' ? console.error : console.log;
+    write(JSON.stringify(outcome, null, 2));
+    process.exitCode = resultExitCode(outcome);
   }
 }
