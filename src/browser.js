@@ -1226,6 +1226,8 @@ export class Browser {
       case 'tabs.suspend': {
         const tab = this.tab(args.tabId);
         if (args.expectedVersion != null && args.expectedVersion !== tab.version) throw stale('version', 'Stale tab version; inspect current state');
+        // Agents may suspend only tabs nobody holds; a person's tab stays as the person left it.
+        if (!human && tab.controller && tab.controller !== 'available') throw failure('lease_conflict', 'This tab is held by a person or another actor; only available tabs can be suspended by an agent');
         return this.suspendTab(tab, human ? 'person' : 'agent request');
       }
       case 'tabs.move': {

@@ -218,3 +218,23 @@ test('stored files are private to the user and oversized components are refused'
   assert.equal(statSync(join(directory, 'components')).mode & 0o077, 0);
   assert.throws(() => new ComponentStore(join(directory, 'components')).put(Buffer.alloc(MAX_COMPONENT_BYTES + 1)), /COMPONENT_SIZE_LIMIT/);
 });
+
+test('session and history writes commit only their own rows, never unrelated uncommitted changes', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-store-only-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  let service = new WorkspaceService({ directory });
+  const note = await service.execute('materials.create', { title: 'Committed title' });
+  // A change still in progress elsewhere (not saved) must not ride along with a tab update.
+  service.data.materials.find(item => item.id === note.id).title = 'Uncommitted edit';
+  service.persistSession({ tabs: [{ id: 3, workspaceId: service.activeWorkspaceId, url: 'https://example.com/a', title: 'Tab', pinned: false, version: 2, controller: 'available',
+    suspended: { at: '2026-10-17T00:00:00.000Z', reason: 'idle', scrollX: 0, scrollY: 640, zoom: 1.25 }, groupId: 'tgrp_x' }], activeId: 3 });
+  service.recordVisit({ workspaceId: service.activeWorkspaceId, url: 'https://example.com/a', title: 'Visit', tabId: 3 });
+  service.close();
+  service = new WorkspaceService({ directory });
+  try {
+    assert.equal(service.data.materials.find(item => item.id === note.id).title, 'Committed title');
+    assert.deepEqual(service.data.browserSession.tabs[0].suspended, { at: '2026-10-17T00:00:00.000Z', reason: 'idle', scrollX: 0, scrollY: 640, zoom: 1.25 });
+    assert.equal(service.data.browserSession.tabs[0].groupId, 'tgrp_x');
+    assert.equal(service.data.history.at(-1).url, 'https://example.com/a');
+  } finally { service.close(); }
+});

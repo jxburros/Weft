@@ -203,3 +203,12 @@ test('a long-running agent workload leaves no leaked slots or unbounded job hist
   assert.equal(status.agentCommands.running, 1, 'only the status request is running');
   assert.ok(f.browser && (await f.dispatch('captures.list', {}, human)).result.length <= 101, 'finished jobs are pruned');
 });
+
+test('agents cannot suspend a tab a person or another actor holds', async t => {
+  const f = await fixture(t);
+  const agent = await f.grant({});
+  f.browser.tab(1).controller = 'human';
+  const refused = await f.dispatch('tabs.suspend', { workspaceId: f.workspaceId, tabId: 1 }, agent);
+  assert.equal(refused.error.code, 'lease_conflict');
+  assert.equal(f.browser.tab(1).suspended, undefined);
+});
