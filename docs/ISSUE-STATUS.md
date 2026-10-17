@@ -6,6 +6,7 @@ This pass reviewed all 67 issues open at the start. “Completed” describes th
 
 | Issue | Evidence/change |
 | --- | --- |
+| [#28](https://github.com/jxburros/Weft/issues/28) | ADR-004 decides file-based, publisher-pinned hosting (no Weft-operated service). Signed Ed25519 lists with key pinning/rotation and anti-rollback; private-group/public subscriptions with label/warn/block, digest-confirmed previews (incl. newly blocked domains), rollback, unsubscribe, visible exceptions and opt-in checks that never auto-apply; strict claim/source/entity/opinion schema; file-based governance and `scripts/community-list.js` (roles, N-reviewer acceptance, corrections, disputes, appeals, stale review, anti-abuse); all-match precedence via `lists.matches`; end-to-end corrected-entry test. Fixture-validated only: no dedicated GUI management screen, authenticated member identities, hosted moderation service or real-publisher validation. |
 | [#32](https://github.com/jxburros/Weft/issues/32) | Cross-platform Node CI, Linux Chromium/visual jobs, lockfile installs, syntax checks and retained failure artifacts. |
 | [#35](https://github.com/jxburros/Weft/issues/35) | ADR-002 explicitly retains local-only operation and defers hosted sync/collaboration/remote service with concrete future gates. |
 | [#37](https://github.com/jxburros/Weft/issues/37) | Actionable bounded validation errors, field paths, allowed values, suggestions and shared API error schema. |
@@ -63,7 +64,6 @@ Each row states the specific uncompleted requirement and why this pass does not 
 | [#25](https://github.com/jxburros/Weft/issues/25) | JSON storage is hardened but still rewritten wholesale; transactional metadata database and separate durable artifacts require a storage migration. |
 | [#26](https://github.com/jxburros/Weft/issues/26) | ADR-001 records threat model/recovery requirements; no encryption/key lifecycle implementation. Avoids claiming plaintext captures are encrypted. |
 | [#27](https://github.com/jxburros/Weft/issues/27) | Migration backups and import rollback are improved, but automatic verified restore, lossless revisions/citation remapping and large-transfer parity remain unfinished. |
-| [#28](https://github.com/jxburros/Weft/issues/28) | Pinned offline list distribution is implemented; moderation, correction/appeal governance, publishing and verified background updates remain absent. |
 | [#29](https://github.com/jxburros/Weft/issues/29) | Client attribution and model manifests improve evidence; retention/deletion/privacy controls and complete durable permission/activity history remain unfinished. |
 | [#30](https://github.com/jxburros/Weft/issues/30) | Store/catalog budgets exist; idle-tab scheduling, capture queues and GUI-first-render budgets remain unfinished. |
 | [#31](https://github.com/jxburros/Weft/issues/31) | Focus, dialog labels/trapping, themes and scaling improved; full screen-reader, magnification, keyboard-flow and platform audits remain unverified. |

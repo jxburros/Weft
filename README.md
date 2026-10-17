@@ -209,7 +209,7 @@ is in [implementation coverage](docs/IMPLEMENTATION.md).
 
 The largest remaining capabilities are the isolated credential/payment broker,
 fine-grained agent grants and autonomous execution, comprehensive storage
-block/session modes, community subscriptions, extension support, synchronization,
+block/session modes, a community-list management screen and any hosted moderation service, extension support, synchronization,
 and signed installers/automatic updates. Provider key storage is not a credential
 broker. The application does not make strong secret-isolation claims against
 agents that can control the host computer.
