@@ -19,6 +19,8 @@ let providers;
 let server;
 let window;
 let dispatch;
+let lists;
+let listTimer;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const guiUrl = new URL('./gui.html', import.meta.url).href;
@@ -64,7 +66,10 @@ app.whenReady().then(async () => {
   browser = new Browser({ window, workspaceService: workspace, admission });
   workspace.attachBrowser(browser);
   const clients = new ClientGrants({ directory, masterToken: token, workspace });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, lists: new CommunityLists({ workspace }), admission, onEvent: event => events.emit('event', event) });
+  lists = new CommunityLists({ workspace });
+  // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
+  listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
+  dispatch = createDispatcher({ workspace, browser, providers, clients, lists, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
@@ -89,6 +94,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
+  clearInterval(listTimer);
   server?.close();
   providers?.close();
   browser?.close();

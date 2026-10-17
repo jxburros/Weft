@@ -16,6 +16,13 @@ alone is not a shipped capability.
 - Centralized design tokens, improved keyboard/dialog behavior, added reviewed
   light/dark GUI goldens and real Chromium/cross-platform Node CI.
 
+- Added signed, governed community site lists (#28): Ed25519 publisher key
+  pinning with rotation and anti-rollback, private-group/public subscriptions
+  with label/warn/block modes, digest-confirmed update previews, rollback,
+  unsubscribe, visible exceptions, opt-in verified source checks, a strict
+  claim/source/entity/opinion schema, file-based governance with
+  `scripts/community-list.js`, `lists.matches` precedence/provenance and ADR-004.
+  Fixture-validated; no hosted service, management screen or member authentication.
 - Added canonical agent guidance, a generated skill reference, and a local MCP
   client plugin manifest/configuration. Guidance is available as `guide.get`
   through the shared catalog.

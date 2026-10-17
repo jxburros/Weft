@@ -143,7 +143,16 @@ export class Browser {
       pinned: !!tab.pinned, controller: tab.controller ?? 'available', version: tab.version ?? 1,
       loading: contents.isLoading?.() ?? false, canGoBack: contents.navigationHistory?.canGoBack() ?? false,
       canGoForward: contents.navigationHistory?.canGoForward() ?? false, zoom: contents.getZoomFactor?.() ?? 1,
-      blocked: tab.blocked ?? null, error: tab.error ?? null, warning: rule?.behavior === 'warn' ? `${rule.hostname}: ${rule.reason}` : null };
+      blocked: tab.blocked ?? null, error: tab.error ?? null, warning: rule?.behavior === 'warn' ? `${rule.hostname}: ${rule.reason}` : null,
+      communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId) };
+  }
+
+  /** Informational community-list labels (never blocking); each names its list, claim kind and entry. */
+  communityLabels(url, workspaceId) {
+    try {
+      return (this.workspaceService?.communityLists?.matchesForUrl(url, workspaceId) ?? []).filter(match => match.active && match.effectiveBehavior === 'label')
+        .map(match => ({ list: match.listName, entryId: match.entryId, claimKind: match.claimKind, claim: match.claim.slice(0, 300), status: match.status }));
+    } catch { return []; }
   }
 
   persist() {

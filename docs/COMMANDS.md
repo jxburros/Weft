@@ -124,4 +124,12 @@ Human-only describes an unconditional administration gate; other commands may st
 | clients.revoke | Human revokes an automation grant immediately | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.install | Human installs or updates a disabled, commit/hash-pinned community site list from supplied offline JSON bytes | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.status | Human inspects installed list pins, rule status and rollback availability without downloading | administration | Human only | GUI IPC, CLI, REST, MCP |
-| lists.rollback | Human restores the previous pinned list version with rules disabled for review | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.rollback | Human restores the previous pinned list version (signed lists: the previous verified release; legacy pins: with rules disabled for review) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.subscribe | Human subscribes to a signed community list: pins the publisher key, chooses private-group or public, label/warn/block mode and confirms the previewed release digest | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.preview | Human previews a signed list release without applying it: added/removed/changed entries, newly blocked domains, governance and key changes | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.update | Human applies a previewed signed release (supplied or fetched by an explicit check); the previewed payload digest must be confirmed | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.configure | Human changes a subscription mode, reviewer floor, source URL or opt-in scheduled check | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.exception | Human adds or removes a visible per-site exception for one subscription | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.unsubscribe | Human removes a signed subscription and every rule it owns | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.check | Human fetches the subscription source URL once and stores a verified update for preview; nothing is applied | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.matches | Human lists every community-list entry and site rule matching a URL, with provenance and precedence | administration | Human only | GUI IPC, CLI, REST, MCP |
