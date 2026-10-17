@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync } from 'node:fs';
+import { fileStamp, writeVerifiedJson } from './storage-safety.js';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -28,6 +29,7 @@ export class ClientGrants {
     this.clock = clock;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.path = join(directory, 'client-grants.json');
+    this.stamp = fileStamp(this.path);
     this.grants = [];
     try {
       const saved = JSON.parse(readFileSync(this.path, 'utf8'));
@@ -37,9 +39,7 @@ export class ClientGrants {
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   save() {
-    const temporary = `${this.path}.${randomUUID()}.tmp`;
-    writeFileSync(temporary, JSON.stringify({ version: 1, grants: this.grants }), { mode: 0o600, flag: 'wx' });
-    renameSync(temporary, this.path);
+    this.stamp = writeVerifiedJson(this.path, JSON.stringify({ version: 1, grants: this.grants }), this.stamp);
   }
   sign(payload) { return createHmac('sha256', this.masterToken).update(payload).digest('base64url'); }
   authenticate(token) {

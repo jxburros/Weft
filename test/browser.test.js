@@ -86,6 +86,8 @@ async function runSmoke() {
     await until(() => !browser.tab().view.webContents.isLoading());
     await browser.execute('page.stop');
     assert.equal(await browser.execute('page.evaluate', { expression: 'Notification.requestPermission()' }), 'denied');
+    // Navigation completion precedes the compositor's first frame on hosted runners.
+    await browser.tab().view.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     const shot = await browser.execute('page.screenshot');
     assert.equal(Buffer.from(shot.data, 'base64').subarray(1, 4).toString(), 'PNG');
     const full = await browser.execute('page.screenshot', { fullPage: true });

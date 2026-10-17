@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { once, EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -109,7 +110,7 @@ test('client refuses to leak credentials to nonlocal or redirected endpoints', a
 test('CLI discovers and executes the same commands against the live REST server', async t => {
   const { url, token } = await fixture(t);
   const cli = new URL('../bin/weft.js', import.meta.url);
-  const run = (...args) => promisify(execFile)(process.execPath, [cli.pathname, ...args], {
+  const run = (...args) => promisify(execFile)(process.execPath, [fileURLToPath(cli), ...args], {
     env: { ...process.env, WEFT_API_URL: url, WEFT_TOKEN: token },
   });
   assert.deepEqual(JSON.parse((await run('commands')).stdout), commands);
@@ -153,7 +154,7 @@ test('MCP stdio entry point performs a real protocol handshake without stdout no
   const client = new Client({ name: 'stdio-test', version: '1.0.0' });
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: [new URL('../bin/weft.js', import.meta.url).pathname, 'mcp'],
+    args: [fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'mcp'],
     env: { WEFT_API_URL: url, WEFT_TOKEN: token },
   });
   t.after(() => client.close());
@@ -297,7 +298,7 @@ test('stable failures map execution, review, HTTP status and CLI exit codes', as
     assert.equal(resultExitCode(outcome), exit);
     assert.equal(outcome.review, code === 'permission_required' ? 'required' : 'not_required');
     if (exit === 6) assert.equal(outcome.execution, 'cancelled');
-    await assert.rejects(promisify(execFile)(process.execPath, [new URL('../bin/weft.js', import.meta.url).pathname, 'tabs.list'], { env: { ...process.env, WEFT_API_URL: url, WEFT_TOKEN: 'test' } }), error => {
+    await assert.rejects(promisify(execFile)(process.execPath, [fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'tabs.list'], { env: { ...process.env, WEFT_API_URL: url, WEFT_TOKEN: 'test' } }), error => {
       assert.equal(error.code, exit); assert.deepEqual(JSON.parse(error.stdout), outcome); return true;
     });
   }
@@ -310,7 +311,7 @@ test('in-process, REST, CLI and MCP return identical outcomes', async t => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);
   t.after(async () => { await client.close(); await server.close(); });
-  const cli = new URL('../bin/weft.js', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
   const cases = [
     ['tabs.new', { href: 'about:blank', workspace_id: 'ws-one' }],
     ['tasks.create', { title: 'Task' }],

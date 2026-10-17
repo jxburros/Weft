@@ -114,6 +114,9 @@ test('scoped clients cannot read, mutate or cancel another workspace and revocat
   const created = await f.dispatch('clients.create', { name: 'Researcher', scopes: ['read', 'records.write', 'tabs.control'], workspaceIds: [f.firstId] }, human);
   assert.equal(created.error, null);
   const { token, clientId } = created.result;
+  const deniedRecord = (await f.request('materials.get', { id: f.privateNote.id }, token)).outcome;
+  assert.equal(deniedRecord.error.code, 'permission_required');
+  assert.equal(deniedRecord.workspaceId, null, 'foreign record workspace is not disclosed');
   for (const [command, args] of [
     ['materials.get', { id: f.privateNote.id }],
     ['materials.update', { id: f.privateNote.id, changes: { title: 'Tampered' } }],

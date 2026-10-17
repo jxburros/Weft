@@ -47,6 +47,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     }, name, input);
     outcome.workspaceId = target.workspaceId ?? outcome.workspaceId;
     outcome.tabId = target.tabId ?? outcome.tabId;
+    if (context.clientId && outcome.workspaceId && !context.workspaceIds.includes(outcome.workspaceId)) {
+      outcome.workspaceId = null;
+      outcome.tabId = null;
+    }
     onEvent({ type: 'command', command: outcome.command, actor: context.actor,
       status: outcome.execution === 'succeeded' ? 'success' : 'failure', workspaceId: outcome.workspaceId, tabId: outcome.tabId, createdAt: new Date().toISOString() });
     return outcome;

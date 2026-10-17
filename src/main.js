@@ -45,7 +45,7 @@ app.whenReady().then(async () => {
     },
     searchWorkspace: ({ workspaceId, query }) => {
       admission.assertAutomationAdmitted('model-reader', 'search.query');
-      return workspace.execute('search.query', { workspaceId, query, limit: 20 }, { actor: 'model-reader', workspaceId });
+      return workspace.execute('search.query', { workspaceId, query, limit: 20 }, { actor: 'model-reader', workspaceId, assertAuthorized: () => admission.assertAutomationAdmitted('model-reader', 'search.query') });
     },
   });
   await providers.init();
