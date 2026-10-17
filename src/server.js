@@ -208,7 +208,14 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       setSseHeaders(res);
       res.write(': connected\n\n');
       let closed = false;
-      const cleanup = () => { if (closed) return; closed = true; streams.delete(res); turns.off('frame', live); };
+      const cleanup = () => { if (closed) return; closed = true; clearInterval(recheck); streams.delete(res); turns.off('frame', live); };
+      // Expiry or revocation of a client grant ends its follower stream too.
+      const recheck = setInterval(async () => {
+        const identity = await currentIdentity();
+        if (!closed && (!identity || !visible(identity, info.workspaceId))) { cleanup(); res.end(); }
+        else if (!closed) res.write(': heartbeat\n\n');
+      }, 15000);
+      recheck.unref();
       const write = frame => {
         if (closed || res.destroyed) return;
         if (res.writableLength > 4 * 1024 * 1024) { cleanup(); res.destroy(); return; }

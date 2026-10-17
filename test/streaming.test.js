@@ -386,6 +386,32 @@ test('usage absent from the provider is reported as unavailable and no cost is i
   assert.equal(listed.requiresDisclosure, false);
 });
 
+test('turn streams require the read scope and the turn workspace; others cannot tell the turn exists', { timeout: 5000 }, async t => {
+  const relay = new TurnRelay();
+  const workspaceId = 'ws_12345678-1234-1234-1234-123456789abc';
+  const turnId = 'turn_12345678-1234-1234-1234-123456789abc';
+  relay.start(turnId, { conversationId: 'conv_1', workspaceId, modelId: 'm', model: 'm', endpoint: 'http://127.0.0.1/v1', locality: 'on-device endpoint', streaming: true });
+  relay.push(turnId, { type: 'delta', text: 'private reply text' });
+  relay.end(turnId, { status: 'complete', finishReason: 'stop' });
+  const identities = {
+    same: { actor: 'client:11111111-1111-1111-1111-111111111111', workspaceIds: [workspaceId], scopes: ['read'] },
+    other: { actor: 'client:22222222-2222-2222-2222-222222222222', workspaceIds: ['ws_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'], scopes: ['read'] },
+    writeOnly: { actor: 'client:33333333-3333-3333-3333-333333333333', workspaceIds: [workspaceId], scopes: ['records.write'] },
+  };
+  const server = createApiServer({ authenticate: token => identities[token] || null, execute: () => true, turns: relay });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); relay.close(); }));
+  const url = `http://127.0.0.1:${server.address().port}/v1/turns/${turnId}/events`;
+  const get = token => fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  assert.equal((await get('other')).status, 404);
+  assert.equal((await get('writeOnly')).status, 403);
+  assert.equal((await get('nobody')).status, 401);
+  assert.equal((await fetch(url, { headers: { authorization: 'Bearer same', origin: 'https://evil.example' } })).status, 403);
+  const allowed = await get('same');
+  assert.equal(allowed.status, 200);
+  assert.match(await allowed.text(), /private reply text[\s\S]*event: turn\.end/);
+});
+
 test('the turn relay bounds frames, reports gaps for dropped frames and expires finished turns', async () => {
   const relay = new TurnRelay({ maxFrames: 3, retainMs: 30 });
   const turnId = 'turn_12345678-1234-1234-1234-123456789abc';
