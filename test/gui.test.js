@@ -257,6 +257,36 @@ if (process.argv.includes("--gui-workflows")) {
       (await run('window.weft.execute("artifacts.list")')).length,
       1,
     );
+    // #17: review and redact a capture in the GUI: preview first, draw an image region, save a derivative, restrict the original.
+    await click("#nav-artifacts, [data-section=artifacts]");
+    await until('document.querySelector(\'[data-action="view-artifact"]\') !== null');
+    await click('[data-action="view-artifact"]');
+    await until('document.querySelector(\'[data-action="redact-version"]\') !== null');
+    await click('[data-action="redact-version"]');
+    await until('document.getElementById("redact-form") !== null && document.getElementById("redact-image")?.naturalWidth > 0');
+    await run('document.querySelector(\'#redact-form [name="literals"]\').value = "Evidence saved"');
+    await click("#redact-show");
+    await until('document.getElementById("redact-preview").textContent.includes("[REDACTED]")');
+    assert.equal(await run('document.querySelector("#redact-preview pre").textContent.includes("Evidence saved")'), false);
+    await run('document.getElementById("redact-image").scrollIntoView({ block: "center" })');
+    await new Promise((r) => setTimeout(r, 100));
+    const box = await run('(() => { const r = document.getElementById("redact-image").getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })()');
+    for (const [type, dx, dy] of [["mouseDown", 6, 6], ["mouseMove", 30, 20], ["mouseMove", 60, 40], ["mouseUp", 60, 40]]) {
+      window.webContents.sendInputEvent({ type, x: box.x + dx, y: box.y + dy, button: "left", clickCount: 1 });
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await until('document.getElementById("redact-regions").textContent.includes("px at")');
+    await click("#redact-save");
+    await until('(async()=>{const [a]=await window.weft.execute("artifacts.list");return a.versions.length===2 && a.versions[0].access==="restricted"})()');
+    const redacted = await run('(async()=>{const [a]=await window.weft.execute("artifacts.list");return window.weft.execute("artifacts.get",{id:a.id,versionId:a.versions[1].id})})()');
+    assert.equal(redacted.text.includes("Evidence saved"), false);
+    assert.deepEqual(redacted.redactions.map((item) => item.type), ["text", "region"]);
+    await until('document.querySelector(".artifact-text")?.textContent.includes("[REDACTED]")');
+    await click('[data-action="compare-versions"]');
+    await until('document.getElementById("compare-form") !== null');
+    await run('document.getElementById("compare-form").requestSubmit()');
+    await until('document.getElementById("compare-result").textContent.includes("Differences found")');
+    await click('[data-action="close-dialog"]');
     // Plugins and browser extensions are managed only through reviewed-scope dialogs.
     await click("#settings-button");
     await until('document.querySelector("[data-action=manage-plugins]")!==null');

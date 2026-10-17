@@ -428,3 +428,56 @@ test('export/import round-trips exact citations, provenance, proposals, conflict
   const tamperedFinding = f.workspace.data.context.find(item => item.workspaceId === second.id && item.title === 'Meeting day');
   assert.deepEqual(tamperedFinding.citations.map(item => [item.status, item.reason ?? null]), [['unverified', 'quote_not_found'], ['verified', null], ['unverified', 'not_in_export']], 'imported claims of verification are recomputed');
 });
+
+test('restricted capture originals stay withheld through shared collections, citations, re-anchoring and freshness results', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  const SECRET = 'zebracodeword', LATER = 'quokkapassphrase';
+  const capture = await f.run('artifacts.create', { workspaceId: f.a, title: 'Audit', text: `Public summary. Internal code ${SECRET} approved. End of report.` });
+  const original = capture.versions[0].id;
+  // A person cited the original before it was restricted (explicit selectors, so no original text is stored beyond the quote).
+  const finding = await f.run('context.create', { workspaceId: f.a, title: 'Audit finding', content: 'The audit has a public summary.', category: 'findings',
+    citations: [{ type: 'capture', captureId: capture.id, versionId: original, exact: 'Public summary', prefix: '', suffix: '.' }] });
+  assert.equal(finding.citations[0].status, 'verified');
+  const derived = await f.run('artifacts.redact', { id: capture.id, versionId: original, text: [{ literal: SECRET }] });
+  await f.run('artifacts.setAccess', { id: capture.id, versionId: original, access: 'restricted' });
+  const agent = await f.grant({ scopes: ['read', 'records.write'] });
+  const leaks = (value, secrets = [SECRET, LATER]) => secrets.some(secret => JSON.stringify(value).includes(secret));
+
+  // Re-anchoring uses the sanitized derivative of the restricted original.
+  const checked = await f.rest('citations.check', { workspaceId: f.a, id: finding.id }, agent.token);
+  assert.equal(checked.error, null, JSON.stringify(checked.error));
+  assert.deepEqual(checked.result.changes.map(item => [item.to, item.current?.versionId]), [['reanchored', derived.derivative.versionId]]);
+  // An agent citing the restricted original gets no anchor, selectors or verification from its text.
+  const probe = await f.rest('context.create', { workspaceId: f.a, title: 'Probe', content: 'Probe', citations: [{ type: 'capture', captureId: capture.id, versionId: original, exact: 'Internal code' }] }, agent.token);
+  assert.equal(probe.error, null, JSON.stringify(probe.error));
+  assert.deepEqual([probe.result.citations[0].status, probe.result.citations[0].reason, probe.result.citations[0].anchor], ['unverified', 'restricted_original', undefined]);
+  assert.equal(leaks(probe.result), false);
+
+  // A newer restricted capture without a derivative: re-anchoring reports the text unavailable instead of reading it.
+  const recapture = await f.run('artifacts.create', { workspaceId: f.a, artifactId: capture.id, title: 'Audit', text: `Public summary. Rotated to ${LATER}.` });
+  await f.run('artifacts.setAccess', { id: capture.id, versionId: recapture.versions.at(-1).id, access: 'restricted' });
+  const report = await f.rest('freshness.check', { workspaceId: f.a }, agent.token);
+  assert.equal(report.error, null, JSON.stringify(report.error));
+  assert.equal(leaks(report.result), false);
+  assert.equal(f.workspace.data.context.find(item => item.id === finding.id).citations[0].reason, 'restricted_original');
+  assert.equal(leaks((await f.rest('conflicts.list', { workspaceId: f.a }, agent.token)).result), false);
+
+  // Shared into another workspace: the collection read and the shared artifacts.get both withhold restricted versions.
+  const shared = await f.run('collections.create', { workspaceId: f.a, name: 'Audit evidence' });
+  await f.run('collections.addItem', { id: shared.id, type: 'artifacts', itemId: capture.id });
+  await f.run('collections.grant', { id: shared.id, memberWorkspaceId: f.b, role: 'read' });
+  const partner = await f.grant({ workspaceIds: [f.b] });
+  const read = await f.rest('collections.read', { id: shared.id, workspaceId: f.b, itemId: capture.id }, partner.token);
+  assert.equal(read.error, null, JSON.stringify(read.error));
+  assert.equal(read.result.latestVersion.withheld, 'restricted_original');
+  assert.equal(read.result.latestVersion.text, null);
+  assert.equal(leaks(read.result), false);
+  assert.equal(JSON.stringify(read.result.versions).includes('withheld'), true);
+  // In-process shared reads (model tools, snapshot views) use the same per-version view.
+  const inProcess = await f.workspace.execute('artifacts.get', { id: capture.id }, { actor: 'agent:test', workspaceId: f.b });
+  assert.equal(leaks(inProcess), false);
+  assert.equal(JSON.stringify(inProcess).includes('End of report'), true, 'the sanitized derivative stays readable');
+  const raw = await f.rest('artifacts.readOriginal', { id: capture.id, versionId: original }, partner.token);
+  assert.notEqual(raw.error, null);
+  assert.equal(leaks(raw), false);
+});

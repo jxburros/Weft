@@ -108,11 +108,14 @@ export class Knowledge {
       if (!entry) throw fail('not_found', 'Record is not in this collection');
       const target = this.data[entry.type].find(item => item.id === entry.id && item.workspaceId === record.workspaceId);
       if (!target) throw fail('not_found', 'Shared record no longer exists');
-      let output = this.workspace.output(target);
+      let output;
       if (entry.type === 'artifacts') {
-        const latest = output.versions.at(-1);
-        output = { ...output, versions: output.versions.map(({ text, pngBase64, ...metadata }) => metadata), latestVersion: latest ? { id: latest.id, number: latest.number, text: latest.text ?? null } : null };
-      }
+        // Same per-version view as artifacts.get: restricted originals are withheld stubs for agents in every workspace.
+        const view = this.workspace.readArtifact('artifacts.get', target, {}, context);
+        const latest = view.versions.at(-1);
+        output = { ...view, versions: view.versions.map(({ text, pngBase64, ...metadata }) => metadata),
+          latestVersion: latest ? { id: latest.id, number: latest.number, text: latest.text ?? null, ...(latest.withheld && { withheld: latest.withheld }) } : null };
+      } else output = this.workspace.output(target);
       return { ...forCaller(entry.type, output, context), sharedVia: { collectionId: record.id, ownerWorkspaceId: record.workspaceId, role } };
     }
     if (action === 'write') {

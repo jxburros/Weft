@@ -129,6 +129,8 @@ if (process.argv.includes('--credentials-smoke')) {
       }
       const capture = await run('artifacts.capture', { workspaceId, tabId, kind: 'bundle', title: 'During sign-in' }, agent);
       assert.equal(capture.error?.code, 'permission_required', 'artifact capture of the tab is refused');
+      const archive = await run('artifacts.capture', { workspaceId, tabId, kind: 'archive', title: 'Archive during sign-in' }, agent);
+      assert.equal(archive.error?.details?.credential, 'protected_operation', `resource archive capture of the tab is refused: ${JSON.stringify(archive.error)}`);
       const inspected = await run('page.inspect', { tabId }, agent);
       assert.equal(inspected.result.protectedOperation, 'credential fill');
       assert.equal(inspected.result.title, '[protected operation]');
@@ -171,6 +173,8 @@ if (process.argv.includes('--credentials-smoke')) {
         const outcome = await run(command, { tabId }, agent);
         assert.equal(outcome.error?.details?.credential, 'credential_revealed', command);
       }
+      const revealedArchive = await run('artifacts.capture', { workspaceId, tabId, kind: 'archive', title: 'Revealed' }, agent);
+      assert.equal(revealedArchive.error?.details?.credential, 'credential_revealed', 'the serialized page would carry the revealed secret');
       assert.deepEqual(leaks(await run('page.readable', { tabId }, agent)), [], 'readable text never includes form fields');
 
       // 4. Wrong top-level origin (phishing page): refused even with a human approval; nothing reaches the page.

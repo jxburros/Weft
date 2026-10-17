@@ -378,10 +378,19 @@ export class Providers {
           try {
             if (!this.workspace.execute) throw new Error('Saved records are unavailable here');
             version = await this.workspace.execute('artifacts.get', { id: item.id, versionId: item.versionId }, { workspaceId, actor: 'model-reader' });
+            // A restricted original is never sent: its newest sanitized derivative is sent in its place, or nothing.
+            if (version.withheld === 'restricted_original') {
+              const derivative = version.derivatives?.at(-1);
+              if (!derivative) { entries.push({ ...base, unavailable: 'This capture version is a restricted original and has no sanitized derivative; a person must redact it or change its access before it can be attached.' }); continue; }
+              const original = version.id;
+              version = await this.workspace.execute('artifacts.get', { id: item.id, versionId: derivative }, { workspaceId, actor: 'model-reader' });
+              version.substitutedFor = original;
+            }
           } catch (error) { failure(base, error); continue; }
           const parts = item.parts || ['text', 'image'];
           const provenance = { artifactId: item.id, versionId: version.id, versionNumber: version.number, url: version.url, capturedAt: version.createdAt, method: version.method,
-            navigationVersion: version.navigationVersion, components: version.components, limitations: version.limitations, regions: regionSummary(version) };
+            navigationVersion: version.navigationVersion, components: version.components, limitations: version.limitations, regions: regionSummary(version),
+            ...(version.derivedFrom ? { derivedFrom: version.derivedFrom, sanitized: true } : {}), ...(version.substitutedFor ? { substitutedFor: version.substitutedFor } : {}) };
           const title = version.title || item.id;
           if (parts.includes('text')) {
             if (typeof version.text === 'string') entries.push({ ...base, key: `${base.key}:text`, title: `${title} (text v${version.number})`, source: version.url || `artifact ${item.id}`, text: version.text.slice(0, 100000), provenance });

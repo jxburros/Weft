@@ -74,7 +74,7 @@ Human-only describes an unconditional administration gate. Every other non-human
 | workspaces.restore | Restore an archived workspace | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.duplicate | Copy project records; exclude sessions and credentials | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.delete | Permanently delete a workspace and its saved records | administration | Human only | GUI IPC, CLI, REST, MCP |
-| workspaces.export | Export project records with optional exact-term residue scan; images are unverifiable | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.export | Export project records with optional exact-term residue scan and metadata review; images are unverifiable | administration | Human only | GUI IPC, CLI, REST, MCP |
 | workspaces.import | Import a versioned project export as a new workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
 | settings.get | Get non-secret application preferences | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | settings.update | Update application preferences; credentials are not accepted | administration | Human only | GUI IPC, CLI, REST, MCP |
@@ -83,10 +83,19 @@ Human-only describes an unconditional administration gate. Every other non-human
 | tasks.transition | Change task state and record the cause | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | artifacts.list | List saved artifact metadata | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | artifacts.get | Read an offline artifact or exact immutable version | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
-| artifacts.capture | Save page text and/or PNG as an immutable offline reference | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.capture | Save page text, PNG and optionally a resource archive as an immutable offline version | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | artifacts.create | Save supplied text or PNG as an untrusted offline artifact | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | artifacts.annotate | Append a revision of artifact notes and tags | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | artifacts.delete | Permanently delete a saved artifact and every version | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.compare | Compare two versions of an artifact: readable-text diff, resource-list diff and optional pixel diff | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.verify | Re-verify the SHA-256 of every stored component of an artifact, or of one version | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.review | Review a version for sensitive URL, path, query, title and source metadata with optional pattern-detection assistance | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.redact | Create a sanitized derivative version: text spans and image regions removed; the original is kept unchanged | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.readOriginal | Read a restricted original version; agents need an exact one-time human approval and the restricted_original data class | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| artifacts.setAccess | Human sets whether agents may read a version (restricted originals are withheld, unindexed and excluded from exports by default) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| artifacts.purgeContent | Human permanently removes the stored content of one version, keeping its metadata and hashes | administration | Human only | GUI IPC, CLI, REST, MCP |
+| artifacts.preview | Human opens an archived version in the offline preview (scripts, network, navigation and forms disabled) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| artifacts.closePreview | Human closes the offline archive preview | administration | Human only | GUI IPC, CLI, REST, MCP |
 | siteRules.review | Human records a site-rule review and optionally schedules the next review date | administration | Human only | GUI IPC, CLI, REST, MCP |
 | materials.list | List materials | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | materials.get | Get materials record | local_read | Policy checked | GUI IPC, CLI, REST, MCP |

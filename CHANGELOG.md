@@ -7,6 +7,36 @@ alone is not a shipped capability.
 
 ### Changed
 
+- Added resource archives (#16, ADR-012): `artifacts.capture` with
+  `kind: "archive"` stores Chromium's MHTML serialization as content-addressed
+  resource components with a manifest (URL, MIME, size, SHA-256, status) that
+  lists failed, missing, script, oversized and over-budget resources explicitly,
+  removes sensitive form values, bounds readiness and duration, and records
+  original/final URL, timing, viewport, state changes, request failures,
+  coverage and incomplete reasons. Added `artifacts.compare` (text, resource
+  and pixel diffs), `artifacts.verify`, and a human-only offline preview
+  (`artifacts.preview`/`artifacts.closePreview`) with JavaScript disabled,
+  archive-only responses and blocked navigation, forms, popups and downloads.
+- Added capture redaction and controlled derivatives (#17, ADR-012):
+  `artifacts.redact` saves sanitized derivative versions (text spans, titles,
+  URLs and re-encoded PNG regions; `preview: true` first) with
+  `derivedFrom`/`redactions`/`inaccessibleRegions` metadata; human-only
+  `artifacts.setAccess` restricts originals (withheld from agents, model
+  attachments, search and default exports) and `artifacts.purgeContent`
+  removes stored content; `artifacts.readOriginal` needs the new
+  `restricted_original` data class and an exact one-time approval per read.
+  `artifacts.review` and export `reviewMetadata` add URL/query/path review and
+  labelled pattern-detection assistance; exports take a `captures` policy and
+  report `excludedContent` and `linkedSourcesNotIncluded`. The search index uses
+  FTS5 secure-delete. GUI: archive coverage, offline preview banner, version
+  comparison, redaction editor and export capture policy. Limits: no archived
+  HTML redaction, OCR, note/annotation rewriting or erasure of earlier backups.
+- Integrated restricted originals with shared collections, citations and
+  protected login: shared-collection reads withhold restricted versions,
+  citations never anchor against a restricted original (re-anchoring uses its
+  sanitized derivative or reports `restricted_original`), and automation archive
+  capture is refused on a tab in, or entering, a protected operation.
+
 - Hardened JSON storage with ownership locks, verified writes, migrations,
   secret guards, export residue review and sync-conflict warnings.
 - Unified outcomes/errors and compact MCP tools; added scoped client credentials,

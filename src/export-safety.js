@@ -30,11 +30,12 @@ export function inspectExportResidue(serialized, terms) {
     if (!value || typeof value !== 'object') return;
     for (const [key, item] of Object.entries(value)) {
       if (key === 'pngBase64' && item) { unverifiable.push(`${path}.pngBase64: image text cannot be verified`); continue; }
-      if (key === 'fileBase64' && item) {
-        if (/^text\//i.test(value.mimeType || '')) {
+      if ((key === 'fileBase64' || key === 'bodyBase64') && item) {
+        if (typeof item !== 'string') { unverifiable.push(`${path}.${key}: stored as a separate package component`); continue; }
+        if (/^text\/|html|xml|json|css|javascript/i.test(value.mimeType || '')) {
           try { scanText(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(item, 'base64'))); }
-          catch { unverifiable.push(`${path}.fileBase64: unsupported text encoding`); }
-        } else unverifiable.push(`${path}.fileBase64: unsupported file format`);
+          catch { unverifiable.push(`${path}.${key}: unsupported text encoding`); }
+        } else unverifiable.push(`${path}.${key}: unsupported file format`);
         continue;
       }
       walk(item, `${path}.${key}`);

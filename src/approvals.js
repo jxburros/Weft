@@ -107,7 +107,7 @@ export class ApprovalQueue {
     this.onChange();
     return item.status === 'approved';
   }
-  request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level, preview: shown, previewExtra = null }) {
+  request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level, preview: shown, previewExtra = null, onceOnly = false }) {
     this.expire();
     const existing = this.items.find(item => item.status === 'pending' && item.fingerprint === fingerprint && item.actor === actor);
     if (existing) return structuredClone(existing);
@@ -118,7 +118,7 @@ export class ApprovalQueue {
     const now = this.clock();
     const item = { id: `appr_${randomUUID()}`, status: 'pending', fingerprint, actor, clientId: clientId ?? null, command, actionClass, categories: categories ?? [], level: level ?? null,
       workspaceId: workspaceId ?? null, tabId: tabId ?? null, taskId: taskId ?? null, destinationOrigin: origin(destination), destination: destination ? minimizeUrl(destination) : null,
-      reason, summary: summarizeArgs(args), preview: shown ?? { ...preview(args), ...(previewExtra ?? {}) }, createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null };
+      reason, summary: summarizeArgs(args), preview: shown ?? { ...preview(args), ...(previewExtra ?? {}) }, createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null, ...(onceOnly && { onceOnly: true }) };
     this.items.push(item);
     this.save();
     this.onChange();
@@ -150,7 +150,7 @@ export class ApprovalQueue {
     if (name === 'approvals.reject') {
       Object.assign(item, { status: 'rejected', decidedAt: new Date(now).toISOString(), decidedBy: 'human', rejectionReason: args.reason ? String(args.reason).slice(0, 500) : null });
     } else {
-      if (args.mode === 'standing' && !standingAllowed(item.actionClass)) throw Object.assign(new Error('This action class requires an exact approval for every use; standing approval is not available'), { code: 'permission_required' });
+      if (args.mode === 'standing' && (item.onceOnly || !standingAllowed(item.actionClass))) throw Object.assign(new Error('This action class requires an exact approval for every use; standing approval is not available'), { code: 'permission_required' });
       Object.assign(item, { status: 'approved', mode: args.mode, decidedAt: new Date(now).toISOString(), decidedBy: 'human', uses: 0,
         ...(args.mode === 'once' ? { expiresAt: now + APPROVED_ONCE_MS } : { standingExpiresAt: now + args.standingMinutes * 60000 }) });
     }

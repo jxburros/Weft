@@ -12,6 +12,7 @@ const KNOWN_COUPLINGS = [
   ['src/sqlite.js', 'node:sqlite', 'Constant built-in specifier loaded dynamically only to filter its load-time ExperimentalWarning; not a plugin path'],
   ['src/credential-entry-preload.cjs', 'electron', 'Preload of the browser-owned credential entry window; Electron preloads use CommonJS require; not a plugin path'],
   ['src/credential-broker-child.cjs', 'node:crypto', 'Credential broker process: self-contained CommonJS with built-in modules only, so the Node permission model need not grant reads of other source files; not a plugin path'],
+  ['src/redaction.js', 'node:vm', 'Runs one constant, module-defined matching script under a timeout so caller-supplied redaction patterns cannot stall the process; loads no code and is not a plugin path'],
 ];
 // The one door from core into the plugin layer.
 const BOUNDARY = new Set(['src/plugins/registry.js']);

@@ -36,9 +36,13 @@ export async function boundImage(base64, { limits = IMAGE_LIMITS, resizeImage } 
 /** Normalize redaction / inaccessible-region metadata that capture producers may attach to a version. */
 export function regionSummary(version = {}) {
   const count = value => Array.isArray(value) ? value.length : 0;
+  // Sanitized derivatives (src/workspace.js) list image regions ({type:'region'}) and removed text spans ({type:'text'}) in `redactions`.
+  const regions = Array.isArray(version.redactions) ? version.redactions.filter(item => item?.type !== 'text').length : 0;
+  const text = Array.isArray(version.redactions) ? version.redactions.length - regions : 0;
   return {
-    redacted: count(version.redactions) + count(version.redactedRegions),
+    redacted: regions + count(version.redactedRegions),
     inaccessible: count(version.inaccessibleRegions) + count(version.unavailableRegions),
     redactionStatus: typeof version.redactionStatus === 'string' ? version.redactionStatus.slice(0, 40) : 'unknown',
+    ...(text ? { redactedText: text } : {}),
   };
 }

@@ -53,6 +53,14 @@ const contentAt = (record, revision) => {
   const entry = record.history.filter(item => item.revision <= revision).at(-1);
   return entry ? entry.content : null;
 };
+/**
+ * Restricted capture originals (#17) never supply citation text: anchors, generated prefix/suffix selectors and
+ * re-anchoring results are stored in records agents read, so the original's text would leak through them.
+ * Re-anchoring uses the newest sanitized derivative of a restricted latest version, or reports the text unavailable.
+ */
+const RESTRICTED = 'restricted_original';
+const citableText = version => version.access === 'restricted' ? null : safeText(() => version.text);
+const readableVersion = (artifact, version) => version.access !== 'restricted' ? version : artifact.versions.filter(item => item.derivedFrom === version.id && item.access !== 'restricted' && !item.purged).at(-1) ?? null;
 const readable = (data, collection, record, workspaceId) => record && (record.workspaceId === workspaceId || sharedAccess(data, collection, record, workspaceId));
 const safeText = read => { try { return read(); } catch { return undefined; } };
 const serviceText = (material, sha256) => {
@@ -72,9 +80,9 @@ export function citationTarget(data, workspaceId, input, texts = new Map()) {
     if (!readable(data, 'artifacts', artifact, workspaceId)) return null;
     const version = input.versionId ? artifact.versions.find(item => item.id === input.versionId) : artifact.versions.at(-1);
     if (!version) return null;
-    const text = safeText(() => version.text);
+    const text = citableText(version);
     return { pin: { captureId: artifact.id, versionId: version.id, version: version.number }, text: typeof text === 'string' ? text : null, anchorKey: { versionId: version.id },
-      ...(typeof text !== 'string' && { unavailable: version.text === undefined ? 'capture_has_no_text' : 'component_unreadable' }) };
+      ...(typeof text !== 'string' && { unavailable: version.access === 'restricted' ? RESTRICTED : version.text === undefined ? 'capture_has_no_text' : 'component_unreadable' }) };
   }
   if (input.type === 'record') {
     const collection = input.collection ?? 'context';
@@ -101,8 +109,10 @@ export function citationLatest(data, workspaceId, citation, texts = new Map()) {
   if (citation.type === 'capture') {
     const artifact = data.artifacts.find(item => item.id === citation.captureId);
     if (!readable(data, 'artifacts', artifact, workspaceId) || !artifact.versions.length) return null;
-    const latest = artifact.versions.at(-1);
-    const text = safeText(() => latest.text);
+    const newest = artifact.versions.at(-1);
+    const latest = readableVersion(artifact, newest);
+    if (!latest) return { key: { versionId: newest.id, version: newest.number }, changed: newest.id !== citation.versionId, text: null, unavailable: RESTRICTED };
+    const text = citableText(latest);
     return { key: { versionId: latest.id, version: latest.number }, changed: latest.id !== citation.versionId, text: typeof text === 'string' ? text : null, ...(typeof text !== 'string' && { unavailable: 'capture_has_no_text' }) };
   }
   if (citation.type === 'record') {

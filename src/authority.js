@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
-import { ACTION_CLASSES, AUTONOMY_LEVELS, ONCE_ONLY_CLASSES, actionClassForCommand, raiseActionClass, dataClassesForCommand, effectForCommand, effectiveLevel,
+import { ACTION_CLASSES, APPROVAL_DATA_CLASSES, AUTONOMY_LEVELS, ONCE_ONLY_CLASSES, actionClassForCommand, raiseActionClass, dataClassesForCommand, effectForCommand, effectiveLevel,
   evaluateAutonomy, resourceForCommand, sensitiveCategoriesForCommand, EXTERNAL_CLASSES } from './autonomy.js';
 import { ActivityLog, summarizeArgs } from './activity-log.js';
 import { ApprovalQueue, approvalFingerprint } from './approvals.js';
@@ -116,7 +116,9 @@ export class Authority {
     }
     const workspaceCap = target.workspaceId ? this.policy.workspaces[target.workspaceId] : null;
     const effective = this.levelFor(context, target.workspaceId);
-    const evidence = { actor: base.actor, actionClass, level: effective, humanOnly };
+    // Reads of approval-gated data (restricted originals) need an exact one-time approval every time.
+    const restrictedData = (spec.dataClasses ?? dataClassesForCommand(command)).some(item => APPROVAL_DATA_CLASSES.includes(item));
+    const evidence = { actor: base.actor, actionClass, level: effective, humanOnly, restrictedData };
     let result = evaluateAutonomy(evidence);
     let approvalId;
     let approvedOnce = false;
@@ -129,12 +131,12 @@ export class Authority {
     }
     if (result.decision === 'approval') {
       const fingerprint = approvalFingerprint({ command, args, actor: base.actor, workspaceId: target.workspaceId, tabId: target.tabId, destination });
-      const match = this.approvals.match({ fingerprint, actor: base.actor, command, workspaceId: target.workspaceId, destination, taskId: context.taskId, actionClass }, id => this.taskOpen(id));
+      const match = this.approvals.match({ fingerprint, actor: base.actor, command, workspaceId: target.workspaceId, destination, taskId: context.taskId, actionClass, allowStanding: !restrictedData }, id => this.taskOpen(id));
       if (match.approvalId) { approvalId = match.approvalId; approvedOnce = Boolean(match.approvedOnce); result = evaluateAutonomy({ ...evidence, ...match }); }
       if (result.decision === 'approval') {
         const request = this.approvals.request({ fingerprint, actor: base.actor, clientId: context.clientId, command, args, actionClass,
           categories: sensitiveCategoriesForCommand(command), workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId, destination, reason: result.reason, level: effective,
-          previewExtra: this.approvalPreview?.(command, args) ?? null });
+          previewExtra: this.approvalPreview?.(command, args) ?? null, onceOnly: restrictedData });
         this.record({ ...base, type: 'approval', decision: 'approval', reason: result.reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args) });
         throw authorityError('approval_required', `${command} needs human approval in the Weft window (request ${request.id}). Retry the identical command after approval; changed arguments need a new approval.`,
           { decision: 'approval', reason: result.reason, actionClass, level: effective, approvalId: request.id, fingerprint, expiresAt: new Date(request.expiresAt).toISOString() });
