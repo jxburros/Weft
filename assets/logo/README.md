@@ -11,8 +11,7 @@ The mark is two interlocking bands forming a W, with one over-under crossing. It
 | Charcoal (dark tile) | `#27252B` |
 | Orchid / light sage (on dark) | `#CDA9CB` / `#A3B8A8` |
 
-Wordmark: Source Sans 3 SemiBold, converted to the vector files' own text (the PDFs and SVGs reference the font, so
-use the PNGs where Source Sans 3 is not installed).
+Wordmark: Source Sans 3 SemiBold, outlined to vector paths in the SVG and PDF files, so no font is needed to use them.
 
 ## Folders
 
