@@ -56,6 +56,13 @@ if (process.argv.includes('--archive-smoke')) {
     // Capture only once the window is mapped, as in the app; an unmapped window has no compositor surface yet.
     if (!window.isVisible()) await new Promise(resolve => window.once('show', resolve));
     const browser = new Browser({ window, workspaceService: workspace });
+    // Diagnostics for CI-only compositor failures: the last step reached and the page view's render state.
+    const step = name => {
+      const view = browser.tab?.()?.view;
+      let state = null;
+      try { state = { windowVisible: window.isVisible(), attached: view ? browser.attachedViews.has(view) : null, bounds: view?.getBounds?.(), offscreen: view?.webContents?.isOffscreen?.(), loading: view?.webContents?.isLoading?.(), preview: Boolean(browser.preview) }; } catch (error) { state = { error: error.message }; }
+      console.log(`ARCHIVE_STEP ${name} ${JSON.stringify(state)}`);
+    };
     workspace.attachBrowser(browser);
     const beaconHits = [];
     const beacon = createServer((request, response) => { beaconHits.push(`${request.method} ${request.url}`); response.end('tracked'); });
@@ -67,6 +74,7 @@ if (process.argv.includes('--archive-smoke')) {
       await until(async () => !contents.isLoading() && (await contents.executeJavaScript('document.title')) === 'Script ran' && hits.includes('/beacon'));
 
       // #16: bounded archive capture with a manifest and explicit missing-resource report.
+      step('capture-1');
       const first = await workspace.execute('artifacts.capture', { kind: 'archive', title: 'Prices', maxResourceBytes: 64 * 1024, readyTimeoutMs: 3000 });
       const v1 = workspace.data.artifacts[0].versions[0];
       const resources = Object.fromEntries(v1.archive.resources.map(item => [new URL(item.url).pathname, item]));
@@ -96,11 +104,14 @@ if (process.argv.includes('--archive-smoke')) {
 
       // Changed-page recapture is a new immutable version; comparison shows what changed.
       price = '45';
+      step('reload');
       await browser.execute('page.reload', { tabId: browser.activeId });
       await until(async () => !contents.isLoading() && /Price 45/.test(await contents.executeJavaScript('document.body.innerText')));
+      step('capture-2');
       await workspace.execute('artifacts.capture', { kind: 'archive', artifactId: first.id, maxResourceBytes: 64 * 1024 });
       const [a, b] = workspace.data.artifacts[0].versions;
       assert.equal(a.id, v1.id);
+      step('compare');
       const comparison = await workspace.execute('artifacts.compare', { id: first.id, fromVersionId: a.id, toVersionId: b.id });
       assert.deepEqual(comparison.text.hunks.flatMap(hunk => hunk.lines).filter(line => line.op !== 'context').map(line => line.text), ['Price 42 today', 'Price 45 today']);
       assert.ok(comparison.resources.changed.some(item => item.url === `${origin}/`));
@@ -109,6 +120,7 @@ if (process.argv.includes('--archive-smoke')) {
       // Source closed and network gone: the archive still previews offline, from stored components only.
       await stop(source);
       const before = hits.length;
+      step('preview');
       const preview = await workspace.execute('artifacts.preview', { id: first.id, versionId: a.id });
       assert.equal(preview.open, true);
       assert.equal(preview.javascript, 'disabled');
