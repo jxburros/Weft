@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -283,15 +283,21 @@ test('a human task grant lets one open task fill a limited number of times witho
  */
 function replayCliCall(f, op) {
   const script = `require('node:child_process').execFile(${JSON.stringify(op)}, ['read', '--no-newline', 'op://Private/Example/password'], { env: process.env, timeout: 15000, shell: false },
-    (error, stdout) => console.log(JSON.stringify({ code: error?.code ?? null, signal: error?.signal ?? null, killed: error?.killed ?? false, message: error ? String(error.message).split('\\n')[0].slice(0, 200) : null, length: String(stdout).length })))`;
+    (error, stdout, stderr) => console.log(JSON.stringify({ code: error?.code ?? null, signal: error?.signal ?? null, killed: error?.killed ?? false, message: error ? String(error.message).split('\\n')[0].slice(0, 200) : null, length: String(stdout).length,
+      stderr: String(stderr).split('\\n').slice(0, 5).join(' | ').slice(0, 300) })))`;
   const directory = f.credentials.vaultDirectory;
   const result = spawnSync(process.execPath, ['--permission', `--allow-fs-read=${directory}`, `--allow-fs-write=${directory}`, '--allow-child-process', '-e', script],
     { env: f.credentials.brokerEnv(), encoding: 'utf8', timeout: 30000 });
-  return JSON.stringify({ status: result.status, stdout: result.stdout.trim().slice(0, 400), stderr: result.stderr.trim().replaceAll(SECRET, '[secret]').slice(0, 400) });
+  return JSON.stringify({ status: result.status, stdout: result.stdout.trim().replaceAll(SECRET, '[secret]').slice(0, 700), stderr: result.stderr.trim().replaceAll(SECRET, '[secret]').slice(0, 400),
+    env: Object.keys(f.credentials.brokerEnv()).sort() });
 }
 
 test('1Password CLI adapter resolves op:// references at fill time through the broker (fake CLI; unvalidated against a real account)', { skip: process.platform === 'win32' ? 'The fake op CLI is a POSIX script' : false }, async t => {
-  const bin = mkdtempSync(join(tmpdir(), 'weft-fake-op-'));
+  // The broker runs with Node's permission model, and Node passes those flags to child Node processes through
+  // NODE_OPTIONS, so this Node-script stand-in for op (unlike the real native binary) runs restricted too. Under
+  // that model Node cannot resolve an entry script reached through a symlinked directory (macOS's /var ->
+  // /private/var temp folder) and exits 1 before running; a canonical path keeps the fake runnable everywhere.
+  const bin = realpathSync(mkdtempSync(join(tmpdir(), 'weft-fake-op-')));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
   const op = join(bin, 'op');
   writeFileSync(op, `#!${process.execPath}
