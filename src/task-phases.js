@@ -8,11 +8,13 @@ export const PHASES = Object.freeze(['queued', 'running', 'waiting_on_human', 'p
 export const TERMINAL_PHASES = Object.freeze(['completed', 'failed', 'cancelled']);
 /** Phases in which a runtime-managed task holds work that a person or the runtime still has to resolve. */
 export const OPEN_PHASES = Object.freeze(['queued', 'running', 'waiting_on_human', 'paused', 'uncertain']);
+// Record-only tasks (tracked by hand) may also be marked completed or failed directly; runtime tasks
+// reach completed only through their runtime (tasks.transition is refused for them).
 export const TRANSITIONS = Object.freeze({
-  queued: Object.freeze(['running', 'waiting_on_human', 'paused', 'cancelled']),
+  queued: Object.freeze(['running', 'waiting_on_human', 'paused', 'completed', 'failed', 'cancelled']),
   running: Object.freeze(['waiting_on_human', 'paused', 'completed', 'failed', 'cancelled', 'uncertain']),
-  waiting_on_human: Object.freeze(['running', 'paused', 'cancelled', 'failed', 'uncertain']),
-  paused: Object.freeze(['running', 'queued', 'waiting_on_human', 'cancelled', 'uncertain', 'failed']),
+  waiting_on_human: Object.freeze(['running', 'paused', 'completed', 'cancelled', 'failed', 'uncertain']),
+  paused: Object.freeze(['running', 'queued', 'waiting_on_human', 'completed', 'cancelled', 'uncertain', 'failed']),
   // Uncertain work leaves only through a recorded determination, an explicitly confirmed retry, or a stop.
   uncertain: Object.freeze(['paused', 'running', 'failed', 'cancelled']),
   completed: Object.freeze(['queued']),

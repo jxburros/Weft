@@ -223,6 +223,9 @@ async function refreshState(force) {
       )
         renderContent();
       if (agentOpen && !chatBusy) renderMessages();
+      // An open task detail follows the runtime: phase, blockers and steps update as they change.
+      const shown = openTaskDetail && $("dialog").open && (state.tasks || []).find((t) => t.id === openTaskDetail.id);
+      if (shown && shown.revision !== openTaskDetail.revision) void taskDetail(shown.id).catch(() => {});
       if (!document.activeElement || document.activeElement === document.body) restoreFocus();
     }
     if (document.activeElement !== $("address"))
@@ -248,7 +251,9 @@ function renderSafetyNotices(automation) {
   const notices = $("safety-notices");
   const pending = Number(automation?.pendingApprovals) || 0;
   notices.innerHTML = (pending ? `<div class="safety-notice"><strong>${pending} agent request${pending === 1 ? " needs" : "s need"} your decision.</strong> Agent actions wait until you approve or reject them here; page text cannot approve them. ${action("section", "Review requests", "", 'data-section="approvals"', "secondary")}</div>` : "") + (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
-    (state.storageWarnings || []).map(w => `<div class="safety-notice"><strong>Storage warning:</strong> ${esc(w.message)}${w.file ? ` <span>${esc(w.file)}</span>` : ""}</div>`).join("");
+    (state.storageWarnings || []).map(w => `<div class="safety-notice"><strong>Storage warning:</strong> ${esc(w.message)}${w.file ? ` <span>${esc(w.file)}</span>` : ""}</div>`).join("") +
+    ((() => { const uncertain = (state.tasks || []).filter((t) => t.status === "uncertain"); return uncertain.length ? `<div class="safety-notice"><strong>${uncertain.length} task${uncertain.length === 1 ? " has" : "s have"} work with an unknown outcome.</strong> Nothing is retried until you record what happened. ${action("task-detail", "Review", "", `data-id="${esc(uncertain[0].id)}"`, "secondary")}</div>` : ""; })()) +
+    (recordingTab ? `<div class="safety-notice"><strong>Recording your actions in this tab.</strong> Typed values are never saved. ${action("stop-recording", "Stop recording", "stop", "", "secondary")}</div>` : "");
   notices.hidden = !notices.innerHTML;
 }
 function renderShell() {
@@ -322,7 +327,7 @@ function overview() {
     )
     .slice(0, 3);
   const artifacts = records("artifacts").slice(-3).reverse();
-  return `<div class="eyebrow">${icon("grid")} YOUR WORK, WOVEN TOGETHER</div>${heading(ws().name, ws().description || "A little space for everything you’re working on.", action("workspace-menu", "Workspace options", "more"))}
+  return `<div class="eyebrow">${icon("grid")} YOUR WORK, WOVEN TOGETHER</div>${heading(ws().name, ws().description || "A little space for everything you’re working on.", action("workspace-menu", "Workspace options", "more"))}${attentionSection()}
  <div class="intro-panel"><div class="intro-copy"><h2>${records("materials").length || pending.length ? "Pick up where you left off." : "Make room for your next idea."}</h2><p>${records("materials").length || pending.length ? "Your tabs, references, and next steps are right here. Open a page or continue a task to keep your project moving." : "Bring your tabs, notes, and references together. Start with a page, save what matters, and build from there."}</p><div class="inline-actions">${action("new-tab", "Open a new tab", "plus", "", "primary")}${action("section", "Explore materials", "arrow", 'data-section="materials"', "text-button")}</div></div><img class="intro-mark" src="../assets/logo/svg/mark-full-color.svg" alt=""></div>
  <div class="section-heading"><h2>A place to start</h2><span class="muted micro">Built around your project</span></div>
  <div class="quick-grid">${[
@@ -352,7 +357,7 @@ function overview() {
          .slice(0, 4)
          .map(
            (t) =>
-             `<button class="compact-record" data-action="edit-record" data-kind="tasks" data-id="${esc(t.id)}"><span class="task-check"></span><span class="record-text"><strong>${esc(t.title)}</strong><small>${esc(t.status === "waiting" ? "Waiting for you" : t.status)}${t.blocker ? " · " + esc(short(t.blocker, 50)) : ""}</small></span></button>`,
+             `<button class="compact-record" data-action="edit-record" data-kind="tasks" data-id="${esc(t.id)}"><span class="task-check"></span><span class="record-text"><strong>${esc(t.title)}</strong><small>${esc(phaseLabel(t.status))}${t.blocker ? " · " + esc(short(t.blocker, 50)) : ""}</small></span></button>`,
          )
          .join("")
      : empty(
@@ -524,7 +529,7 @@ function collectionView(kind) {
       ),
     ) +
     (kind === "tasks" ? handoffPanel() : "") +
-    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting">Waiting for you</option><option value="paused">Paused</option><option value="completed">Completed</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
+    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting_on_human">Waiting for you</option><option value="uncertain">Outcome unknown</option><option value="paused">Paused</option><option value="failed">Failed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}${kind === "workflows" && !recordingTab ? action("record-workflow", "Record from current tab", "play", "", "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
   );
 }
 function cards(kind) {
@@ -553,7 +558,11 @@ function renderCards() {
 function recordCard(kind, r) {
   let tag = r.kind || r.category || r.status || "Conversation";
   if (kind === "workflows") tag = `${r.steps.length} steps`;
-  return `<article class="record-card"><div class="card-top"><span class="tag ${r.status === "completed" ? "sage" : r.status === "waiting" ? "clay" : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${kind === "tasks" ? action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "") : ""}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", "Create tasks", "tasks", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}</div></article>`;
+  if (kind === "tasks") tag = phaseLabel(r.status) + (r.executor ? ` · ${Number(r.progress) || 0}%` : "");
+  const taskActions = kind !== "tasks" ? "" : r.executor || r.plan?.length
+    ? action("task-detail", r.executor ? "Open task" : "Review steps", "tasks", `data-id="${esc(r.id)}"`) + (r.executor && ["running", "waiting_on_human", "queued"].includes(r.status) ? action("task-pause", "Pause", "pause", `data-id="${esc(r.id)}"`) : "")
+    : action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "");
+  return `<article class="record-card"><div class="card-top"><span class="tag ${kind === "tasks" ? phaseTone(r.status) : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${taskActions}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", r.enabled === false ? "Review to enable" : "Run…", "play", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}</div></article>`;
 }
 function artifactCard(r) {
   const version = r.versions?.at(-1);
@@ -675,7 +684,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests" };
@@ -935,6 +944,7 @@ function navigateSection(next) {
   $("content").focus({ preventScroll: true });
 }
 function openDialog(title, body, footer = "", wide = false) {
+  openTaskDetail = null;
   const desk = $("command-desk");
   if (desk?.closest("#dialog")) {
     desk.hidden = true;
@@ -966,6 +976,7 @@ function closeDialog() {
     desk.hidden = true;
     document.body.append(desk);
   }
+  openTaskDetail = null;
   $("dialog").close();
   layout();
   dialogRestore?.();
@@ -1042,8 +1053,262 @@ function workspaceForm(record) {
     { save: record ? "Save changes" : "Create workspace" },
   );
 }
-function editRecord(kind, id) {
-  const r = id ? (state[kind] || []).find((r) => r.id === id) : null;
+// ---- Durable tasks, uncertain work and workflows (ADR 016) ---------------------------------
+const phaseLabels = { queued: "Queued", running: "Running", waiting_on_human: "Waiting for you", paused: "Paused", completed: "Completed", failed: "Failed", cancelled: "Cancelled", uncertain: "Outcome unknown" };
+const phaseLabel = (status) => phaseLabels[status === "waiting" ? "waiting_on_human" : status] || status;
+const phaseTone = (status) => (status === "completed" ? "sage" : ["waiting_on_human", "uncertain", "failed"].includes(status) ? "clay" : "");
+const unresolvedOps = (t) => (t.operations || []).filter((op) => ["attempted", "uncertain"].includes(op.status) && !["completed", "not_completed", "unknown"].includes(op.determination?.status));
+const needsAttention = (t) => t.status === "uncertain" || unresolvedOps(t).some((op) => op.status === "uncertain") || (t.executor && t.status === "waiting_on_human");
+let recordingTab = null;
+let openTaskDetail = null;
+function executorLabel(executor) {
+  if (!executor) return "Not running";
+  if (executor.type === "client") return `Agent connection ${executor.clientId.slice(0, 8)}`;
+  if (executor.type === "automation") return "Automation token";
+  return `Weft task runner · ${levelLabels[executor.autonomy] || executor.autonomy}`;
+}
+function attentionSection() {
+  const list = records("tasks").filter(needsAttention);
+  if (!list.length) return "";
+  return `<section class="settings-section attention" aria-labelledby="attention-heading"><div class="section-heading"><h2 id="attention-heading">Needs your attention</h2><span class="muted micro">${list.length} task${list.length === 1 ? "" : "s"}</span></div>${list
+    .slice(0, 6)
+    .map((t) => `<button class="compact-record" data-action="task-detail" data-id="${esc(t.id)}">${icon(t.status === "uncertain" ? "shield" : "clock")}<span class="record-text"><strong>${esc(t.title)}</strong><small>${esc(phaseLabel(t.status))}${t.blocker ? " · " + esc(short(t.blocker, 90)) : ""}</small></span>${icon("chevron")}</button>`)
+    .join("")}</section>`;
+}
+function stepMark(t, step, index) {
+  const state = t.run?.steps?.[step.id]?.phase;
+  if (state === "completed") return "✓";
+  if (state === "uncertain") return "?";
+  if (state === "failed") return "✕";
+  return index === t.run?.cursor && t.executor ? "▶" : "○";
+}
+function describeStep(step) {
+  if (step.kind === "command") return `${step.command}${step.args?.selector ? ` ${step.args.selector}` : step.args?.url ? ` ${host(step.args.url)}` : ""}`;
+  if (step.kind === "model") return `Model turn${step.modelId ? ` (${step.modelId})` : ""}`;
+  if (step.kind === "handoff") return `Handoff to ${step.to || "human"}`;
+  return "Review checkpoint";
+}
+function blockerActions(t) {
+  const b = t.run?.blocker;
+  if (!b) return "";
+  const attrs = `data-id="${esc(t.id)}"`;
+  if (["review", "expected_outputs"].includes(b.kind))
+    return `<div class="notice">${esc(b.message)}${b.instruction ? `<br>${esc(b.instruction)}` : ""}${b.expectedOutputs ? `<br>Expected: ${esc(b.expectedOutputs)}` : ""}</div><div class="inline-actions">${action("task-review", "Approve", "check", `${attrs} data-step="${esc(b.stepId)}" data-decision="approve"`, "primary")}${b.kind === "review" ? action("task-review-edit", "Edit steps", "note", `${attrs} data-step="${esc(b.stepId)}"`) : ""}${action("task-review", "Reject", "close", `${attrs} data-step="${esc(b.stepId)}" data-decision="reject"`, "secondary danger")}</div>`;
+  if (b.kind === "approval") return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("section", "Review requests", "shield", 'data-section="approvals"')}</div>`;
+  if (b.kind === "disclosure") return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("task-continue", "Acknowledge destination and continue", "check", `${attrs} data-ack="true"`, "primary")}</div>`;
+  if (b.kind === "parameters_required") return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("task-parameters", "Enter values", "lock", `${attrs} data-names="${esc((b.parameters || []).join(","))}"`, "primary")}</div>`;
+  if (b.kind === "uncertain") return `<div class="notice">${esc(b.message)}</div>`;
+  return `<div class="notice">${esc(b.message || b.kind)}</div>`;
+}
+function uncertainReview(t) {
+  const ops = unresolvedOps(t).filter((op) => op.status === "uncertain");
+  if (!ops.length) return "";
+  return `<h3>Work with an unknown outcome</h3><p>Weft does not know whether these actions took effect. Check the destination, then record what happened. Retrying may do the work twice.</p>${ops
+    .map((op) => {
+      const step = (t.plan || []).find((s) => s.id === op.stepId);
+      const attrs = `data-id="${esc(t.id)}" data-op="${esc(op.id)}"`;
+      return `<article class="record-card uncertain-op"><h3>${esc(step?.title || op.command)}</h3><p>${esc(op.command)} · attempted ${esc(new Date(op.attemptedAt).toLocaleString())}${op.error ? ` · ${esc(op.error.message)}` : ""}</p><div class="inline-actions">${action("task-reconcile", "It happened", "check", `${attrs} data-determination="completed"`)}${action("task-reconcile", "It did not happen", "close", `${attrs} data-determination="not_completed"`)}${op.kind === "model" ? action("task-reconcile", "Check recorded turn", "search", `${attrs} data-determination="lookup"`) : ""}${action("task-retry", "Retry anyway…", "reload", `${attrs} data-step="${esc(op.stepId)}"`, "secondary danger")}</div></article>`;
+    })
+    .join("")}`;
+}
+async function taskDetail(id) {
+  const t = await execute("tasks.get", { id }, true);
+  const attrs = `data-id="${esc(t.id)}"`;
+  const managed = Boolean(t.executor);
+  const steps = (t.plan || []).length
+    ? `<ol class="step-timeline">${t.plan.map((s, i) => `<li class="${i === t.run?.cursor && managed ? "current" : ""}"><span class="step-mark" aria-hidden="true">${stepMark(t, s, i)}</span><span><strong>${esc(s.title)}</strong><small>${esc(describeStep(s))}${s.reviewRequired ? " · review first" : ""}${t.run?.steps?.[s.id]?.phase ? " · " + esc(t.run.steps[s.id].phase) : ""}</small></span></li>`).join("")}</ol>`
+    : "<p>No executable steps. Add steps to run this task, or track it by hand.</p>";
+  const history = (t.timeline || []).slice(-25).reverse()
+    .map((e) => `<li><small>${esc(new Date(e.at).toLocaleString())}</small> ${e.type === "transition" ? `${esc(phaseLabel(e.from))} → ${esc(phaseLabel(e.to))}` : esc(e.type)} · ${esc(String(e.reason || e.decision || "").replace(/_/g, " "))} · ${esc(e.actor || "")}${e.note ? ` — ${esc(short(e.note, 160))}` : ""}</li>`)
+    .join("");
+  const controls = [
+    !managed && t.plan?.length && !["completed", "cancelled", "failed", "running", "uncertain"].includes(t.status) ? action("task-start", "Start…", "play", attrs, "primary") : "",
+    managed && ["running", "waiting_on_human", "queued"].includes(t.status) ? action("task-pause", "Pause", "pause", attrs) : "",
+    managed && t.status === "paused" ? action("task-continue", "Continue", "play", attrs, "primary") : "",
+    managed && t.status === "failed" ? action("task-retry", "Retry step", "reload", attrs, "primary") : "",
+    managed && !["completed", "cancelled", "failed"].includes(t.status) ? action("task-redirect", "Redirect…", "arrow", attrs) : "",
+    managed ? action("task-reassign", "Reassign…", "lock", attrs) : "",
+    managed && !["completed", "cancelled"].includes(t.status) ? action("task-cancel", "Cancel task", "stop", attrs, "secondary danger") : "",
+  ].join("");
+  openDialog(
+    t.title,
+    `<div class="task-detail" data-task="${esc(t.id)}"><p><span class="tag ${phaseTone(t.status)}">${esc(phaseLabel(t.status))}</span> ${esc(executorLabel(t.executor))}${managed ? ` · ${Number(t.progress) || 0}%` : ""}${t.workflowRun ? ` · workflow ${esc(t.workflowRun.title)}` : ""}</p>${t.objective ? `<p>${esc(t.objective)}</p>` : ""}${t.staleness?.stale ? `<div class="notice">Results may be stale: ${esc(t.staleness.reasons.join("; "))}</div>` : ""}${blockerActions(t)}${uncertainReview(t)}<h3>Steps</h3>${steps}${t.outputs?.length || t.evidence?.length ? `<p class="muted">Outputs: ${esc([...(t.outputs || []), ...(t.evidence || [])].join(", "))}</p>` : ""}<h3>History</h3><ul class="task-history">${history || "<li>No changes yet.</li>"}</ul><p class="muted">Steps run through the same permission checks as any agent command. Accepted page actions are not proof of an external result.</p></div>`,
+    controls + action("edit-task-record", "Edit record", "note", attrs) + action("close-dialog", "Close"),
+    true,
+  );
+  openTaskDetail = { id: t.id, revision: t.revision };
+}
+async function executorField(current) {
+  const clients = await execute("clients.list", {}, true).catch(() => []);
+  const live = clients.filter((c) => !c.revoked && c.expiresAt > Date.now() && c.workspaceIds.includes(ws().id));
+  const value = current?.type === "client" ? `client|${current.clientId}` : `runner|${current?.autonomy || "scoped"}`;
+  return choice("Runs as", "executor", [
+    ...["observe", "assist", "scoped", "autonomous"].map((level) => [`runner|${level}`, `Weft task runner · ${levelLabels[level] || level}`]),
+    ...live.map((c) => [`client|${c.clientId}`, `Agent connection: ${c.name}`]),
+  ], value);
+}
+const parseExecutor = (value) => { const [type, rest] = String(value).split("|"); return type === "client" ? { type: "client", clientId: rest } : { type: "runner", autonomy: rest }; };
+async function modelField(current) {
+  const models = await execute("models.list", {}, true).catch(() => []);
+  return choice("Model for model steps", "modelId", [["", "None"], ...models.map((m) => [m.id, `${m.name} · ${m.model}`])], current || "");
+}
+async function startTaskDialog(id) {
+  const t = records("tasks").find((r) => r.id === id);
+  formDialog(
+    "Start task",
+    `<p>Each step runs through the same permission checks and approvals as any agent command. External actions wait for your approval unless the identity you choose may take them.</p><pre class="tool-result">${esc(t.plan.map((s, i) => `${i + 1}. ${s.title} — ${describeStep(s)}`).join("\n"))}</pre>${await executorField(null)}${await modelField(t.modelId)}`,
+    async (values) => {
+      await execute("tasks.start", { id, executor: parseExecutor(values.executor), ...(values.modelId ? { modelId: values.modelId } : {}) });
+      await taskDetail(id);
+    },
+    { save: "Start task" },
+  );
+}
+const stepsJson = (steps) => JSON.stringify(steps || [], null, 2);
+function parseStepsJson(text) {
+  if (!text.trim()) return [];
+  const value = JSON.parse(text);
+  if (!Array.isArray(value)) throw new Error("Steps must be a JSON array.");
+  return value;
+}
+async function redirectDialog(id) {
+  const t = await execute("tasks.get", { id }, true);
+  const remaining = (t.plan || []).slice(t.run?.cursor || 0);
+  formDialog(
+    "Redirect task",
+    `<p>Completed steps and evidence stay. Steps that have not started are replaced.</p>${area("Objective", "objective", t.objective || "")}${field("Next step", "nextStep", t.nextStep || "")}${await modelField(t.modelId)}${area("Remaining steps (JSON)", "steps", stepsJson(remaining))}${field("Reason", "note", "")}`,
+    async (values) => {
+      const steps = parseStepsJson(values.steps);
+      await execute("tasks.redirect", { id, objective: values.objective, nextStep: values.nextStep, ...(values.modelId ? { modelId: values.modelId } : {}), ...(JSON.stringify(steps) !== JSON.stringify(remaining) ? { steps } : {}), ...(values.note ? { note: values.note } : {}) });
+      await taskDetail(id);
+    },
+    { save: "Redirect", wide: true },
+  );
+}
+async function reassignDialog(id) {
+  const t = records("tasks").find((r) => r.id === id);
+  formDialog(
+    "Reassign task",
+    `<p>The task runs as the new identity from its next step. Approvals given to the previous identity do not carry over.</p>${await executorField(t.executor)}${field("Reason", "note", "")}`,
+    async (values) => {
+      await execute("tasks.reassign", { id, executor: parseExecutor(values.executor), ...(values.note ? { note: values.note } : {}) });
+      await taskDetail(id);
+    },
+    { save: "Reassign" },
+  );
+}
+function retryDialog(id, stepId, uncertain) {
+  formDialog(
+    uncertain ? "Retry work with an unknown outcome" : "Retry step",
+    uncertain
+      ? `<p>Weft cannot tell whether this action already happened. Retrying may send a message, submit a form or make a payment twice. Check the destination first; if it already happened, choose “It happened” instead.</p><label><input type="checkbox" name="confirm" required> I checked, and I accept that this may happen twice</label>${field("What you checked", "note", "")}`
+      : `<p>The step failed without effect. It will run again with the same permission checks.</p>${field("Note", "note", "")}`,
+    async (values) => {
+      await execute("tasks.retryStep", { id, ...(stepId ? { stepId } : {}), ...(uncertain ? { confirmDuplicateRisk: values.confirm === "on" } : {}), ...(values.note ? { note: values.note } : {}) });
+      await taskDetail(id);
+    },
+    { save: uncertain ? "Retry anyway" : "Retry" },
+  );
+}
+function parametersDialog(id, names) {
+  formDialog(
+    "Enter values again",
+    `<p>Sensitive values are kept only in memory for this run and are never saved.</p>${names.map((n) => field(n, n, "", "password", true)).join("")}`,
+    async (values) => {
+      await execute("tasks.continue", { id, parameters: values });
+      await taskDetail(id);
+    },
+    { save: "Continue" },
+  );
+}
+// Workflow parameters as editable lines: name:type[:optional][=default]
+const parameterLine = (p) => typeof p === "string" ? p : `${p.name}:${p.type || "string"}${p.required === false ? ":optional" : ""}${p.sensitive ? ":sensitive" : ""}${p.type === "enum" && p.options?.length ? `:${p.options.join("|")}` : ""}${p.default !== undefined && p.default !== "" ? `=${p.default}` : ""}`;
+function parseParameterLines(text) {
+  return text.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+    const [spec, ...rest] = line.split("=");
+    const [name, type = "string", ...flags] = spec.split(":").map((s) => s.trim());
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name)) return line;
+    const parameter = { name, type, required: !flags.includes("optional") };
+    if (flags.includes("sensitive")) parameter.sensitive = true;
+    const options = flags.find((f) => f.includes("|"));
+    if (options) parameter.options = options.split("|");
+    if (rest.length) parameter.default = type === "number" ? Number(rest.join("=")) : type === "boolean" ? rest.join("=") === "true" : rest.join("=");
+    return parameter;
+  });
+}
+const simpleSteps = (steps) => (steps || []).every((s) => !s.kind || s.kind === "instruction");
+function workflowFields(r) {
+  const materials = records("materials");
+  return (
+    choice("Workflow status", "enabled", [["true", "Enabled"], ["false", "Inactive"]], String(r?.enabled !== false)) +
+    area("Description", "description", r?.description || "") +
+    area("Parameters (one per line: name:type[:optional][:sensitive][=default]; types string, number, boolean, url, enum with a|b options, credential)", "parameters", (r?.parameters || []).map(parameterLine).join("\n")) +
+    area(
+      simpleSteps(r?.steps) ? "Steps (one instruction per line, or a JSON array of executable steps)" : "Steps (JSON array of executable steps)",
+      "steps",
+      simpleSteps(r?.steps) ? r?.steps?.map((s) => s.instruction).join("\n") || "" : stepsJson(r.steps),
+      true,
+    ) +
+    area("Allowed sites (one per line, for example shop.example.com or *.example.com)", "allowedSites", (r?.allowedSites || []).join("\n")) +
+    area("Credential references (one per line: name=reference; references only, never passwords)", "credentialRefs", (r?.credentialRefs || []).map((c) => `${c.name}=${c.ref}`).join("\n")) +
+    (materials.length ? `<fieldset><legend>Required materials</legend>${materials.map((m) => `<label><input type="checkbox" name="materialIds" value="${esc(m.id)}" ${r?.materialIds?.includes(m.id) ? "checked" : ""}> ${esc(m.title)}</label>`).join("")}</fieldset>` : "") +
+    area("Expected outputs (you confirm them before a run completes)", "expectedOutputs", r?.expectedOutputs || "")
+  );
+}
+function workflowValues(values) {
+  const steps = values.steps.trim().startsWith("[") ? parseStepsJson(values.steps) : values.steps.split("\n").filter((s) => s.trim()).map((s, i) => ({ title: `Step ${i + 1}`, instruction: s, reviewRequired: true }));
+  const materialIds = [...document.querySelectorAll('#edit-form [name="materialIds"]:checked')].map((box) => box.value);
+  delete values.materialIds;
+  return {
+    ...values,
+    steps,
+    parameters: parseParameterLines(values.parameters),
+    allowedSites: values.allowedSites.split("\n").map((s) => s.trim()).filter(Boolean),
+    credentialRefs: values.credentialRefs.split("\n").map((s) => s.trim()).filter(Boolean).map((line) => { const [name, ...ref] = line.split("="); return { name: name.trim(), ref: ref.join("=").trim() }; }),
+    ...(document.querySelector('#edit-form [name="materialIds"]') ? { materialIds } : {}),
+  };
+}
+async function workflowRunDialog(id) {
+  const w = records("workflows").find((r) => r.id === id);
+  if (w.enabled === false) {
+    editRecord("workflows", id);
+    toast("Review and enable this workflow first. Saving or importing a workflow never authorizes it.");
+    return;
+  }
+  const report = await execute("workflows.validate", { id }, true);
+  const input = (p) => {
+    const label = `${p.label || p.name}${p.required ? "" : " (optional)"}${p.description ? ` — ${p.description}` : ""}`;
+    if (p.type === "enum") return choice(label, `param:${p.name}`, (p.options || []).map((o) => [o, o]), String(p.default ?? ""));
+    if (p.type === "boolean") return choice(label, `param:${p.name}`, [["true", "Yes"], ["false", "No"]], String(p.default ?? "false"));
+    return field(label, `param:${p.name}`, p.sensitive ? "" : String(p.default ?? ""), p.sensitive ? "password" : p.type === "number" ? "number" : p.type === "url" ? "url" : "text", p.required);
+  };
+  const tab = active();
+  formDialog(
+    `Run ${w.title}`,
+    `<p>The run is a task: every step uses current permissions and your review points. ${w.allowedSites?.length ? `It may only act on ${esc(w.allowedSites.join(", "))}.` : ""}</p>${report.errors.filter((e) => !/is required/.test(e)).map((e) => `<div class="notice">${esc(e)}</div>`).join("")}${report.parameters.map(input).join("")}${tab && tab.url !== "about:blank" ? choice("Start in tab", "tabId", [[String(tab.id), displayTitle(tab)], ["", "No tab"]], String(tab.id)) : ""}${await executorField(null)}${await modelField("")}`,
+    async (values) => {
+      const parameters = {};
+      for (const p of report.parameters) {
+        const raw = values[`param:${p.name}`];
+        if (raw === undefined || (raw === "" && !p.required)) continue;
+        parameters[p.name] = p.type === "number" ? Number(raw) : p.type === "boolean" ? raw === "true" : raw;
+      }
+      const task = await execute("workflows.run", { id, parameters, executor: parseExecutor(values.executor), ...(values.tabId ? { tabId: Number(values.tabId) } : {}), ...(values.modelId ? { modelId: values.modelId } : {}) });
+      await taskDetail(task.id);
+    },
+    { save: "Run workflow", wide: true },
+  );
+}
+function proposalCard(m) {
+  let parsed;
+  try { parsed = JSON.parse(m.content); } catch { return null; }
+  if (parsed?.tool !== "propose_task" || !parsed.proposal) return null;
+  const p = parsed.proposal;
+  return `<div class="notice proposal"><strong>Proposed task (from the model; review before creating):</strong> ${esc(p.title)}${p.steps?.length ? `<ol>${p.steps.map((s) => `<li>${esc(s.title)}</li>`).join("")}</ol>` : ""}${action("review-proposal", "Review proposed task", "tasks", `data-id="${esc(m.id)}"`)}</div>`;
+}
+
+function editRecord(kind, id, prefill = null) {
+  const r = id ? (state[kind] || []).find((r) => r.id === id) : prefill;
   let fields = "";
   if (kind === "siteRules") {
     fields =
@@ -1153,50 +1418,28 @@ function editRecord(kind, id) {
     if (kind === "tasks")
       fields +=
         area("Objective", "objective", r?.objective || "") +
-        choice(
-          "State",
-          "status",
-          [
-            ["queued", "Queued"],
-            ["running", "Running"],
-            ["waiting", "Waiting for you"],
-            ["paused", "Paused"],
-            ["completed", "Completed"],
-            ["failed", "Failed"],
-            ["cancelled", "Cancelled"],
-          ],
-          r?.status || "queued",
-        ) +
+        // A task run by the task runtime changes state only through its own controls.
+        (r?.executor
+          ? ""
+          : choice(
+              "State",
+              "status",
+              ["queued", "running", "waiting_on_human", "paused", "completed", "failed", "cancelled"].map((p) => [p, phaseLabel(p)]),
+              r?.status === "waiting" ? "waiting_on_human" : r?.status || "queued",
+            )) +
         field("Assignee", "assignee", r?.assignee || "human") +
         area("Checkpoint / completed work", "checkpoint", r?.checkpoint || "") +
         field("Next step", "nextStep", r?.nextStep || "") +
-        field("Blocker", "blocker", r?.blocker || "");
-    if (kind === "workflows")
-      fields +=
-        choice(
-          "Workflow status",
-          "enabled",
-          [
-            ["true", "Enabled"],
-            ["false", "Inactive"],
-          ],
-          String(r?.enabled !== false),
-        ) +
-        area("Description", "description", r?.description || "") +
-        area(
-          "Steps (one instruction per line)",
-          "steps",
-          r?.steps?.map((s) => s.instruction).join("\n") || "",
-          true,
-        ) +
-        area("Expected outputs", "expectedOutputs", r?.expectedOutputs || "");
+        field("Blocker", "blocker", r?.blocker || "") +
+        (r?.executor ? "" : area("Executable steps (optional JSON array; saving never runs them — use Start)", "plan", r?.plan?.length ? stepsJson(r.plan) : ""));
+    if (kind === "workflows") fields += workflowFields(r);
   }
   formDialog(
-    `${r ? "Edit" : "New"} ${kind === "siteRules" ? "site rule" : kind === "materials" ? "material" : kind === "context" ? "context record" : kind === "tasks" ? "task" : kind === "workflows" ? "workflow" : "conversation"}`,
+    `${id ? "Edit" : "New"} ${kind === "siteRules" ? "site rule" : kind === "materials" ? "material" : kind === "context" ? "context record" : kind === "tasks" ? "task" : kind === "workflows" ? "workflow" : "conversation"}`,
     fields,
     async (values) => {
       if ("url" in values && !values.url) {
-        if (r) values.url = null;
+        if (id) values.url = null;
         else delete values.url;
       }
       if ("enabled" in values) values.enabled = values.enabled === "true";
@@ -1215,15 +1458,8 @@ function editRecord(kind, id) {
           .split("\n")
           .map((s) => s.trim())
           .filter(Boolean);
-      if (kind === "workflows")
-        values.steps = values.steps
-          .split("\n")
-          .filter((s) => s.trim())
-          .map((s, i) => ({
-            title: `Step ${i + 1}`,
-            instruction: s,
-            reviewRequired: true,
-          }));
+      if (kind === "workflows") Object.assign(values, workflowValues(values));
+      if (kind === "tasks" && "plan" in values) values.plan = parseStepsJson(values.plan);
       const file = $("material-file")?.files[0];
       if (file) {
         if (file.size > 10 * 1024 * 1024)
@@ -1239,8 +1475,8 @@ function editRecord(kind, id) {
         });
       }
       const result = await execute(
-        `${kind}.${r ? "update" : "create"}`,
-        r
+        `${kind}.${id ? "update" : "create"}`,
+        id
           ? { id: r.id, changes: values, expectedRevision: r.revision }
           : { workspaceId: ws().id, ...values },
       );
@@ -1250,8 +1486,8 @@ function editRecord(kind, id) {
       }
     },
     {
-      save: r ? "Save changes" : "Create",
-      extra: r
+      save: id ? "Save changes" : "Create",
+      extra: id
         ? action(
             "delete-record",
             "Delete",
@@ -1688,7 +1924,7 @@ function turnUsage(manifest) {
 }
 function messageAuthor(m) {
   if (m.role === "user") return "YOU";
-  if (m.role === "tool") return /"tool":"vision_fallback"/.test(m.content) ? `VISION FALLBACK · ${m.model || "model"}` : "READ-ONLY TOOL";
+  if (m.role === "tool") return /"tool":"vision_fallback"/.test(m.content) ? `VISION FALLBACK · ${m.model || "model"}` : /"tool":"propose_task"/.test(m.content) ? "TASK PROPOSAL" : "READ-ONLY TOOL";
   return m.model || "MODEL";
 }
 function renderMessages() {
@@ -1705,7 +1941,7 @@ function renderMessages() {
             ? `<div class="notice" role="status">Request failed: ${esc(manifest.error || "Unknown error")} No reply was saved.</div>` : "";
           const status = m.status && m.status !== "complete" ? ` · ${esc(m.status)}${m.finishReason ? ` (${esc(m.finishReason.replace("_", " "))})` : ""}` : "";
           const resume = m === last && m.role === "assistant" && m.continuable && !chatBusy ? action("continue-chat", "Continue reply", "arrow", "", "text-button") : "";
-          return `<div class="chat-message ${m.role === "user" ? "user" : "assistant"}"><div class="message-author">${esc(messageAuthor(m))}${status}</div><div class="message-body">${m.role === "tool" ? `<details><summary>Source and tool result</summary><pre class="tool-result">${esc(m.content)}</pre></details>` : esc(m.content)}</div>${m.role === "assistant" ? turnUsage(manifest) : ""}${resume}</div>${failed}`;
+          return `<div class="chat-message ${m.role === "user" ? "user" : "assistant"}"><div class="message-author">${esc(messageAuthor(m))}${status}</div><div class="message-body">${m.role === "tool" ? proposalCard(m) || `<details><summary>Source and tool result</summary><pre class="tool-result">${esc(m.content)}</pre></details>` : esc(m.content)}</div>${m.role === "assistant" ? turnUsage(manifest) : ""}${resume}</div>${failed}`;
         })
         .join("")
     : `<div class="chat-welcome"><span class="agent-symbol icon">${icon("spark")}</span><h3>A little help,<br>a fresh perspective.</h3><p>Think through an idea, make a plan, or ask a question. Choose a model above to get started.</p><button data-action="chat-prompt" data-text="Help me turn a project idea into a clear plan.">Help me make a plan ${icon("arrow")}</button><button data-action="chat-prompt" data-text="Help me organize my research. What should I collect first?">Organize my research ${icon("arrow")}</button><button data-action="section" data-section="settings">Configure a model ${icon("settings")}</button></div>`;
@@ -2204,8 +2440,96 @@ async function act(button) {
       editRecord(kind);
       break;
     case "edit-record":
-      editRecord(kind, id);
+      if (kind === "tasks" && records("tasks").find((t) => t.id === id)?.executor) await taskDetail(id);
+      else editRecord(kind, id);
       break;
+    case "edit-task-record":
+      closeDialog();
+      editRecord("tasks", id);
+      break;
+    case "task-detail":
+      await taskDetail(id);
+      break;
+    case "task-start":
+      await startTaskDialog(id);
+      break;
+    case "task-pause": {
+      const paused = await execute("tasks.pause", { id });
+      if (paused.submitted?.length) toast(`Paused. ${paused.submitted.length} step already submitted will be recorded when it returns.`);
+      if ($("dialog").open) await taskDetail(id);
+      break;
+    }
+    case "task-continue":
+      await execute("tasks.continue", { id, ...(button.dataset.ack ? { disclosureAck: true } : {}) });
+      await taskDetail(id);
+      break;
+    case "task-cancel":
+      await execute("tasks.cancel", { id, note: "Cancelled by you" });
+      await taskDetail(id);
+      break;
+    case "task-redirect":
+      await redirectDialog(id);
+      break;
+    case "task-reassign":
+      await reassignDialog(id);
+      break;
+    case "task-review":
+      await execute("tasks.review", { id, stepId: button.dataset.step, decision: button.dataset.decision });
+      await taskDetail(id);
+      break;
+    case "task-review-edit": {
+      const t = await execute("tasks.get", { id }, true);
+      formDialog(
+        "Edit remaining steps",
+        `<p>The edited steps replace this review point and every step after it, then the task continues.</p>${area("Steps (JSON)", "steps", stepsJson(t.plan.slice(t.run.cursor)), true)}${field("Note", "note", "")}`,
+        async (values) => {
+          await execute("tasks.review", { id, stepId: button.dataset.step, decision: "edit", steps: parseStepsJson(values.steps), ...(values.note ? { note: values.note } : {}) });
+          await taskDetail(id);
+        },
+        { save: "Save and approve", wide: true },
+      );
+      break;
+    }
+    case "task-reconcile": {
+      const result = await execute("tasks.reconcile", { id, operationId: button.dataset.op, determination: button.dataset.determination });
+      if (result.determination.status === "unknown") toast(`The recorded lookup could not tell: ${result.determination.detail || "no final status"}. Check the destination yourself.`);
+      await taskDetail(id);
+      break;
+    }
+    case "task-retry": {
+      const t = records("tasks").find((r) => r.id === id);
+      retryDialog(id, button.dataset.step, t?.status === "uncertain" || Boolean(button.dataset.op));
+      break;
+    }
+    case "task-parameters":
+      parametersDialog(id, (button.dataset.names || "").split(",").filter(Boolean));
+      break;
+    case "review-proposal": {
+      const conversation = records("conversations").find((c) => c.messages?.some((m) => m.id === id));
+      const message = conversation?.messages.find((m) => m.id === id);
+      const proposal = JSON.parse(message.content).proposal;
+      editRecord("tasks", null, { title: proposal.title, objective: proposal.objective, assignee: "human", plan: (proposal.steps || []).map((s) => ({ kind: "review", title: s.title, ...(s.instruction ? { instruction: s.instruction } : {}) })) });
+      toast("Review the proposed task. Nothing is created until you save it, and nothing runs until you start it.");
+      break;
+    }
+    case "record-workflow": {
+      const tab = active();
+      if (!tab || tab.url === "about:blank") { toast("Open the page where the workflow starts, then record."); break; }
+      const started = await execute("workflows.recordStart", { tabId: tab.id }, true);
+      recordingTab = tab.id;
+      await refresh(true);
+      toast(started.notice);
+      navigateSection("browse");
+      break;
+    }
+    case "stop-recording": {
+      const stopped = await execute("workflows.recordStop", { tabId: recordingTab }, true);
+      recordingTab = null;
+      await refresh(true);
+      if (stopped.saved) { navigateSection("workflows"); editRecord("workflows", stopped.workflow.id); toast(`Recorded ${stopped.steps} steps. Typed values were not saved; review and enable the workflow.`); }
+      else toast("Nothing was recorded.");
+      break;
+    }
     case "delete-record":
       await confirmDelete(kind, id);
       break;
@@ -2216,25 +2540,9 @@ async function act(button) {
         cause: "Changed by you in the workspace",
       });
       break;
-    case "run-workflow": {
-      const w = records("workflows").find((w) => w.id === id);
-      if (w.enabled === false) {
-        editRecord("workflows", id);
-        toast("Review and enable this imported workflow first.");
-        break;
-      }
-      for (const step of w.steps)
-        await execute("tasks.create", {
-          workspaceId: ws().id,
-          title: short(`${w.title}: ${step.title}`, 239),
-          objective: step.instruction,
-          status: "queued",
-          assignee: "human",
-        });
-      navigateSection("tasks");
-      toast("Workflow steps added as queued tasks.");
+    case "run-workflow":
+      await workflowRunDialog(id);
       break;
-    }
     case "open-url":
       if ($("dialog").open) closeDialog();
       await execute("tabs.new", { url: button.dataset.url });

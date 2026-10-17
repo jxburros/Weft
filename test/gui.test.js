@@ -37,6 +37,22 @@ if (process.argv.includes("--gui-workflows")) {
     });
     await new Promise((resolve) => fixture.listen(0, "127.0.0.1", resolve));
     const origin = `http://127.0.0.1:${fixture.address().port}`;
+    // A previous run was killed while a runtime task's external click was in flight (#8, #58).
+    const { WorkspaceService } = await import("../src/workspace.js");
+    const seed = new WorkspaceService({ directory: join(process.env.WEFT_TEST_PROFILE, "workspace-data") });
+    const home = seed.activeWorkspaceId;
+    const recovery = await seed.execute("workspaces.create", { name: "Recovery" });
+    await seed.execute("workspaces.switch", { id: home });
+    const seeded = await seed.execute("tasks.create", { workspaceId: recovery.id, title: "Submit supplier order", plan: [
+      { id: "s1", kind: "command", title: "Click place order", command: "page.click", args: { selector: "#place-order" } },
+      { id: "s2", kind: "review", title: "Confirm the order number" }] });
+    await seed.mutateTask(seeded.id, (record, service) => {
+      record.executor = { type: "runner", autonomy: "scoped" };
+      record.run = { cursor: 0, steps: { s1: { phase: "running", attempts: 1 } }, startedAt: new Date().toISOString() };
+      record.operations = [{ id: "op_00000000-0000-4000-8000-000000000001", stepId: "s1", kind: "command", command: "page.click", external: true, status: "attempted", attemptedAt: new Date().toISOString() }];
+      service.transitionTask(record, "running", { actor: "human", reason: "started" });
+    });
+    seed.close();
     await import("../src/main.js");
     await app.whenReady();
     let window;
@@ -82,6 +98,48 @@ if (process.argv.includes("--gui-workflows")) {
       await run('document.querySelector(".workspace-dot").textContent'),
       "W",
     );
+    // Startup marked the interrupted external click uncertain; a person records what happened before anything resumes.
+    await until('document.getElementById("safety-notices").textContent.includes("unknown outcome")');
+    assert.equal((await run(`window.weft.execute("tasks.get", {id: ${JSON.stringify(seeded.id)}})`)).status, "uncertain");
+    await click('#safety-notices [data-action="task-detail"]');
+    await until('document.getElementById("dialog-content")?.textContent.includes("Work with an unknown outcome")');
+    await click('[data-action="task-retry"]');
+    await until('document.getElementById("dialog-title")?.textContent === "Retry work with an unknown outcome"');
+    await click('[data-action="close-dialog"]');
+    await click('#safety-notices [data-action="task-detail"]');
+    await until('document.querySelector(\'[data-action="task-reconcile"][data-determination="completed"]\') !== null');
+    await click('[data-action="task-reconcile"][data-determination="completed"]');
+    await until('document.querySelector("[data-action=task-continue]") !== null');
+    await click("[data-action=task-continue]");
+    await until('document.querySelector(\'[data-action="task-review"][data-decision="approve"]\') !== null');
+    await click('[data-action="task-review"][data-decision="approve"]');
+    await until(`(async () => (await window.weft.execute("tasks.get", {id: ${JSON.stringify(seeded.id)}})).status === "completed")()`);
+    const reconciled = await run(`window.weft.execute("tasks.get", {id: ${JSON.stringify(seeded.id)}})`);
+    assert.equal(reconciled.operations[0].determination.source, "human");
+    assert.ok(reconciled.timeline.some((entry) => entry.reason === "server_restart_uncertain"));
+    await click('[data-action="close-dialog"]');
+    await until('!document.getElementById("safety-notices").textContent.includes("unknown outcome")');
+    // A parameterized workflow is authored, run with typed parameters and executed as a runtime task.
+    await click('[data-section="tasks"]');
+    await click('.section-toolbar [data-section="workflows"]');
+    await until('document.querySelector("[data-action=new-record][data-kind=workflows]") !== null');
+    await click('[data-action="new-record"][data-kind="workflows"]');
+    await fill("title", "Note a topic");
+    await fill("parameters", "topic:string");
+    await fill("steps", JSON.stringify([{ title: "Note {{topic}}", kind: "command", command: "context.create", args: { title: "About {{topic}}", category: "findings" }, reviewRequired: false }]));
+    await submit();
+    await until('!document.getElementById("dialog").open');
+    await until('document.querySelector("[data-action=run-workflow]") !== null');
+    await click('[data-action="run-workflow"]');
+    await until('document.querySelector(\'#edit-form [name="param:topic"]\') !== null');
+    await fill("param:topic", "tides");
+    await submit();
+    await until('document.querySelector(".task-detail") !== null');
+    await until('(async()=> (await window.weft.execute("context.list")).some(c => c.title === "About tides"))()');
+    await until('(async()=> (await window.weft.execute("tasks.list")).some(t => t.workflowRun && t.status === "completed"))()');
+    await click('[data-action="close-dialog"]');
+    await run('(async()=>{ for (const t of await window.weft.execute("tasks.list")) if (t.workflowRun) await window.weft.execute("tasks.delete", {id: t.id}); for (const c of await window.weft.execute("context.list")) await window.weft.execute("context.delete", {id: c.id}); for (const w of await window.weft.execute("workflows.list")) await window.weft.execute("workflows.delete", {id: w.id}); })()');
+    await click("#home");
     if (process.env.WEFT_SAVE_SCREENSHOTS)
       writeFileSync(
         "artifacts/weft-overview.png",
