@@ -118,8 +118,14 @@ if (process.argv.includes('--archive-smoke')) {
       assert.equal(view.getTitle(), 'Script ran');
       assert.ok(browser.describePreview().stats.served >= 4, 'document, stylesheet, image and frame are served from the archive');
       assert.ok(browser.describePreview().stats.refused >= 1, 'the failed image is refused, not fetched');
-      const image = await view.capturePage();
-      assert.equal(image.isEmpty(), false);
+      // Scripts are off in the preview, so no animation-frame wait: retry briefly while the compositor has no frame yet
+      // (an empty image or Chromium's transient UnknownVizError), as page.screenshot does.
+      let image = null;
+      for (let attempt = 0; attempt <= 8 && (!image || image.isEmpty()); attempt++) {
+        if (attempt) { view.invalidate(); await new Promise(resolve => setTimeout(resolve, 100 * attempt)); }
+        image = await view.capturePage().catch(error => { if (/UnknownVizError/.test(String(error?.message ?? error))) return null; throw error; });
+      }
+      assert.ok(image && !image.isEmpty(), 'the archive preview renders');
       assert.equal(hits.length, before, 'the closed source receives nothing');
       workspace.execute('artifacts.closePreview', {});
       await until(() => !browser.preview);

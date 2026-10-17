@@ -197,7 +197,8 @@ async function securitySmoke() {
     assert.equal(hits.filter(item => item.host === 'tracker.localhost' && item.path === '/echo').at(-1).cookie, 'firstparty=1', 'first-party cookies are sent');
     await navigate(url('127.0.0.1', '/embed-tracker'));
     await until(() => hits.some(item => item.host === 'tracker.localhost' && item.path.startsWith('/echo-image')) && hits.some(item => item.host === 'tracker.localhost' && item.path.startsWith('/set-cookie')));
-    assert.equal(hits.filter(item => item.host === 'tracker.localhost' && item.path.startsWith('/echo-image')).at(-1).cookie, null, 'cross-site cookie header removed');
+    const imageHits = hits.filter(item => item.host === 'tracker.localhost' && item.path.startsWith('/echo-image'));
+    assert.equal(imageHits.at(-1).cookie, null, `cross-site cookie header removed; image hits ${JSON.stringify(imageHits)}; protection ${JSON.stringify(browser.describe(browser.tab(tab)).protection.storageActivity)}`);
     assert.equal((await browser.execute('cookies.list', { url: url('tracker.localhost') })).some(cookie => cookie.name === 'tracker'), false, 'cross-site Set-Cookie removed');
     assert.ok(browser.describe(browser.tab(tab)).protection.storageActivity.crossSiteCookiesBlocked >= 2);
     await browser.execute('storage.setSiteMode', { hostname: 'tracker.localhost', mode: 'remember' }, human);
