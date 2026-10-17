@@ -5,7 +5,7 @@ import { fileStamp, writeVerifiedJson } from './storage-safety.js';
 import { ACTION_CLASSES, AUTONOMY_LEVELS, ONCE_ONLY_CLASSES, actionClassForCommand, raiseActionClass, dataClassesForCommand, effectForCommand, effectiveLevel,
   evaluateAutonomy, resourceForCommand, sensitiveCategoriesForCommand, EXTERNAL_CLASSES } from './autonomy.js';
 import { ActivityLog, summarizeArgs } from './activity-log.js';
-import { ApprovalQueue, approvalFingerprint } from './approvals.js';
+import { ApprovalQueue, approvalFingerprint, previewArgs, withholdValues } from './approvals.js';
 
 const level = z.enum(AUTONOMY_LEVELS);
 export const autonomyCommandDefinitions = {
@@ -127,7 +127,8 @@ export class Authority {
       if (match.approvalId) { approvalId = match.approvalId; approvedOnce = Boolean(match.approvedOnce); result = evaluateAutonomy({ ...evidence, ...match }); }
       if (result.decision === 'approval') {
         const request = this.approvals.request({ fingerprint, actor: base.actor, clientId: context.clientId, command, args, actionClass,
-          categories: sensitiveCategoriesForCommand(command), workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId, destination, reason: result.reason, level: effective });
+          categories: sensitiveCategoriesForCommand(command), workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId, destination, reason: result.reason, level: effective,
+          ...(context.sensitiveValues?.length ? { preview: withholdValues(previewArgs(args), context.sensitiveValues) } : {}) });
         this.record({ ...base, type: 'approval', decision: 'approval', reason: result.reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args) });
         throw authorityError('approval_required', `${command} needs human approval in the Weft window (request ${request.id}). Retry the identical command after approval; changed arguments need a new approval.`,
           { decision: 'approval', reason: result.reason, actionClass, level: effective, approvalId: request.id, fingerprint, expiresAt: new Date(request.expiresAt).toISOString() });

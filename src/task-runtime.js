@@ -610,7 +610,9 @@ export class TaskRuntime {
       if (INPUT_COMMANDS.has(step.command) && Object.hasOwn(properties, 'expectedVersion')) args.expectedVersion = inspected.result.version;
     }
     if (properties.requestId && args.requestId == null) args.requestId = `task.${task.id}.${step.id}.${hash(args).slice(0, 8)}`;
-    return this.invoke(task, step, slot, context, step.command, args, { kind: 'command' });
+    // Sensitive run parameters live only in memory: approval previews withhold them.
+    const sensitiveValues = (task.workflowRun?.sensitive ?? []).map(name => parameters[name]).filter(value => typeof value === 'string');
+    return this.invoke(task, step, slot, sensitiveValues.length ? { ...context, sensitiveValues } : context, step.command, args, { kind: 'command' });
   }
 
   /** Commit an `attempted` operation record, dispatch as the task identity, then record the outcome. */

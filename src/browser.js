@@ -887,7 +887,8 @@ export class Browser {
         for (const tab of this.tabs.values()) { this.controlBoundary(tab, 'emergency stop'); tab.view.webContents.stop(); }
         this.downloadGrants.clear();
         for (const { item } of this.downloads.values()) item?.cancel();
-        for (const task of this.workspaceService?.snapshot().tasks ?? []) if (task.status === 'running') await this.workspaceService.execute('tasks.transition', { id: task.id, status: 'paused', cause: 'Human emergency stop' }, context);
+        // Runtime tasks are paused by the task runtime (src/task-runtime.js) before this point; this covers hand-tracked records.
+        for (const task of this.workspaceService?.snapshot().tasks ?? []) if (task.status === 'running' && !task.executor) await this.workspaceService.execute('tasks.transition', { id: task.id, status: 'paused', cause: 'Human emergency stop' }, context);
         this.persist();
         return { stopped: true, automation: this.admission.status, tabs: this.tabs.size, notice: 'Future agent input requires a human handoff. Already executed page actions cannot be undone.' };
       }
