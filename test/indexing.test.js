@@ -17,7 +17,8 @@ import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
  */
 const human = { actor: 'human', source: 'gui' };
 const agent = { actor: 'automation', source: 'api' };
-const RECORDS = 12000;
+// Three times the 2,000-record batch run at open, so the rebuild is still pending afterwards; small enough for slow CI disks.
+const RECORDS = 6000;
 
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-indexing-'));
@@ -109,7 +110,8 @@ test('a search-index version change rebuilds in the background: open is fast, se
   assert.equal(complete.partial, undefined);
   assert.equal(complete.coverage.lexical.complete, true);
   assert.equal(complete.total, RECORDS);
-  assert.equal((await service.execute('search.query', { query: 'needle 11999' }, human))[0].id, 'material-index-11999');
+  const last = RECORDS - 1;
+  assert.equal((await service.execute('search.query', { query: `needle ${last}` }, human))[0].id, `material-index-${String(last).padStart(5, '0')}`);
   const statuses = events.map(event => event.status);
   assert.ok(statuses.includes('paused') && statuses.includes('resumed') && statuses.at(-1) === 'completed', statuses.join());
   assert.ok(events.every(event => event.type === 'indexing' && Number.isSafeInteger(event.processed) && Number.isSafeInteger(event.total)));
@@ -140,7 +142,7 @@ test('an encrypted profile rebuilds its in-memory index in the background after 
   const directory = profile(t);
   const keyProtector = createKeyProtector({ safeStorage: fakeSafeStorage(), platform: 'linux' });
   let service = new WorkspaceService({ directory, onWarning() {}, keyProtector, encryption: { kdf: kdfParams } });
-  await seed(service, 8000);
+  await seed(service, RECORDS);
   await service.executeEncryption('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' }, human);
   await service.indexingIdle();
   await service.executeEncryption('encryption.lock', {}, human);
@@ -153,7 +155,7 @@ test('an encrypted profile rebuilds its in-memory index in the background after 
   await service.indexingIdle();
   const complete = await service.execute('search.query', { query: 'needle', page: { limit: 5 } }, human);
   assert.equal(complete.coverage.lexical.complete, true);
-  assert.equal(complete.total, 8000);
+  assert.equal(complete.total, RECORDS);
   // Locking stops the rebuild with the store; nothing runs while locked.
   await service.executeEncryption('encryption.lock', {}, human);
   assert.equal(service.storage, null);

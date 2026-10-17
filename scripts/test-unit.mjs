@@ -7,5 +7,6 @@ const browserTests = new Set(['browser.test.js', 'browser-workspace.test.js', 'b
   // The accessibility audit and the community-list/agent-input screens drive the real GUI.
   'accessibility.test.js', 'gui-lists.test.js']);
 const files = readdirSync('test').filter(name => name.endsWith('.test.js') && !browserTests.has(name)).map(name => `test/${name}`);
-const result = spawnSync(process.execPath, ['--test', '--test-timeout=60000', ...files], { stdio: 'inherit' });
+// Per-file cap: above the largest per-test budget (120 s, e.g. indexing on slow macOS disks) while still catching hangs.
+const result = spawnSync(process.execPath, ['--test', '--test-timeout=180000', ...files], { stdio: 'inherit' });
 process.exit(result.status === 0 ? 0 : (result.status || 1));

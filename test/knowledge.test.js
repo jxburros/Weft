@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -157,11 +157,13 @@ test('linked files and folders: status detection, refresh, relink and bounded ag
   const moved = await f.rest('sources.check', { id: file.id }, agent.token);
   assert.equal(moved.result.status, 'moved');
   assert.deepEqual(moved.result.candidate, { name: 'brief-final.txt', matchedBy: 'inode' });
-  assert.equal(f.workspace.data.materials.find(item => item.id === file.id).link.candidate.path, join(project, 'archive', 'brief-final.txt'));
+  // Links store canonical real paths (macOS temp folders resolve through /private).
+  const movedPath = realpathSync(join(project, 'archive', 'brief-final.txt'));
+  assert.equal(f.workspace.data.materials.find(item => item.id === file.id).link.candidate.path, movedPath);
   assert.equal((await f.rest('sources.relink', { id: file.id }, agent.token)).error.code, 'permission_required');
   const relinked = await f.run('sources.relink', { id: file.id });
   assert.equal(relinked.link.status, 'available');
-  assert.equal(relinked.link.path, join(project, 'archive', 'brief-final.txt'));
+  assert.equal(relinked.link.path, movedPath);
   // Replaced by a symbolic link: not followed. Missing: reported.
   unlinkSync(join(project, 'archive', 'brief-final.txt'));
   symlinkSync(join(f.files, 'outside.txt'), join(project, 'archive', 'brief-final.txt'));

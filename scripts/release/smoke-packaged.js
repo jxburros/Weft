@@ -28,7 +28,7 @@ const fail = async message => {
   console.error(`::error::Packaged smoke test failed: ${message}\n${output.slice(-4000)}`);
   child.kill('SIGKILL');
   await exited;
-  rmSync(profile, { recursive: true, force: true });
+  rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   process.exit(1);
 };
 const call = async (command, body = {}) => {
@@ -50,11 +50,13 @@ if (status.result.currentVersion !== version) await fail(`packaged version ${sta
 if (!status.result.killSwitch.active) await fail('kill switch was not honored');
 if (expectedKind && status.result.install.kind !== expectedKind) await fail(`install kind ${status.result.install.kind}, expected ${expectedKind}`);
 const check = await call('update.check');
-if (check.error?.code !== 'human_required') await fail('automation was able to request an update check');
+// Human-only administration is refused by the shared authority gate before anything runs (ADR-005).
+const refusal = check.error?.code === 'permission_required' && check.error.details?.authority?.reason === 'human_only';
+if (!refusal || check.execution !== 'not_started') await fail(`automation update.check was not refused as human-only: ${JSON.stringify(check.error ?? check.result)}`);
 const info = await call('browser.info');
 if (info.error) await fail(`browser.info: ${info.error.message}`);
 await call('browser.close');
 const code = await Promise.race([exited, new Promise(resolve => setTimeout(() => resolve('timeout'), 20000))]);
 if (code === 'timeout') await fail('app did not exit after browser.close');
-rmSync(profile, { recursive: true, force: true });
+rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 console.log(`Packaged smoke test passed: Weft ${version} (${status.result.install.kind}, Electron ${info.result?.electron ?? info.result?.versions?.electron ?? 'unknown'})`);

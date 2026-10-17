@@ -101,7 +101,7 @@ if (process.argv.includes('--archive-smoke')) {
       const comparison = await workspace.execute('artifacts.compare', { id: first.id, fromVersionId: a.id, toVersionId: b.id });
       assert.deepEqual(comparison.text.hunks.flatMap(hunk => hunk.lines).filter(line => line.op !== 'context').map(line => line.text), ['Price 42 today', 'Price 45 today']);
       assert.ok(comparison.resources.changed.some(item => item.url === `${origin}/`));
-      assert.ok(comparison.pixels.available);
+      assert.ok(comparison.pixels.available, `pixel comparison unavailable: ${comparison.pixels.reason}; limitations: ${JSON.stringify([a, b].map(version => version.capture?.limitations ?? version.limitations ?? null))}`);
 
       // Source closed and network gone: the archive still previews offline, from stored components only.
       await stop(source);

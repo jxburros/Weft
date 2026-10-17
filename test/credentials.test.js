@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
@@ -276,6 +277,19 @@ test('a human task grant lets one open task fill a limited number of times witho
   assert.equal(f.browser.page.fills.length, 1);
 });
 
+/**
+ * Diagnostics only: replay the broker's CLI invocation (same permission flags and environment,
+ * execFile without a shell) and report how it ended. The broker itself never reveals CLI errors.
+ */
+function replayCliCall(f, op) {
+  const script = `require('node:child_process').execFile(${JSON.stringify(op)}, ['read', '--no-newline', 'op://Private/Example/password'], { env: process.env, timeout: 15000, shell: false },
+    (error, stdout) => console.log(JSON.stringify({ code: error?.code ?? null, signal: error?.signal ?? null, killed: error?.killed ?? false, message: error ? String(error.message).split('\\n')[0].slice(0, 200) : null, length: String(stdout).length })))`;
+  const directory = f.credentials.vaultDirectory;
+  const result = spawnSync(process.execPath, ['--permission', `--allow-fs-read=${directory}`, `--allow-fs-write=${directory}`, '--allow-child-process', '-e', script],
+    { env: f.credentials.brokerEnv(), encoding: 'utf8', timeout: 30000 });
+  return JSON.stringify({ status: result.status, stdout: result.stdout.trim().slice(0, 400), stderr: result.stderr.trim().replaceAll(SECRET, '[secret]').slice(0, 400) });
+}
+
 test('1Password CLI adapter resolves op:// references at fill time through the broker (fake CLI; unvalidated against a real account)', { skip: process.platform === 'win32' ? 'The fake op CLI is a POSIX script' : false }, async t => {
   const bin = mkdtempSync(join(tmpdir(), 'weft-fake-op-'));
   t.after(() => rmSync(bin, { recursive: true, force: true }));
@@ -305,7 +319,7 @@ process.stdout.write(values[reference]);
     assert.ok(!environ.includes('keep-out'), 'only the CLI’s variables are passed');
   }
   const filled = await f.dispatch('credentials.fill', { id: created.result.id, tabId: 1, workspaceId: f.workspaceId, expectedVersion: 3 }, human);
-  assert.equal(filled.error, null);
+  assert.equal(filled.error, null, filled.error && `fill failed; the broker's CLI call replayed outside the broker: ${replayCliCall(f, op)}`);
   assert.deepEqual(f.browser.page.fills.map(({ username, password }) => ({ username, password })), [{ username: USERNAME, password: SECRET }]);
   const failed = await f.dispatch('credentials.fill', { id: missing.id, tabId: 1, workspaceId: f.workspaceId, expectedVersion: 3 }, human);
   assert.equal(failed.error.details.credential, 'provider_failed');

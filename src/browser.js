@@ -1976,6 +1976,12 @@ export class Browser {
     try {
       if (mode === 'viewport') {
         let image = await bounded(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
+        // Right after a navigation or reload Chromium may not have painted a frame yet: ask for one and retry briefly.
+        for (let attempt = 1; image.isEmpty() && attempt <= 5; attempt++) {
+          contents.invalidate();
+          await delay(100 * attempt);
+          image = await bounded(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
+        }
         if (image.isEmpty()) throw new Error('The page has no rendered image yet; show the tab and try again');
         const size = image.getSize();
         scale = Math.min(requestedScale, maxWidth / size.width, maxHeight / size.height);

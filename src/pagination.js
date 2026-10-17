@@ -28,6 +28,8 @@ export const PAGEABLE = Object.freeze(new Set(['materials.list', 'context.list',
   // Shared collections, conflicts and credential references (#21, #66, #6) page in creation order.
   'collections.list', 'conflicts.list', 'credentials.list']));
 export const orderFor = command => ORDER[command] ?? 'asc';
+/** Order of the unpaged list a command hands to pageItems when it differs from its paged order. */
+const INPUT_ORDER = { 'downloads.list': 'asc' };
 
 const fingerprint = value => createHash('sha256').update(JSON.stringify(value)).digest('base64url').slice(0, 16);
 const invalid = message => Object.assign(new Error(message), { code: 'invalid_arguments', field: 'page.cursor' });
@@ -44,12 +46,14 @@ export function decodeCursor(cursor, command, scope) {
   return parsed.p;
 }
 
-const compare = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
+const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 /**
  * Keyset page over an in-memory list. `key(item)` returns a [time, id] tuple (ascending order is
- * creation order). Positional collections (messages, versions) pass `positional: true`.
+ * creation order). Records created in the same millisecond keep their relative order from the
+ * unpaged list (which is creation order, or newest first for `desc` commands), never the order of
+ * their random ids. Positional collections (messages, versions) pass `positional: true`.
  */
-export function pageItems(items, page = {}, { command, scope = null, key = item => [String(time(item)), id(item)], order = orderFor(command), positional = false } = {}) {
+export function pageItems(items, page = {}, { command, scope = null, key = item => [String(time(item)), id(item)], order = orderFor(command), inputOrder = INPUT_ORDER[command] ?? order, positional = false } = {}) {
   const limit = page.limit ?? DEFAULT_PAGE_LIMIT;
   if (positional) {
     const start = page.cursor ? decodeCursor(page.cursor, command, scope) : 0;
@@ -59,12 +63,16 @@ export function pageItems(items, page = {}, { command, scope = null, key = item 
     return { items: slice, nextCursor: next < items.length ? encodeCursor(command, scope, next) : null, total: items.length };
   }
   const sign = order === 'desc' ? -1 : 1;
-  const sorted = items.map(item => ({ item, k: key(item) })).sort((a, b) => sign * compare(a.k, b.k));
+  const tie = inputOrder === order ? 1 : -1;
+  const sorted = items.map((item, index) => ({ item, k: key(item), index }))
+    .sort((a, b) => sign * compare(a.k[0], b.k[0]) || tie * (a.index - b.index));
   let start = 0;
   if (page.cursor) {
     const after = decodeCursor(page.cursor, command, scope);
     if (!Array.isArray(after) || after.length !== 2) throw invalid('Invalid page cursor; restart from the first page');
-    start = sorted.findIndex(entry => sign * compare(entry.k, after) > 0);
+    // Resume right after the cursor's own item; if it was deleted, after the last item at or before its time.
+    const at = sorted.findIndex(entry => entry.k[0] === after[0] && entry.k[1] === after[1]);
+    start = at >= 0 ? at + 1 : sorted.findIndex(entry => sign * compare(entry.k[0], after[0]) > 0);
     if (start < 0) start = sorted.length;
   }
   const slice = sorted.slice(start, start + limit);
