@@ -137,7 +137,7 @@ app.whenReady().then(async () => {
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
   // Service credentials live only in OS-protected storage; scheduled freshness checks are opt-in per workspace.
-  const knowledge = new Knowledge({ workspace, credentials: new ServiceCredentials({ directory, safeStorage }), audit: entry => activity.append(entry) });
+  const knowledge = new Knowledge({ workspace, credentials: new ServiceCredentials({ directory, safeStorage }), audit: entry => activity.append(entry), protectedPaths: [app.getPath('userData')] });
   freshnessTimer = setInterval(() => { if (!admission.status.stopped) knowledge.runScheduled().catch(error => console.warn(`Weft freshness: ${error.message}`)); }, 15 * 60_000); freshnessTimer.unref?.();
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, knowledge, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });

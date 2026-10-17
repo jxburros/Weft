@@ -199,6 +199,14 @@ test('linked files and folders: status detection, refresh, relink and bounded ag
   assert.equal((await f.rest('collections.read', { id: shared.id, workspaceId: f.b, itemId: folder.id }, partner.token)).result.link.path, undefined, 'the local path is not disclosed to the participant');
   await f.run('collections.revoke', { id: shared.id, memberWorkspaceId: f.b });
   assert.equal((await f.rest('sources.read', { id: folder.id, workspaceId: f.b, path: 'plan.md' }, partner.token)).error.code, 'permission_required');
+  // Weft's own profile (database, credentials, browser sessions) is never reachable through a link.
+  assert.equal((await f.dispatch('sources.link', { workspaceId: f.a, path: join(f.directory, 'workspace.sqlite') }, human)).error.code, 'permission_required');
+  mkdirSync(join(f.files, 'profile'));
+  writeFileSync(join(f.files, 'profile', 'Cookies'), 'session-cookie-bytes');
+  const guarded = new Knowledge({ workspace: f.workspace, protectedPaths: [join(f.files, 'profile')] });
+  const parent = await guarded.execute('sources.link', { workspaceId: f.a, path: f.files, kind: 'folder' }, human);
+  await assert.rejects(guarded.execute('sources.read', { id: parent.id, workspaceId: f.a, path: 'profile/Cookies' }, { actor: 'automation', workspaceId: f.a }), { code: 'permission_required' });
+  await assert.rejects(guarded.execute('sources.link', { workspaceId: f.a, path: join(f.files, 'profile', 'Cookies') }, human), { code: 'permission_required' });
   // Managed copies are a separate, explicit choice.
   writeFileSync(join(project, 'copy-me.txt'), 'managed bytes');
   const copied = await f.run('sources.link', { workspaceId: f.a, path: join(project, 'copy-me.txt'), mode: 'copy' });

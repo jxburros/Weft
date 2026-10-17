@@ -73,11 +73,22 @@ export async function fingerprint(path, kind) {
   return { ...base, entries: listing.length, truncated, sha256: createHash('sha256').update(manifest).digest('hex'), hashKind: 'manifest' };
 }
 
+const inside = (child, parent) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+/** Weft's own profile (database, credentials, browser sessions) is never linkable or readable through a link. */
+async function assertUnprotected(real, protectedPaths = []) {
+  for (const path of protectedPaths.filter(Boolean)) {
+    let guarded;
+    try { guarded = await realpath(path); } catch { guarded = resolve(path); }
+    if (inside(real, guarded)) throw fail('permission_required', 'PERMISSION_REQUIRED: Weft profile data (database, credentials, browser sessions) cannot be linked or read through a link');
+  }
+}
+
 /** Resolve a person-chosen path into a link record. The path must exist and must not be a symbolic link. */
-export async function createLink(path, kind) {
+export async function createLink(path, kind, { protectedPaths = [] } = {}) {
   if (typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')) throw fail('invalid_arguments', 'Choose an absolute file or folder path');
   let real;
   try { real = await realpath(path); } catch (error) { throw fail(error.code === 'ENOENT' ? 'not_found' : 'permission_required', `${error.code === 'ENOENT' ? 'Not found' : 'Not accessible'}: ${basename(path)}`); }
+  await assertUnprotected(real, protectedPaths);
   const info = await stat(real);
   const actual = info.isDirectory() ? 'folder' : info.isFile() ? 'file' : null;
   if (!actual) throw fail('invalid_arguments', 'Only regular files and folders can be linked');
@@ -98,6 +109,7 @@ async function findMoved(link) {
   let found = null;
   const want = link.fingerprint;
   await walk(root, { ...SEARCH_LIMIT, onEntry: async (item, path) => {
+    if (found) return true;
     if (item.type !== link.kind || path === link.path) return false;
     if (item.inode === want.inode && item.dev === want.dev) { found = { path, by: 'inode' }; return true; }
     if (link.kind === 'file' && want.sha256 && item.size === want.size) {
@@ -144,7 +156,7 @@ export async function resolveInside(root, child) {
 }
 
 /** Bounded read of linked content through a link record only. */
-export async function readLinked(link, { path: child, offset = 0, maxBytes = 65536 } = {}) {
+export async function readLinked(link, { path: child, offset = 0, maxBytes = 65536, protectedPaths = [] } = {}) {
   if (!link?.path) throw fail('not_found', 'This source is not linked to a local path');
   const limit = Math.min(Math.max(1, maxBytes), READ_LIMIT);
   let target = link.path;
@@ -159,6 +171,7 @@ export async function readLinked(link, { path: child, offset = 0, maxBytes = 655
     const info = await lstat(target).catch(error => { throw fail(error.code === 'ENOENT' ? 'not_found' : 'permission_required', 'The linked file is missing or unreadable; check its status'); });
     if (info.isSymbolicLink()) throw fail('permission_required', 'PERMISSION_REQUIRED: the linked file is now a symbolic link; a person must relink it');
   }
+  await assertUnprotected(await realpath(target), protectedPaths);
   const info = await stat(target);
   if (!info.isFile()) throw fail('invalid_arguments', 'Only files can be read; folders return a listing');
   const handle = await open(target, 'r');

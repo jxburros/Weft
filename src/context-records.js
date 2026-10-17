@@ -139,7 +139,7 @@ export function recheckCitations(data, workspaceId, record, texts) {
  * Read linked-file text for citations that quote a linked source. Only files up to 1 MiB
  * are read, and the text is used only when its SHA-256 equals the hash it is matched with.
  */
-export async function prefetchSourceTexts(data, workspaceId, materialIds) {
+export async function prefetchSourceTexts(data, workspaceId, materialIds, { protectedPaths = [] } = {}) {
   const texts = new Map();
   for (const id of new Set(materialIds)) {
     const material = data.materials.find(item => item.id === id);
@@ -147,14 +147,14 @@ export async function prefetchSourceTexts(data, workspaceId, materialIds) {
     try {
       const info = await stat(material.link.path);
       if (info.size > 1024 * 1024) continue;
-      const read = await readLinked(material.link, { maxBytes: 1024 * 1024 });
+      const read = await readLinked(material.link, { maxBytes: 1024 * 1024, protectedPaths });
       if (read.encoding !== 'utf8') continue;
       texts.set(id, { sha256: createHash('sha256').update(read.content).digest('hex'), text: read.content });
     } catch { /* unavailable: reported through status */ }
   }
   return texts;
 }
-export const quotedSources = citations => (citations ?? []).filter(item => item.type === 'source' && item.recordId).map(item => item.recordId);
+export const quotedSources = citations => (Array.isArray(citations) ? citations : []).filter(item => item?.type === 'source' && typeof item.recordId === 'string').map(item => item.recordId);
 
 // ---- Export / import ------------------------------------------------------------------
 /** Export view of a material: local paths, candidates, credentials and cached service content are omitted. */

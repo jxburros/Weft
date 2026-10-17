@@ -608,7 +608,7 @@ export class WorkspaceService {
     if (collection === 'artifacts') return this.mutateArtifact(action, args, workspaceId, actor, context);
     if (collection === 'context' && !context.citationTexts) {
       const sources = quotedSources(args.citations ?? args.changes?.citations);
-      if (sources.length) context = { ...context, citationTexts: await prefetchSourceTexts(this.data, workspaceId, sources) };
+      if (sources.length) context = { ...context, citationTexts: await prefetchSourceTexts(this.data, workspaceId, sources, { protectedPaths: [this.directory] }) };
     }
     if (Object.hasOwn(recordShapes, collection)) return this.mutateRecord(collection, action, args, workspaceId, actor, admin, context);
     throw new Error(`Unsupported workspace command: ${name}`);

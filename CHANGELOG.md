@@ -226,6 +226,51 @@ alone is not a shipped capability.
   extension state and updater state are deliberately not restored (see
   `docs/STORAGE-SAFETY.md`). A restore appends to the activity hash chain and
   never rewinds it.
+- Added shared context collections (#21, ADR-013): an owner workspace shares
+  chosen context, materials and captures with other workspaces as read or
+  write members; creating, sharing, granting and revoking are human-only and
+  recorded as history. People, internal models (attachments and the search
+  tool) and scoped agents meet one record boundary (`collections.list/get/read`,
+  `collections.write` with required `expectedRevision`); revocation applies to
+  the next command. Sharing context never shares browser sessions: no shared
+  session container is offered (decision recorded), and the real Chromium test
+  keeps cookies/localStorage isolated with a collection shared.
+- Linked files, folders and service references (#22): a person links a file or
+  folder from a native picker (`sources.link`) or stores a managed copy; Weft
+  records path, size, mtime, inode and SHA-256/manifest hash and reports
+  available, changed, moved, missing or inaccessible (`sources.check`),
+  accepting changes only on `sources.refresh` and moves only on a human
+  `sources.relink`. Agents read linked content only through `sources.read`
+  (bounded, inside the linked root, traversal and symlink escapes refused, no
+  local paths disclosed). Service references (`services.*`) use an adapter
+  contract with a generic HTTP(S) adapter: explicit access status, refresh
+  timestamps, cached versions versus live content, conditional refresh, no
+  redirects, OS-protected credentials (never exported or logged) and cached
+  content withheld from agents after access is refused or revoked. Exports list
+  omitted linked content. ByAuthorX, Vixl, AI Server Studio and QAI-ality are
+  evaluated as optional adapters only.
+- Context review (#23): `context.propose`, and `context.promote` under the new
+  `trusted_context` action class (a person, or a human approval once or
+  standing, task-scoped for task-bound grants; never an autonomy level or
+  source text). Exact citations pin capture versions, record revisions or
+  source hashes; `citations.check`, `freshness.check` and opt-in scheduled
+  checks (`freshness.configure`) flag stale citations and open conflicts;
+  `conflicts.create/get/resolve` preserve contradictions and conflicting edits
+  and resolve them attributably (keep both, choose, merge, dismiss) without
+  rewriting originals. Export/import round-trips citations, proposals,
+  conflicts and collections (without grants) with remapped IDs and recomputed
+  citation statuses.
+- Record provenance and quote selectors (#66): server-set `origin` on context,
+  materials, every revision and capture versions; automation cannot claim
+  human or pasted authorship and cannot set the actor. TextQuoteSelector
+  citations re-anchor after NFKC, ligature, typography and whitespace
+  normalization; unknown cite targets are stored unverified instead of
+  rejecting the record; imported provenance is kept only as a claim.
+- GUI: a Context review panel (proposals, conflicts, source check and
+  schedule, provenance and citation details), linked-source and service status
+  on material cards, link/service options when adding a material, and a Shared
+  context view for collections. New offline eval `propose-cited-finding`; the
+  eval count check now follows the task files.
 
 ### Not completed
 
