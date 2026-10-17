@@ -3811,7 +3811,11 @@ document.addEventListener("change", (event) => {
     );
 });
 $("dialog").addEventListener("close", () => {
-  if (!$("dialog").open) clearDialogSecrets();
+  if ($("dialog").open) return;
+  clearDialogSecrets();
+  // However the dialog closed (closeDialog, or the browser's own close steps), keyboard focus returns to where it was.
+  const focused = document.activeElement;
+  if (!focused || focused === document.body || $("dialog").contains(focused)) dialogRestore?.();
 });
 $("dialog").addEventListener("cancel", (event) => {
   event.preventDefault();

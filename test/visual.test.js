@@ -125,7 +125,11 @@ if (process.argv.includes("--visual-child")) {
     window.webContents.sendInputEvent({type:"keyUp",keyCode:"Escape"});
     await until('!document.getElementById("dialog").open');
     // Chromium can finish its own modal-close steps a tick after the dialog reports closed; focus must still return.
-    await until('document.activeElement?.id === "search-button"');
+    try { await until('document.activeElement?.id === "search-button"'); }
+    catch (error) {
+      const where = await run('JSON.stringify({ tag: document.activeElement?.tagName, id: document.activeElement?.id, cls: document.activeElement?.className, dialogOpen: document.getElementById("dialog").open, hasFocus: document.hasFocus(), searchExists: Boolean(document.getElementById("search-button")) })');
+      throw new Error(`${error.message}; focus is on ${where}`);
+    }
     // Safety decisions stay in trusted chrome, and cancellation never sends a request.
     await click('#agent-toggle');
     await run('document.getElementById("chat-input").value="Private draft";document.getElementById("chat-form").requestSubmit()');
