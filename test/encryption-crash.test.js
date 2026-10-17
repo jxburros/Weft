@@ -9,6 +9,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { DatabaseSync } from '../src/sqlite.js';
 import { createKeyProtector, KEYRING_FILE } from '../src/encryption.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 // Real crashes: a child process runs the operation and SIGKILLs itself at a named step.
 const child = fileURLToPath(new URL('./fixtures/encryption-crash.mjs', import.meta.url));
@@ -19,7 +20,7 @@ function open(directory) {
 }
 async function seeded(t, count = 12) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-encryption-crash-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   const service = open(directory);
   await service.execute('materials.create', { title: 'Note', content: 'CRASH-NOTE-CONTENT' });
   await service.execute('materials.create', { title: 'File', kind: 'file', filename: 'f.txt', fileBase64: Buffer.from('CRASH-FILE-BODY').toString('base64') });
@@ -59,7 +60,7 @@ for (const step of ['keyring-pending', 'components-sealed', 'in-transaction']) {
     const directory = await seeded(t);
     crashAt(directory, 'enable', step);
     const service = open(directory);
-    t.after(() => service.close());
+    closeAfter(t, service);
     assert.equal(service.locked, false);
     assert.equal((await service.executeEncryption('encryption.status', {}, human)).enabled, false);
     assert.equal(existsSync(join(directory, KEYRING_FILE)), false);
@@ -81,7 +82,7 @@ for (const step of ['committed', 'compacted', 'keyring-active']) {
     const directory = await seeded(t);
     crashAt(directory, 'enable', step);
     const service = open(directory);
-    t.after(() => service.close());
+    closeAfter(t, service);
     if (step !== 'keyring-active') assert.deepEqual(service.recoveredEncryption, { operation: 'enable', outcome: 'completed' });
     assert.equal(service.locked, false);
     assert.equal(JSON.parse(readFileSync(join(directory, KEYRING_FILE), 'utf8')).pending, undefined);
@@ -95,7 +96,7 @@ test('a crash after the commit with manual unlock finishes recovery without the 
   const directory = await seeded(t);
   crashAt(directory, 'enable', 'committed', 'manual');
   const service = open(directory);
-  t.after(() => service.close());
+  closeAfter(t, service);
   assert.equal(service.locked, true);
   // Plaintext component files were overwritten and removed before anyone unlocked.
   assert.deepEqual(plaintextHits(directory), []);
@@ -115,7 +116,7 @@ for (const step of ['batch-1', 'batch-3']) {
     assert.ok(before.some(doc => doc.startsWith('wfe1.1.')) && before.some(doc => doc.startsWith('wfe1.2.')), 'the crash left a half-rotated store');
     assert.ok(JSON.parse(readFileSync(join(directory, KEYRING_FILE), 'utf8')).rotation);
     const service = open(directory);
-    t.after(() => service.close());
+    closeAfter(t, service);
     const job = service.rotationRun;
     assert.ok(job, 'the rotation job resumes at startup');
     // Readable while the resumed job runs: both key versions are held until it finishes.
@@ -138,7 +139,7 @@ for (const [step, encrypted] of [['keyring-pending', true], ['components-opened'
     first.close();
     crashAt(directory, 'disable', step);
     const service = open(directory);
-    t.after(() => service.close());
+    closeAfter(t, service);
     assert.equal((await service.executeEncryption('encryption.status', {}, human)).enabled, encrypted);
     assert.equal(existsSync(join(directory, KEYRING_FILE)), encrypted);
     assert.ok(storedDocs(directory).every(doc => doc.startsWith(encrypted ? 'wfe1.' : '{')));

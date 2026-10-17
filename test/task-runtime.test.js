@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync, unlinkSync, realpathSync } from 'node:fs';
+import { mkdtempSync, existsSync, unlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,11 +12,12 @@ import { commands } from '../src/commands.js';
 import { fakeEndpoint, sse, openaiDelta, openaiFinish } from './model-test-helpers.js';
 import { Providers } from '../src/providers.js';
 import { TurnRelay } from '../src/turn-relay.js';
+import { beforeRemoval, closeAfter, removeAfter } from './temp-profile.js';
 
 function setup(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-tasks-'));
   const f = createRuntimeFixture({ directory, ...options });
-  t.after(() => { f.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); });
+  removeAfter(t, directory); closeAfter(t, f);
   return { ...f, directory };
 }
 const step = (title, command, args = {}, extra = {}) => ({ kind: 'command', title, command, args, ...extra });
@@ -65,7 +66,7 @@ test('a runner executes local steps with request IDs, stops at a review point an
   // The store survives reopening with the same phase history.
   f.close();
   const reopened = new WorkspaceService({ directory: f.directory });
-  t.after(() => reopened.close());
+  closeAfter(t, reopened);
   assert.deepEqual(transitions(reopened.data.tasks.find(item => item.id === id)), transitions(task));
 });
 
@@ -206,7 +207,7 @@ test('no blind retries: uncertain external work needs a determination or an expl
 test('process interruption: killed mid-step, restart pauses local work and marks external work uncertain', { timeout: 30000 }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-crash-'));
   let f;
-  t.after(() => { f?.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); });
+  removeAfter(t, directory); beforeRemoval(t, () => { f?.close(); });
   const child = spawn(process.execPath, [fileURLToPath(new URL('./fixtures/task-crash-child.mjs', import.meta.url)), directory], { stdio: ['ignore', 'pipe', 'inherit'] });
   const ready = await new Promise((resolve, reject) => {
     let buffer = '';
@@ -279,7 +280,7 @@ test('provider switch mid-task: later model steps use the newly selected connect
   const f = createRuntimeFixture({ directory });
   const providers = await new Providers({ directory, workspace: f.workspace, env: {}, relay }).init();
   f.tasks.providers = providers;
-  t.after(() => { providers.close(); relay.close(); f.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); });
+  removeAfter(t, directory); beforeRemoval(t, () => { providers.close(); relay.close(); f.close(); });
   // The dispatcher in the fixture routes chat.send to providers via the runtime's dispatch; rebuild with real providers.
   const { createDispatcher } = await import('../src/dispatch.js');
   const dispatch = createDispatcher({ workspace: f.workspace, browser: f.browser, clients: f.clients, providers, admission: f.admission, tasks: f.tasks });

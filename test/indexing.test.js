@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -9,6 +9,7 @@ import { DatabaseSync } from '../src/sqlite.js';
 import { createKeyProtector } from '../src/encryption.js';
 import { executeOutcome } from '../src/commands.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
+import { closeAfter, closeQuietly, removeAfter } from './temp-profile.js';
 
 /*
  * Deferred search indexing (#30): a search-index rebuild (FTS version change, or an encrypted
@@ -22,7 +23,7 @@ const RECORDS = 6000;
 
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-indexing-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   return directory;
 }
 async function seed(service, count = RECORDS) {
@@ -66,7 +67,7 @@ test('a search-index version change rebuilds in the background: open is fast, se
   const events = [];
   service = new WorkspaceService({ directory, onWarning() {} });
   service.onIndexingEvent = event => events.push(event);
-  t.after(() => { try { service.close(); } catch { /* closed */ } });
+  closeAfter(t, service, closeQuietly);
   const status = await service.execute('search.status', {}, human);
   assert.equal(status.lexical.complete, false);
   assert.equal(status.lexical.indexing.state, 'running');
@@ -130,7 +131,7 @@ test('an interrupted plaintext rebuild resumes from its saved position after a r
   assert.ok(reached > 0 && reached < 6002);
   service.close();
   service = new WorkspaceService({ directory, onWarning() {} });
-  t.after(() => service.close());
+  closeAfter(t, service);
   const status = service.storage.indexingStatus();
   assert.equal(status.resumed, true);
   assert.ok(status.processedRecords >= reached, 'records indexed before the restart are not indexed again');
@@ -147,7 +148,7 @@ test('an encrypted profile rebuilds its in-memory index in the background after 
   await service.indexingIdle();
   await service.executeEncryption('encryption.lock', {}, human);
   await service.executeEncryption('encryption.unlock', { method: 'os' }, human);
-  t.after(() => service.close());
+  closeAfter(t, service);
   const status = await service.execute('search.status', {}, human);
   assert.equal(status.lexical.complete, false, 'unlock returns before the in-memory index is complete');
   assert.equal(status.lexical.indexing.reason, 'unlock');

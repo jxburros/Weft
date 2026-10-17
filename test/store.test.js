@@ -8,17 +8,18 @@ import { WorkspaceService } from '../src/workspace.js';
 import { MetadataStore, storeMigrations } from '../src/store.js';
 import { ComponentStore, MAX_COMPONENT_BYTES } from '../src/components.js';
 import { DatabaseSync } from '../src/sqlite.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
 const PNG = bytes => Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from(bytes)]).toString('base64');
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-store-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   return directory;
 }
 function open(t, directory, options = {}) {
   const service = new WorkspaceService({ directory, onWarning() {}, ...options });
-  t.after(() => service.close());
+  closeAfter(t, service);
   return service;
 }
 const componentFiles = directory => {
@@ -221,7 +222,7 @@ test('stored files are private to the user and oversized components are refused'
 
 test('session and history writes commit only their own rows, never unrelated uncommitted changes', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-store-only-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   let service = new WorkspaceService({ directory });
   const note = await service.execute('materials.create', { title: 'Committed title' });
   // A change still in progress elsewhere (not saved) must not ride along with a tab update.

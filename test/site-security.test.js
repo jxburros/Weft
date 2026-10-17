@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -12,11 +12,12 @@ import { ThreatIntel, canonicalize, urlExpressions } from '../src/threat-intel.j
 import { DownloadSafety, applyOriginMetadata, fileCategory } from '../src/download-safety.js';
 import { executeOutcome, resultExitCode, commands } from '../src/commands.js';
 import { actionClassForCommand } from '../src/autonomy.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const sha = value => createHash('sha256').update(value).digest('hex');
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-site-security-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   return directory;
 }
 function fakeSession() {
@@ -31,7 +32,7 @@ function fakeSession() {
 
 test('site-rule explanation lists every match with explicit precedence, provenance, review state and IDN details', async t => {
   const service = new WorkspaceService({ directory: fixture(t) });
-  t.after(() => service.close());
+  closeAfter(t, service);
   const warn = await service.execute('siteRules.create', { hostname: 'example.com', behavior: 'warn', reason: 'Watch', evidence: ['https://evidence.test/report'], reviewBy: '2001-01-01' });
   const navigation = await service.execute('siteRules.create', { hostname: 'news.example.com', mode: 'navigation' });
   const global = await service.execute('siteRules.create', { hostname: 'example.com', mode: 'connection', scope: 'global' });
@@ -78,7 +79,7 @@ test('site-rule explanation lists every match with explicit precedence, provenan
 test('storage policy strips cookies, sandboxes blocked documents, blocks cross-site cookies and journals temporary sites before contact', async t => {
   const directory = fixture(t);
   const service = new WorkspaceService({ directory: join(directory, 'records') });
-  t.after(() => service.close());
+  closeAfter(t, service);
   const session = fakeSession();
   const journalPath = join(directory, 'journal.json');
   const policy = new SiteStoragePolicy({ workspaceService: service, journalPath, sessionFor: () => session });
@@ -207,7 +208,7 @@ test('optional reputation provider updates hash-prefix lists, verifies checksums
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => server.close());
+  closeAfter(t, server);
   const intel = new ThreatIntel({ path: join(fixture(t), 'threats.json'), env: { WEFT_TEST_SB_KEY: 'fixture-key' } });
   intel.execute('threats.configureProvider', { enabled: true, acknowledgeEgress: true, endpoint: `http://127.0.0.1:${server.address().port}`, apiKeyEnv: 'WEFT_TEST_SB_KEY', threatTypes: ['SOCIAL_ENGINEERING'] });
   const first = await intel.execute('threats.update', {});

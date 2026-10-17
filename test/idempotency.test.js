@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -15,13 +15,14 @@ import { createDispatcher } from '../src/dispatch.js';
 import { createApiServer } from '../src/server.js';
 import { commands } from '../src/commands.js';
 import { REQUEST_RETENTION } from '../src/store.js';
+import { beforeRemoval, closeAfter, removeAfter } from './temp-profile.js';
 
 const human = { actor: 'human', source: 'gui' };
 const cliPath = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
 function service(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-idempotency-'));
   const workspace = new WorkspaceService({ directory, onWarning() {}, ...options });
-  t.after(() => { workspace.close(); rmSync(directory, { recursive: true, force: true }); });
+  removeAfter(t, directory); closeAfter(t, workspace);
   return { directory, workspace };
 }
 async function api(t) {
@@ -43,7 +44,7 @@ async function api(t) {
   const server = createApiServer({ execute: dispatch, token, authenticate: value => clients.authenticate(value), executeReturnsOutcome: true });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${server.address().port}`;
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); browser.close(); workspace.close(); rmSync(directory, { recursive: true, force: true }); });
+  removeAfter(t, directory); beforeRemoval(t, async () => { await new Promise(resolve => server.close(resolve)); browser.close(); workspace.close(); });
   const request = async (command, args = {}, bearer = token) => {
     const response = await fetch(`${url}/v1/execute`, { method: 'POST', headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' }, body: JSON.stringify({ command, args }) });
     return { status: response.status, outcome: await response.json() };
@@ -97,7 +98,7 @@ test('request identities are atomic with the mutation, survive restart and expir
   const note = await workspace.execute('materials.create', { title: 'Note', requestId: 'r2' });
   workspace.close();
   const reopened = new WorkspaceService({ directory, onWarning() {}, clock: () => now });
-  t.after(() => reopened.close());
+  closeAfter(t, reopened);
   reopened.storage.clock = () => now;
   const replay = await reopened.execute('materials.create', { title: 'Note', requestId: 'r2' });
   assert.equal(replay.id, note.id);

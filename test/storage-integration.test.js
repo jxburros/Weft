@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -10,16 +10,17 @@ import { Browser } from '../src/browser.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
+import { beforeRemoval, closeAfter, removeAfter } from './temp-profile.js';
 
 const human = { actor: 'human', source: 'gui' };
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-storage-integration-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true, maxRetries: 5 }));
+  removeAfter(t, directory);
   return directory;
 }
 function open(t, directory) {
   const service = new WorkspaceService({ directory, onWarning() {} });
-  t.after(() => service.close());
+  closeAfter(t, service);
   return service;
 }
 const rows = (directory, collection) => {
@@ -111,7 +112,7 @@ test('restoring a backup appends to the activity hash chain and never rewinds au
   session.setPermissionCheckHandler = () => {};
   const admission = new AutomationAdmission();
   const browser = new Browser({ session, workspaceService: workspace, admission, electronApi: {} });
-  t.after(() => { browser.close(); workspace.close(); rmSync(directory, { recursive: true, force: true, maxRetries: 5 }); });
+  removeAfter(t, directory); beforeRemoval(t, () => { browser.close(); workspace.close(); });
   const clients = new ClientGrants({ directory, masterToken: 'integration-token', workspace });
   const dispatch = createDispatcher({ workspace, browser, clients, providers: { close() {} }, admission });
   const ok = async (name, args = {}, context = human) => { const outcome = await dispatch(name, args, context); assert.equal(outcome.error, null, `${name}: ${JSON.stringify(outcome.error)}`); return outcome.result; };

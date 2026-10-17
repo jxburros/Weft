@@ -11,12 +11,13 @@ import { inspectExportResidue } from '../src/export-safety.js';
 import { migrateSchema, CURRENT_SCHEMA_VERSION } from '../src/migrations.js';
 import { DatabaseSync } from '../src/sqlite.js';
 import { ComponentStore } from '../src/components.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 function fixture(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-storage-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   const service = new WorkspaceService({ directory, ...options });
-  t.after(() => service.close());
+  closeAfter(t, service);
   return { directory, service, path: join(directory, 'workspace.sqlite') };
 }
 // Simulates a writer that ignores the profile lock (another tool or a stale process).
@@ -54,7 +55,7 @@ test('external database writes are detected and never overwritten', async t => {
 test('a replaced database file is detected before writing', async t => {
   const { service, path, directory } = fixture(t);
   const other = mkdtempSync(join(tmpdir(), 'weft-other-'));
-  t.after(() => rmSync(other, { recursive: true, force: true }));
+  removeAfter(t, other);
   fs.copyFileSync(path, join(other, 'copy.sqlite'));
   fs.renameSync(join(other, 'copy.sqlite'), path);
   await assert.rejects(service.execute('materials.create', { title: 'Must not write' }), /STORE_CONFLICT/);
@@ -74,7 +75,7 @@ test('history and session write conflicts restore in-memory state', async t => {
 
 test('same-process readers cannot overwrite each other and lost locks block writes', async t => {
   const { service, directory, path } = fixture(t);
-  const other = new WorkspaceService({ directory }); t.after(() => other.close());
+  const other = new WorkspaceService({ directory }); closeAfter(t, other);
   await service.execute('materials.create', { title: 'First writer' });
   await assert.rejects(other.execute('materials.create', { title: 'Stale writer' }), /STORE_CONFLICT/);
   writeFileSync(join(directory, '.workspace.lock'), 'replacement lock');
@@ -112,9 +113,9 @@ test('historical schemas migrate deterministically, retain unknown fields and pr
     assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
     assert.deepEqual(migrateSchema(migrated), migrated);
     const directory = mkdtempSync(join(tmpdir(), 'weft-legacy-'));
-    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    removeAfter(t, directory);
     writeFileSync(join(directory, 'workspace-state.json'), original);
-    const opened = new WorkspaceService({ directory }); t.after(() => opened.close());
+    const opened = new WorkspaceService({ directory }); closeAfter(t, opened);
     assert.equal(opened.data.extensionMetadata.preserved, 'unknown fields must survive');
     assert.deepEqual(opened.data.history, []);
     assert.equal(readdirSync(directory).includes('workspace-state.json'), false);
@@ -131,7 +132,7 @@ test('newer schemas and invalid workspace ownership fail without writes or backu
   invalid.materials.push({ id: 'orphan', workspaceId: 'missing', title: 'Orphan' });
   for (const state of [{ schemaVersion: 999 }, invalid]) {
     const directory = mkdtempSync(join(tmpdir(), 'weft-invalid-'));
-    t.after(() => rmSync(directory, { recursive: true, force: true }));
+    removeAfter(t, directory);
     const original = JSON.stringify(state); writeFileSync(join(directory, 'workspace-state.json'), original);
     assert.throws(() => new WorkspaceService({ directory }), /Unsupported|reference/);
     assert.equal(readFileSync(join(directory, 'workspace-state.json'), 'utf8'), original);
@@ -196,7 +197,7 @@ test('local-only metadata and turn manifests persist for provider routing', asyn
   await service.appendMessage(conversation.id, { role: 'user', content: 'Local evidence', localOnly: true });
   await service.recordTurnManifest(conversation.id, { id: 'turn1', status: 'pending', requests: [] });
   await service.recordTurnManifest(conversation.id, { id: 'turn1', status: 'complete', requests: [{ bytes: 123 }] });
-  const reopened = new WorkspaceService({ directory }); t.after(() => reopened.close());
+  const reopened = new WorkspaceService({ directory }); closeAfter(t, reopened);
   const stored = reopened.getConversation(conversation.id);
   assert.equal(stored.messages[0].localOnly, true);
   assert.deepEqual(stored.turnManifests, [{ id: 'turn1', status: 'complete', requests: [{ bytes: 123 }] }]);
@@ -225,7 +226,7 @@ test('sync locations, copy and placeholder warnings surface without changing cop
 
 test('a conflicted copy without a canonical file blocks silent creation', t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-conflict-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   writeFileSync(join(directory, 'workspace-state (conflicted copy).json'), 'preserved');
   assert.throws(() => new WorkspaceService({ directory, onWarning() {} }), /STORE_CONFLICT/);
   assert.deepEqual(readdirSync(directory), ['workspace-state (conflicted copy).json']);

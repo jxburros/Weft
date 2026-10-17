@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { commands } from '../src/commands.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const PNG = body => Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from(body)]).toString('base64');
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-portability-'));
   const service = new WorkspaceService({ directory, onWarning() {} });
-  t.after(() => { service.close(); rmSync(directory, { recursive: true, force: true }); });
+  removeAfter(t, directory); closeAfter(t, service);
   return { directory, service };
 }
 // A project exercising every relationship the export format claims to preserve.
@@ -147,7 +148,7 @@ test('duplicate and package import keep component-backed files and captures acro
   const packaged = await service.execute('workspaces.importPackage', { name: 'restart-check' });
   service.close();
   const reopened = new WorkspaceService({ directory, onWarning() {} });
-  t.after(() => reopened.close());
+  closeAfter(t, reopened);
   for (const workspaceId of [copy.id, packaged.id]) {
     const [artifact] = await reopened.execute('artifacts.list', { workspaceId });
     const full = await reopened.execute('artifacts.get', { id: artifact.id });

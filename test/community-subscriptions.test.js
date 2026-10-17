@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -9,12 +9,13 @@ import { commands } from '../src/commands.js';
 import { buildEnvelope, generateKeyPair } from '../src/list-signing.js';
 import { correctEntry, disputeEntry, publishRelease, reviewEntry, rotateKey } from '../src/list-governance.js';
 import { T0, acceptEntry, factualDomain, later, newGroup, release } from './fixtures/community-authoring.mjs';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const human = { actor: 'human' };
 function fixture(t, { fetcher, now = later(2) } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-signed-lists-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const workspace = new WorkspaceService({ directory }); t.after(() => workspace.close());
+  removeAfter(t, directory);
+  const workspace = new WorkspaceService({ directory }); closeAfter(t, workspace);
   const clock = { now: now.getTime() };
   const calls = [];
   const lists = new CommunityLists({ workspace, clock: () => clock.now, fetcher: fetcher ? (...args) => { calls.push(args); return fetcher(...args); } : (...args) => { calls.push(args); throw new Error('network must not be used'); } });
@@ -357,7 +358,7 @@ test('subscriptions survive restart, stay scoped to their workspace and detect t
   const other = await workspace.execute('workspaces.create', { name: 'Other' });
   assert.deepEqual(await lists.execute('lists.status', {}, human).then(list => list.filter(item => item.workspaceId === other.id)), []);
   await assert.rejects(lists.execute('lists.update', { id: 'grp', workspaceId: original, data, payloadSha256: '0'.repeat(64) }, { actor: 'human', workspaceId: other.id }), /PERMISSION_REQUIRED/);
-  const reopened = new WorkspaceService({ directory }); t.after(() => reopened.close());
+  const reopened = new WorkspaceService({ directory }); closeAfter(t, reopened);
   const again = new CommunityLists({ workspace: reopened, clock: () => later(2).getTime() });
   assert.equal(reopened.matchSiteRule('https://bad.example/', original).behavior, 'block');
   const status = (await again.execute('lists.status', { id: 'grp', workspaceId: original }, human))[0];

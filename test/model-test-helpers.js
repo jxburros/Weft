@@ -1,12 +1,13 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crc32 } from 'node:zlib';
 import { WorkspaceService } from '../src/workspace.js';
 import { Providers } from '../src/providers.js';
 import { TurnRelay } from '../src/turn-relay.js';
+import { beforeRemoval, removeAfter } from './temp-profile.js';
 
 /** A fake model endpoint on loopback. Handlers receive the parsed JSON body. */
 export async function fakeEndpoint(t, handler) {
@@ -20,7 +21,7 @@ export async function fakeEndpoint(t, handler) {
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  t.after(async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  beforeRemoval(t, async () => { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
   return { server, requests, base: `http://127.0.0.1:${server.address().port}` };
 }
 
@@ -64,7 +65,8 @@ export async function modelFixture(t, options = {}) {
   const events = [];
   const fetchImpl = async (url, init) => { outbound.push(String(url)); return (options.fetchImpl || globalThis.fetch)(url, init); };
   const providers = await new Providers({ directory, workspace, env: {}, relay, fetchImpl, onEvent: event => events.push(event), ...options.providers }).init();
-  t.after(async () => { providers.close(); relay.close(); await tick(20); workspace.close(); await rm(directory, { recursive: true, force: true }); });
+  removeAfter(t, directory);
+  beforeRemoval(t, async () => { providers.close(); relay.close(); await tick(20); workspace.close(); });
   const conversation = await workspace.execute('conversations.create', { title: 'Fixture' });
   const save = fields => providers.execute('models.save', { name: 'Fixture', provider: 'openai', model: 'fixture-model', ...fields });
   return { directory, workspace, providers, relay, outbound, events, conversation, save,

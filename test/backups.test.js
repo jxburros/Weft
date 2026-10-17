@@ -8,16 +8,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { restoreBackup, verifyBackup, listBackups } from '../src/backups.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const PNG = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('image body')]).toString('base64');
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-backups-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   return directory;
 }
 function open(t, directory, options = {}) {
   const service = new WorkspaceService({ directory, onWarning() {}, ...options });
-  t.after(() => service.close());
+  closeAfter(t, service);
   return service;
 }
 async function seeded(t) {

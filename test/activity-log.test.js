@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ActivityLog, summarizeArgs, minimizeUrl } from '../src/activity-log.js';
 import { WorkspaceService } from '../src/workspace.js';
@@ -9,13 +8,10 @@ import { AutomationAdmission } from '../src/admission.js';
 import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { Providers } from '../src/providers.js';
+import { closeAfter, tempDirectory } from './temp-profile.js';
 
 const human = { actor: 'human', source: 'gui' };
-function temp(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'weft-activity-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true, maxRetries: 5 }));
-  return directory;
-}
+const temp = t => tempDirectory(t, 'weft-activity-');
 const lines = path => readFileSync(path, 'utf8').trim().split('\n');
 
 test('hash chain detects edits, deletion and reordering, and survives reopening', t => {
@@ -69,7 +65,7 @@ test('retention by age and count keeps a verifiable anchor and never touches art
   assert.equal(log.verify().status, 'intact');
   // Workspace-level ordinary activity uses the same policy; records and artifacts remain.
   const workspace = new WorkspaceService({ directory: join(directory, 'ws') });
-  t.after(() => workspace.close());
+  closeAfter(t, workspace);
   await workspace.execute('artifacts.create', { title: 'Permanent evidence', text: 'kept' }, human);
   for (let i = 0; i < 5; i++) await workspace.execute('materials.create', { title: `Note ${i}` }, human);
   assert.equal(await workspace.pruneActivity({ maxEntries: 2 }), 4);
@@ -146,7 +142,7 @@ test('dispatcher records labelled outcomes, scopes activity reads and never stor
   const browser = { tabs: new Map(), downloads: new Map(), activeId: null, tab: () => { throw new Error('No tab'); }, execute: async name => name === 'browser.info' ? { automation: admission.status } : [] };
   workspace.attachBrowser(browser);
   const dispatch = createDispatcher({ workspace, browser, clients, admission, providers: { close() {} } });
-  t.after(() => workspace.close());
+  closeAfter(t, workspace);
   await dispatch('workspace.snapshot', {}, human);
   await dispatch('materials.create', { workspaceId: firstId, title: 'Agent note', content: 'very private body text' });
   await dispatch('materials.delete', { id: 'mate_missing' }, human);
@@ -178,7 +174,7 @@ test('dispatcher records labelled outcomes, scopes activity reads and never stor
 test('model destination decisions are durable without message content', async t => {
   const directory = temp(t);
   const workspace = new WorkspaceService({ directory });
-  t.after(() => workspace.close());
+  closeAfter(t, workspace);
   const log = new ActivityLog({ directory });
   const conversation = await workspace.execute('conversations.create', { title: 'Chat' }, human);
   const providers = new Providers({ directory, workspace, audit: entry => log.append(entry), env: { OPENAI_API_KEY: 'sk-test-secret' },

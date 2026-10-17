@@ -1,18 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { CommunityLists } from '../src/community-lists.js';
 import { DatabaseSync } from '../src/sqlite.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const human = { actor: 'human' };
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-lists-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const workspace = new WorkspaceService({ directory }); t.after(() => workspace.close());
+  removeAfter(t, directory);
+  const workspace = new WorkspaceService({ directory }); closeAfter(t, workspace);
   return { directory, workspace, lists: new CommunityLists({ workspace }) };
 }
 function source(hostname = 'example.com', commit = 'a'.repeat(40)) {
@@ -34,7 +35,7 @@ test('offline list pins and disabled rule provenance persist across restart', as
   assert.deepEqual(rule.provenance, { kind: 'community-list', listId: input.id, subscriptionWorkspaceId: workspace.activeWorkspaceId, sourceRepo: input.sourceRepo, commit: input.commit, path: input.path, sha256: input.sha256, bytes: input.bytes, ruleIndex: 0 });
   await workspace.execute('siteRules.update', { id: rule.id, changes: { enabled: true } }, human);
   assert.equal((await lists.execute('lists.status', {}, human))[0].enabledRuleCount, 1);
-  const reopened = new WorkspaceService({ directory }); t.after(() => reopened.close());
+  const reopened = new WorkspaceService({ directory }); closeAfter(t, reopened);
   assert.equal(new CommunityLists({ workspace: reopened }).summary(reopened.data.siteLists[0]).sha256, input.sha256);
   assert.equal(reopened.matchSiteRule('https://example.com').provenance.commit, input.commit);
 });

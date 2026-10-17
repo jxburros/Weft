@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -18,6 +18,7 @@ import { EventLog } from '../src/server.js';
 import { PaymentService } from '../src/payments.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
 import { fakeEndpoint, json } from './model-test-helpers.js';
+import { closeAfter, closeQuietly, removeAfter } from './temp-profile.js';
 
 /**
  * Encryption (ADR 014) reconciled with features it was not written against: embedding vectors
@@ -28,12 +29,12 @@ const human = { actor: 'human', source: 'gui' };
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-encryption-integration-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   return directory;
 }
 function open(t, directory) {
   const service = new WorkspaceService({ directory, onWarning() {}, keyProtector: createKeyProtector({ safeStorage: fakeSafeStorage(), platform: 'linux' }), encryption: { kdf: kdfParams } });
-  t.after(() => { try { service.close(); } catch { /* already closed */ } });
+  closeAfter(t, service, closeQuietly);
   return service;
 }
 const enc = (service, name, args = {}, context = human) => service.executeEncryption(name, args, context);
@@ -61,11 +62,11 @@ test('(a) embedding vectors of an encrypted profile are sealed at rest: enabling
   const inputs = [];
   const server = await fakeEndpoint(t, (req, res, body) => { inputs.push(...body.input); json(res, { model: body.model, embeddings: body.input.map(text => [/sedan|automobile/i.test(text) ? 1 : 0, 0.1]) }); });
   const providers = await new Providers({ directory, workspace: service, env: {} }).init();
-  t.after(() => providers.close());
+  closeAfter(t, providers);
   const connection = await providers.execute('models.save', { name: 'Local', provider: 'ollama', endpoint: server.base, model: 'chat' });
   const retrieval = new Retrieval({ workspace: service, providers, intervalMs: 0 });
   service.attachRetrieval(retrieval);
-  t.after(() => retrieval.close());
+  closeAfter(t, retrieval);
   const note = await service.execute('materials.create', { title: 'NEEDLE-VECTOR-NOTE', content: 'The sedan needs tires.' });
   await service.execute('materials.create', { title: 'Second note', content: 'Bicycle chain oil.' });
   await service.execute('search.configureEmbeddings', { enabled: true, modelId: connection.id, embeddingModel: 'fake-embed' }, human);
@@ -153,7 +154,7 @@ test('(b) resource archive bodies and manifests are sealed components and record
 test('(c) linked-source paths, cached service content, collections, citations and origins are sealed', async t => {
   const directory = profile(t);
   const files = mkdtempSync(join(tmpdir(), 'weft-encryption-linked-'));
-  t.after(() => rmSync(files, { recursive: true, force: true }));
+  removeAfter(t, files);
   const folder = join(files, 'NEEDLE-LINKED-FOLDER');
   mkdirSync(folder);
   writeFileSync(join(folder, 'brief.txt'), 'linked text');

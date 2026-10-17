@@ -1,16 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { compileQuery } from '../src/search-index.js';
 import { DatabaseSync } from '../src/sqlite.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-search-'));
   const service = new WorkspaceService({ directory, onWarning() {} });
-  t.after(() => { service.close(); rmSync(directory, { recursive: true, force: true }); });
+  removeAfter(t, directory); closeAfter(t, service);
   return { directory, service };
 }
 const ids = results => results.map(result => result.title);
@@ -118,6 +119,6 @@ test('the index rebuilds when its version changes and survives restart', async t
   db.exec('DELETE FROM search_fts; DELETE FROM search_docs;');
   db.close();
   const reopened = new WorkspaceService({ directory, onWarning() {} });
-  t.after(() => reopened.close());
+  closeAfter(t, reopened);
   assert.equal((await reopened.execute('search.query', { query: 'needle' }))[0].title, 'Capture');
 });

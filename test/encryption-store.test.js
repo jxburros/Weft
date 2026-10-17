@@ -1,25 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { DatabaseSync } from '../src/sqlite.js';
 import { createKeyProtector, KEYRING_FILE } from '../src/encryption.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
+import { closeAfter, closeQuietly, removeAfter } from './temp-profile.js';
 
 const human = { actor: 'human', source: 'gui' };
 const PNG = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('NEEDLE-IMAGE-BYTES')]).toString('base64');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 function profile(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-encryption-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   return directory;
 }
 function open(t, directory, { safeStorage = fakeSafeStorage(), platform = 'linux' } = {}) {
   const service = new WorkspaceService({ directory, onWarning() {}, keyProtector: createKeyProtector({ safeStorage, platform }), encryption: { kdf: kdfParams } });
-  t.after(() => { try { service.close(); } catch { /* already closed */ } });
+  closeAfter(t, service, closeQuietly);
   return service;
 }
 const enc = (service, name, args = {}, context = human) => service.executeEncryption(name, args, context);
