@@ -33,6 +33,12 @@ permission set; macOS and Windows behaviour has not been observed. Plugin
 sandbox tests rely on Node's permission model as shipped with the running Node
 or Electron version.
 
+Headless-session, tab-suspension and responsiveness tests (`test/headless.test.js`,
+`test/suspension.test.js`, `test/responsiveness.test.js`) launch real Electron and
+run only in the Linux Chromium job under Xvfb with software rendering. Their
+evidence is Linux-only; the responsiveness budgets are deliberately generous
+regression ceilings, and `perf/README.md` records the reference numbers.
+
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
 malware-feed, payment-provider, or multi-user deployment validation. Those items
 remain open until their issue-specific acceptance criteria have evidence.

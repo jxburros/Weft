@@ -226,6 +226,44 @@ alone is not a shipped capability.
   extension state and updater state are deliberately not restored (see
   `docs/STORAGE-SAFETY.md`). A restore appends to the activity hash chain and
   never rewinds it.
+- Headless sessions and display handoff (#11, ADR 015): `--headless` or
+  `WEFT_HEADLESS=1` runs the same profile, hidden GUI renderer, policies and
+  command catalog with pages rendered offscreen, so reads and captures work
+  without a visible window. A single-instance lock turns a second launch into a
+  display handoff (no restart); `display.status`, `display.show`, `weft attach`
+  and human-only `display.hide` attach and detach. Pending human decisions are
+  reported in `display.status` and on stdout while headless. Pages reload when
+  they move between offscreen and on-screen rendering, and the transition is
+  recorded and disclosed. `--ozone-platform=headless` was evaluated and is
+  unsupported (Electron 44 sizes windows and views at 1×1). SIGINT/SIGTERM now
+  quit cleanly.
+- Resume state, tab groups, tab search and browsing-data import (#24):
+  per-workspace resume records (`resume.get`/`resume.save`: section, active tab,
+  split panes and focused pane, panel layout, pinned resources) with continuation
+  links to blockers, open tasks and handoffs, restore disclosures in the window;
+  tab groups (`tabGroups.*`, `tabs.group`) with named colors shown as text;
+  `tabs.search` and a Ctrl+Shift+A quick switcher with ownership, group, task and
+  suspension indicators; human-only `browsingData.sources/preview/import` for
+  Chromium-family `Bookmarks`/`History`, Firefox `places.sqlite` (containers
+  listed) and Netscape bookmark HTML, previewed with duplicates, unsupported
+  fields and a digest the import must match. Passwords, cookies, sessions,
+  autofill and payment data are never read; SQLite files are copied before
+  reading.
+- Resource scheduling (#30): global, per-client and per-task agent concurrency
+  (`resource_busy`, HTTP 429, CLI exit 3), a bounded capture queue for
+  screenshots, PDFs and artifact captures with progress events, `captures.list`
+  and `captures.cancel`, client run-time and model-spend budgets measured from
+  provider-reported usage and configured prices (`budget_exhausted`, HTTP 429,
+  CLI exit 4; unpriced models are refused under a spend budget), one home for
+  capture and model image limits, `resources.status`, and idle or memory-pressure
+  tab suspension (`tabs.suspend`) that keeps URL, title, scroll and records,
+  restores on use and never suspends leased, task-bound, busy, playing or edited
+  tabs. Human resource limits live in `settings.update` (`resources`).
+- Performance: browser commands no longer copy the whole workspace to look up a
+  workspace, and browser-session and history writes commit only their own rows.
+  `perf/responsiveness.js` measures GUI first render, agent navigation, input and
+  scroll latency, memory and CPU in real Electron with concurrent agents;
+  `test/responsiveness.test.js` enforces generous budgets in the Linux job.
 
 ### Not completed
 
@@ -238,8 +276,15 @@ alone is not a shipped capability.
 - Activity integrity is tamper evidence only; a process that can rewrite the
   profile can rewrite the log. The changed agent-connections dialog needs a
   reviewed golden update in the Linux visual CI job (local fonts differ).
-- Live-model evals, actual plugin installation in a Claude client and GUI
-  first-render performance measurements have not been verified.
+- Live-model evals and actual plugin installation in a Claude client have not
+  been verified. GUI first-render and responsiveness numbers come from Linux
+  under Xvfb with software rendering, not real hardware.
+- Headless sessions, offscreen captures and display handoff were tested on
+  Linux/Xvfb only; macOS and Windows behavior is not verified. Browsing-data
+  import was tested with synthetic profile fixtures, not real browser profiles.
+  Search indexing is not a deferred queue (startup index rebuilds still block
+  opening). The Settings view gained a Display & resources section, so the
+  Linux `settings` golden needs a reviewed update on the reference platform.
 - Installers are unsigned (no signing/notarization credentials). The Windows
   installer was compiled but not built runnable or run; macOS packages, the
   release workflow on GitHub and real updates between published versions have not
