@@ -69,7 +69,7 @@ Human-only describes an unconditional administration gate; other commands may st
 | workspaces.restore | Restore an archived workspace | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.duplicate | Copy project records; exclude sessions and credentials | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.delete | Permanently delete a workspace and its saved records | administration | Human only | GUI IPC, CLI, REST, MCP |
-| workspaces.export | Export sanitized project records without sessions or credentials | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.export | Export project records with optional exact-term residue scan; images are unverifiable | local_read | Human only | GUI IPC, CLI, REST, MCP |
 | workspaces.import | Import a versioned project export as a new workspace | local_write | Human only | GUI IPC, CLI, REST, MCP |
 | settings.get | Get non-secret application preferences | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | settings.update | Update application preferences; credentials are not accepted | administration | Human only | GUI IPC, CLI, REST, MCP |
@@ -118,3 +118,7 @@ Human-only describes an unconditional administration gate; other commands may st
 | models.delete | Delete a saved model connection and its encrypted key | administration | Human only | GUI IPC, CLI, REST, MCP |
 | chat.send | Send text/context to the selected model, with optional scoped read-only tools | cloud_spend | Policy checked | GUI IPC, CLI, REST, MCP |
 | chat.cancel | Cancel a running model request | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| chat.preview | Preview destination and itemized outbound disclosure without sending | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| clients.create | Human creates a scoped, expiring automation credential; returned token is shown once | administration | Human only | GUI IPC, CLI, REST, MCP |
+| clients.list | Human lists automation grants without tokens | administration | Human only | GUI IPC, CLI, REST, MCP |
+| clients.revoke | Human revokes an automation grant immediately | administration | Human only | GUI IPC, CLI, REST, MCP |
