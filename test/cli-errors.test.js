@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { createApiServer } from '../src/server.js';
 
-const cli = new URL('../bin/weft.js', import.meta.url).pathname;
+const cli = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
 async function run(args, env) {
   try { return await promisify(execFile)(process.execPath, [cli, ...args], { env: { ...process.env, ...env } }); }
   catch (error) { return error; }

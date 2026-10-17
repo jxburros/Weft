@@ -173,7 +173,7 @@ if (mainSmoke) {
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("tabs.list")')).length === 2);
           await until(async () => (await window.webContents.executeJavaScript('document.querySelectorAll("#tabs .tab").length')) === 2);
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
-          await window.webContents.executeJavaScript('document.getElementById("address").value = "about:blank"; document.getElementById("navigation").requestSubmit()');
+          await window.webContents.executeJavaScript('document.getElementById("status").textContent = "Pending navigation"; document.getElementById("address").value = "about:blank"; document.getElementById("navigation").requestSubmit()');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
           await window.webContents.executeJavaScript('document.getElementById("command").value = "browser.info"; document.getElementById("command").dispatchEvent(new Event("change")); document.getElementById("run").click()');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("result").textContent')).includes('chromium'));
