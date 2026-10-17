@@ -189,6 +189,7 @@ function showResult(result) {
   }
 }
 async function refresh(force = false) {
+  if (lockScreenOpen) return;
   if (refreshPromise) {
     await refreshPromise;
     if (force) return refresh(true);
@@ -197,18 +198,23 @@ async function refresh(force = false) {
   refreshPromise = refreshState(force);
   try {
     await refreshPromise;
+  } catch (error) {
+    if (error.code === "locked") return showLockScreen();
+    throw error;
   } finally {
     refreshPromise = null;
   }
 }
 async function refreshState(force) {
   {
-    const [next, nextTabs, browserInfo] = await Promise.all([
+    const [next, nextTabs, browserInfo, nextEncryption] = await Promise.all([
       window.weft.execute("workspace.snapshot", {}),
       window.weft.execute("tabs.list", {}),
       window.weft.execute("browser.info", {}),
+      window.weft.execute("encryption.status", {}),
     ]);
-    const snapshot = JSON.stringify([next, nextTabs, browserInfo.automation]);
+    encryption = nextEncryption;
+    const snapshot = JSON.stringify([next, nextTabs, browserInfo.automation, nextEncryption]);
     state = next;
     tabs = nextTabs;
     if (snapshot !== lastSnapshot || force) {
@@ -675,7 +681,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests" };
@@ -952,6 +958,11 @@ function openDialog(title, body, footer = "", wide = false) {
   );
 }
 function clearDialogSecrets() {
+  const recovery = $("recovery-key");
+  if (recovery) {
+    recovery.textContent = "";
+    $("dialog-content").replaceChildren();
+  }
   const token = $("new-client-token");
   if (token) {
     token.value = "";
@@ -1372,7 +1383,7 @@ function downloadText(name, text, type) {
 }
 function exportWorkspace() {
   openDialog("Review workspace export",
-    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${choice("Format", "format", [["json", "Weft JSON (can be imported again)"], ["markdown", "Markdown (readable; produced by the markdown plugin)"]], "json")}${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
+    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${plaintextExportNotice()}${choice("Format", "format", [["json", "Weft JSON (can be imported again)"], ["markdown", "Markdown (readable; produced by the markdown plugin)"]], "json")}${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
     action("close-dialog", "Cancel"));
   $("export-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -1382,7 +1393,7 @@ function exportWorkspace() {
       const form = new FormData(event.currentTarget);
       const sensitiveTerms = form.get("sensitiveTerms").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
       const format = form.get("format") || "json";
-      const bundle = await execute(format === "json" ? "workspaces.export" : "workspaces.exportAs", { id: ws().id, ...(format === "json" ? {} : { format }), ...(sensitiveTerms.length ? { sensitiveTerms } : {}) }, true);
+      const bundle = await execute(format === "json" ? "workspaces.export" : "workspaces.exportAs", { id: ws().id, ...(format === "json" ? {} : { format }), ...(sensitiveTerms.length ? { sensitiveTerms } : {}), ...(form.get("acknowledgePlaintext") ? { acknowledgePlaintext: true } : {}) }, true);
       const scan = bundle.residueScan;
       $("export-review").innerHTML = `<div class="notice">${scan ? `Sensitive-term scan: <strong>${esc(scan.status)}</strong>. ${scan.found?.length || 0} term matches; ${scan.unverifiable?.length || 0} items could not be verified. ${esc(scan.scope || "")}` : "No sensitive-term scan requested."} Review this result before saving; a clean text scan does not establish that the export is free of private information.</div>${bundle.exclusions ? `<p>This ${esc(bundle.format)} export omits:</p><ul>${bundle.exclusions.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}<button id="save-export" class="primary">Save reviewed export</button>`;
       $("save-export").onclick = () => {
@@ -1502,9 +1513,9 @@ function importWorkspace() {
 function exportPackage() {
   const suggested = `${(ws().name || "workspace").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 60) || "workspace"}-${new Date().toISOString().slice(0, 10)}`;
   formDialog("Export a large project",
-    `<p>Writes a folder with project records, exact capture and file components, and a checksum manifest into the transfers folder of this profile. Copy the folder to move the project. Browser sessions and credentials are excluded.</p>${field("Package name (letters, digits, dots, dashes)", "name", suggested, "text", true)}`,
+    `<p>Writes a folder with project records, exact capture and file components, and a checksum manifest into the transfers folder of this profile. Copy the folder to move the project. Browser sessions and credentials are excluded.</p>${plaintextExportNotice()}${field("Package name (letters, digits, dots, dashes)", "name", suggested, "text", true)}`,
     async (values) => {
-      const result = await execute("workspaces.exportPackage", { id: ws().id, name: values.name }, true);
+      const result = await execute("workspaces.exportPackage", { id: ws().id, name: values.name, ...(values.acknowledgePlaintext ? { acknowledgePlaintext: true } : {}) }, true);
       toast(`Package written to ${result.path}`);
     }, { save: "Export package" });
 }
@@ -1526,16 +1537,146 @@ async function restoreBackupDialog(id) {
   const preview = await execute("backups.restore", { id, dryRun: true }, true);
   const counts = (value) => Object.entries(value || {}).filter(([key]) => !["activity", "history"].includes(key)).map(([key, n]) => `${esc(key)}: ${Number(n)}`).join(" · ");
   openDialog("Restore this backup?",
-    `<p>The backup passed verification. Restoring replaces current workspaces and records with the backup. Your current data is kept in the profile recovery folder, not deleted.</p><div class="notice">Now: ${counts(preview.changes.current)}<br>After restore: ${counts(preview.changes.restored)}</div>`,
+    `<p>The backup passed verification. Restoring replaces current workspaces and records with the backup. Your current data is kept in the profile recovery folder, not deleted.</p><div class="notice">Now: ${counts(preview.changes.current)}<br>After restore: ${counts(preview.changes.restored)}</div>${preview.changes.encryption && preview.changes.encryption.current !== preview.changes.encryption.restored ? `<div class="notice"><strong>${preview.changes.encryption.restored === "plaintext" ? "This backup is not encrypted." : "This backup is encrypted."}</strong> ${preview.changes.encryption.restored === "plaintext" ? "After restoring, project data is stored unencrypted until you turn encryption on again." : "After restoring, unlock it with the recovery key or passphrase that was valid when the backup was made."}</div>` : ""}`,
     action("close-dialog", "Cancel") + '<button id="confirm-restore" class="primary">Restore backup</button>');
   $("confirm-restore").onclick = async () => {
     $("confirm-restore").disabled = true;
     try {
-      const result = await execute("backups.restore", { id });
+      const result = await execute("backups.restore", { id }, true);
       closeDialog();
       toast(`Backup restored. Previous data kept in ${result.preservedOriginal}.`);
+      await refresh(true);
     } catch (error) { $("form-error").textContent = errorMessage(error); $("confirm-restore").disabled = false; }
   };
+}
+// ---- Workspace encryption (ADR 014) ---------------------------------------
+let encryption = null;
+let lockScreenOpen = false;
+let unlockWaiters = [];
+const backendLabel = (b) => ({ keychain: "macOS Keychain", dpapi: "Windows DPAPI", gnome_libsecret: "Secret Service (libsecret)", kwallet: "KWallet", kwallet5: "KWallet 5", kwallet6: "KWallet 6", basic_text: "basic_text (no OS secret service)" })[b] || b || "none";
+function plaintextExportNotice() {
+  if (!encryption?.enabled) return "";
+  return `<div class="notice"><strong>This export is not encrypted.</strong> Your workspace data is encrypted on this computer, but the exported file or folder will be readable by anyone who gets a copy.</div><label class="check-row"><input type="checkbox" name="acknowledgePlaintext" required> I understand this export is written as plaintext</label>`;
+}
+function encryptionSection() {
+  const e = encryption;
+  if (!e) return "";
+  const os = e.methods.os;
+  const osLine = os.protects ? `OS key store available: ${esc(backendLabel(os.backend))}.` : `OS key store: ${esc(backendLabel(os.backend))}. ${esc(os.reason || "")}`;
+  if (!e.enabled) {
+    return `<section class="settings-section" id="encryption-settings"><h2>Encryption</h2><p>Off. Project records, captures and files are stored unencrypted in this profile; full-disk encryption is the only protection if this computer is lost. ${osLine}</p><div class="inline-actions">${action("encryption-enable", "Turn on encryption…", "lock")}${action("encryption-coverage", "What encryption covers", "")}</div></section>`;
+  }
+  const unlock = e.unlockMode === "os" ? `unlocks with ${esc(backendLabel(os.backend))} at startup` : "asks for your passphrase or recovery key at every start";
+  return `<section class="settings-section" id="encryption-settings"><h2>Encryption</h2><p>On (AES-256-GCM). Weft ${unlock}${e.methods.passphrase.configured ? "; a passphrase is set" : ""}. Data key version ${Number(e.keyVersion)}.${e.rotation ? " A data-key rotation is in progress." : ""} Agents cannot unlock it. ${e.unlockMode === "os" ? "" : osLine}</p><div class="inline-actions">${action("encryption-lock", "Lock now", "lock")}${action("encryption-configure", "Unlock options…", "")}${action("encryption-rotate", "Rotate keys…", "")}${action("encryption-check", "Check recovery key…", "")}${action("encryption-coverage", "What encryption covers", "")}${action("encryption-disable", "Turn off…", "", "", "secondary danger")}</div></section>`;
+}
+function coverageList(e) {
+  return `<p>${esc(e.coverage.threatModel)}</p><h3>Encrypted</h3><ul>${e.coverage.encrypted.map((x) => `<li>${esc(x)}</li>`).join("")}</ul><h3>Not encrypted</h3><ul>${e.coverage.notEncrypted.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+}
+function encryptionCoverageDialog() {
+  openDialog("What encryption covers", coverageList(encryption), action("close-dialog", "Close"), true);
+}
+const mb = (bytes) => bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+async function enableEncryptionDialog() {
+  const e = await execute("encryption.status", { inventory: true }, true);
+  const os = e.methods.os;
+  const copies = e.plaintextCopies || [];
+  const removable = copies.filter((c) => c.removable);
+  formDialog("Turn on encryption",
+    `${coverageList(e)}${choice("How Weft unlocks", "unlockMode", os.protects ? [["os", `Automatically with ${backendLabel(os.backend)} when I sign in`], ["manual", "Ask for my passphrase or recovery key at every start"]] : [["manual", "Ask for my passphrase or recovery key at every start"]], os.protects ? "os" : "manual")}${os.protects ? "" : `<div class="notice">${esc(os.reason || "The OS key store is unavailable.")} Weft will ask for your passphrase or recovery key at every start.</div>`}${field("Passphrase (optional, at least 12 characters)", "passphrase", "", "password")}${field("Repeat passphrase", "passphrase2", "", "password")}${copies.length ? `<div class="notice">Plaintext copies remain in this profile: ${copies.map((c) => `${esc(c.path)} (${mb(c.bytes)})`).join(", ")}.</div>${removable.length ? `<label class="check-row"><input type="checkbox" name="removePlaintextCopies"> Overwrite and remove ${removable.length} plaintext backup and recovery cop${removable.length === 1 ? "y" : "ies"} (export packages stay)</label>` : ""}` : ""}<div class="notice">Encrypting rewrites your data in place; earlier blocks may remain on SSDs and in snapshots. Weft shows a recovery key once. <strong>If you lose the recovery key${" "}and your passphrase, and the OS key is unavailable, nobody can recover your data.</strong></div><label class="check-row"><input type="checkbox" name="acknowledgeKeyLoss" required> I understand that losing every key means my data is lost</label>`,
+    async (values) => {
+      if (values.passphrase !== values.passphrase2) throw new Error("The passphrases do not match.");
+      const result = await execute("encryption.enable", { acknowledgeKeyLoss: true, unlockMode: values.unlockMode, ...(values.passphrase ? { passphrase: values.passphrase } : {}), removePlaintextCopies: Boolean(values.removePlaintextCopies) }, true);
+      setTimeout(() => showRecoveryKey("Encryption is on", result.recoveryKey, result.notice), 0);
+    }, { save: "Encrypt my data", wide: true });
+}
+function showRecoveryKey(title, key, notice) {
+  openDialog(title,
+    `<p>${esc(notice)}</p><p>Recovery key (shown only once):</p><p><code id="recovery-key" class="recovery-key">${esc(key)}</code></p><p>Write it down or store it in a password manager on another device. Weft cannot show it again.</p><label class="check-row"><input type="checkbox" id="recovery-saved"> I stored the recovery key somewhere safe</label>`,
+    '<button id="recovery-done" class="primary" disabled>Done</button>');
+  $("recovery-saved").onchange = (event) => ($("recovery-done").disabled = !event.target.checked);
+  $("recovery-done").onclick = () => { closeDialog(); void refresh(true); };
+}
+function configureEncryptionDialog() {
+  const os = encryption.methods.os;
+  formDialog("Unlock options",
+    `${choice("How Weft unlocks", "unlockMode", os.protects ? [["os", `Automatically with ${backendLabel(os.backend)}`], ["manual", "Ask for my passphrase or recovery key at every start"]] : [["manual", "Ask for my passphrase or recovery key at every start"]], encryption.unlockMode)}${choice("Passphrase", "passphraseAction", [["keep", encryption.methods.passphrase.configured ? "Keep the current passphrase" : "No passphrase"], ["set", "Set a new passphrase"], ...(encryption.methods.passphrase.configured ? [["remove", "Remove the passphrase"]] : [])], "keep")}${field("New passphrase (at least 12 characters)", "passphrase", "", "password")}`,
+    async (values) => {
+      const passphrase = values.passphraseAction === "set" ? values.passphrase : values.passphraseAction === "remove" ? null : undefined;
+      if (values.passphraseAction === "set" && !values.passphrase) throw new Error("Enter the new passphrase.");
+      await execute("encryption.configure", { unlockMode: values.unlockMode, ...(passphrase !== undefined ? { passphrase } : {}) }, true);
+      toast("Unlock options saved.");
+    });
+}
+function rotateEncryptionDialog() {
+  formDialog("Rotate encryption keys",
+    `${choice("Rotate", "target", [["wrapping", "Profile key and recovery key (fast; your data is not rewritten)"], ["dataKey", "Data key (re-encrypts all data; resumes after a restart)"]], "wrapping")}${field("Passphrase to keep (profile-key rotation only; leave empty to remove it)", "passphrase", "", "password")}<div class="notice">Profile-key rotation shows a new recovery key once; the old recovery key and passphrase stop working. Backups made earlier keep their own keys. Make a new backup afterwards.</div>`,
+    async (values) => {
+      if (values.target === "dataKey") {
+        const result = await execute("encryption.rotate", { target: "dataKey" }, true);
+        toast(`Data key rotated to version ${Number(result.keyVersion)}; ${Number(result.reencrypted)} items re-encrypted.`);
+        return;
+      }
+      const result = await execute("encryption.rotate", { target: "wrapping", ...(values.passphrase ? { passphrase: values.passphrase } : {}) }, true);
+      setTimeout(() => showRecoveryKey("New recovery key", result.recoveryKey, result.notice), 0);
+    });
+}
+function checkRecoveryKeyDialog() {
+  formDialog("Check a recovery key", `<p>Checks that a recovery key opens this profile. Nothing is unlocked or changed.</p>${field("Recovery key", "recoveryKey", "", "password", true)}`,
+    async (values) => {
+      const result = await execute("encryption.checkRecoveryKey", { recoveryKey: values.recoveryKey }, true);
+      if (!result.valid) throw new Error("That recovery key does not open this profile.");
+      toast("The recovery key opens this profile.");
+    }, { save: "Check" });
+}
+function disableEncryptionDialog() {
+  formDialog("Turn off encryption",
+    `<div class="notice"><strong>Project data will be stored unencrypted on this disk.</strong> Anyone with access to this profile or its future backups can read it. Encrypted backups made earlier stay encrypted.</div><label class="check-row"><input type="checkbox" name="acknowledgePlaintext" required> Store my data unencrypted</label>`,
+    async () => {
+      await execute("encryption.disable", { acknowledgePlaintext: true }, true);
+      toast("Encryption is off.");
+    }, { save: "Turn off encryption" });
+}
+/** Full-window lock screen: nothing else renders until a person unlocks. */
+async function showLockScreen() {
+  if (lockScreenOpen) return new Promise((resolve) => unlockWaiters.push(resolve));
+  lockScreenOpen = true;
+  if ($("dialog").open) closeDialog();
+  try { encryption = await window.weft.execute("encryption.status", {}); } catch { /* render with what is known */ }
+  const e = encryption || { methods: { os: {}, passphrase: {} } };
+  const screen = document.createElement("div");
+  screen.id = "lock-screen";
+  screen.setAttribute("role", "dialog");
+  screen.setAttribute("aria-modal", "true");
+  screen.setAttribute("aria-labelledby", "lock-title");
+  const osReady = e.methods.os.configured && e.methods.os.protects;
+  screen.innerHTML = `<div class="lock-card"><h1 id="lock-title">Weft is locked</h1><p>Your workspace data is encrypted on this computer.${e.lockReason === "os_key_unavailable" ? " The OS key store could not unlock it here (another computer or account?)." : ""} Unlock it to continue. Agents cannot unlock it.</p>${osReady ? `<button id="unlock-os" class="primary">Unlock with ${esc(backendLabel(e.methods.os.backend))}</button>` : ""}<form id="unlock-form"><label>Unlock with<select name="method">${e.methods.passphrase.configured ? '<option value="passphrase">Passphrase</option>' : ""}<option value="recovery">Recovery key</option></select></label><label>Passphrase or recovery key<input name="secret" type="password" autocomplete="off" required></label><button type="submit" class="${osReady ? "secondary" : "primary"}">Unlock</button></form><div class="form-error" id="unlock-error" role="alert"></div></div>`;
+  document.body.append(screen);
+  window.weft.layout({ x: 0, y: 0, width: 1, height: 1, visible: false }).catch?.(() => {});
+  const unlock = async (args, button) => {
+    button.disabled = true;
+    $("unlock-error").textContent = "";
+    try {
+      await window.weft.execute("encryption.unlock", args);
+      screen.remove();
+      lockScreenOpen = false;
+      for (const resolve of unlockWaiters.splice(0)) resolve();
+      await refresh(true);
+      toast("Unlocked.");
+    } catch (error) {
+      $("unlock-error").textContent = errorMessage(error);
+      button.disabled = false;
+    }
+  };
+  if (osReady) $("unlock-os").onclick = (event) => unlock({ method: "os" }, event.currentTarget);
+  $("unlock-form").onsubmit = (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const secret = form.get("secret");
+    event.currentTarget.querySelector("[name=secret]").value = "";
+    void unlock({ method: form.get("method"), secret }, event.currentTarget.querySelector("button"));
+  };
+  setTimeout(() => (osReady ? $("unlock-os") : screen.querySelector("[name=secret]"))?.focus(), 30);
+  return new Promise((resolve) => unlockWaiters.push(resolve));
 }
 function modelForm(id) {
   const r = models.find((m) => m.id === id);
@@ -2137,6 +2278,29 @@ async function act(button) {
     case "export-workspace":
       exportWorkspace();
       break;
+    case "encryption-enable":
+      await enableEncryptionDialog();
+      break;
+    case "encryption-lock":
+      await execute("encryption.lock", {}, true);
+      closeDialog();
+      void showLockScreen();
+      break;
+    case "encryption-configure":
+      configureEncryptionDialog();
+      break;
+    case "encryption-rotate":
+      rotateEncryptionDialog();
+      break;
+    case "encryption-check":
+      checkRecoveryKeyDialog();
+      break;
+    case "encryption-coverage":
+      encryptionCoverageDialog();
+      break;
+    case "encryption-disable":
+      disableEncryptionDialog();
+      break;
     case "import-workspace":
       importWorkspace();
       break;
@@ -2588,6 +2752,8 @@ try {
   }
   selectCommand();
   window.weft.onTurnFrame?.(onTurnFrame);
+  encryption = await window.weft.execute("encryption.status", {});
+  if (encryption.locked) await showLockScreen();
   await loadModels();
   await refresh(true);
   $("app").classList.toggle(

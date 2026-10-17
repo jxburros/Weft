@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser, applyEngineHardening } from './browser.js';
 import { commands, CommandError } from './commands.js';
-import { createApiServer } from './server.js';
+import { createApiServer, registerEventType } from './server.js';
 import { WorkspaceService } from './workspace.js';
+import { createKeyProtector } from './encryption.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
 import { CommunityLists } from './community-lists.js';
@@ -20,6 +21,9 @@ import { WorkspaceExtensions } from './extensions.js';
 import { PluginRegistry } from './plugins/registry.js';
 import { UpdateService, createElectronTransport, createWindowsSignatureVerifier, detectInstall } from './updater.js';
 import { WEFT_VERSION } from './version.js';
+
+// Lock and unlock are published as metadata-only events so connected agents can pause instead of retrying.
+registerEventType('encryption');
 
 let browser;
 let workspace;
@@ -83,7 +87,9 @@ app.whenReady().then(async () => {
   }
   const directory = join(app.getPath('userData'), 'workspace-data');
   // Verified automatic backups at startup and then daily, keeping the latest five.
-  workspace = new WorkspaceService({ directory, backups: { automatic: true, intervalHours: 24, keep: 5 } });
+  // Workspace encryption (ADR 014) wraps its profile key with Electron safeStorage when the OS key store protects it.
+  workspace = new WorkspaceService({ directory, backups: { automatic: true, intervalHours: 24, keep: 5 }, keyProtector: createKeyProtector({ safeStorage }) });
+  if (workspace.locked) console.log('Weft workspace data is encrypted and locked; unlock it in the Weft window.');
   const activity = new ActivityLog({ directory, onPrune: options => { workspace.pruneActivity(options).catch(error => console.warn(`Weft activity retention: ${error.message}`)); } });
   // Update checks, downloads, installs and rollbacks are attributable activity (hosts, versions and outcomes only).
   if (updates) updates.audit = entry => activity.append(entry);
@@ -127,13 +133,24 @@ app.whenReady().then(async () => {
   // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
   plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
   const extensions = new WorkspaceExtensions({ directory, workspace, browser });
-  await extensions.restore();
+  // A locked profile restores extensions and tabs after a person unlocks it.
+  let extensionsRestored = false;
+  if (!workspace.locked) { await extensions.restore(); extensionsRestored = true; }
   const clients = new ClientGrants({ directory, masterToken: token, workspace });
   lists = new CommunityLists({ workspace });
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, onEvent: event => events.emit('event', event) });
+  workspace.encryptionHooks = {
+    // Lock: stop model turns and plugin processes, then close tabs so no workspace page stays loaded.
+    beforeLock: async ({ persist = true } = {}) => { providers.stopAll?.('cancelled'); plugins.close?.(); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
+    afterUnlock: async () => {
+      if (!extensionsRestored) { await extensions.restore(); extensionsRestored = true; }
+      await browser.resume();
+      events.emit('event', { type: 'encryption', status: 'unlocked', createdAt: new Date().toISOString() });
+    },
+  };
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
@@ -154,7 +171,7 @@ app.whenReady().then(async () => {
   console.log(`Weft API: http://127.0.0.1:${port}`);
   if (!process.env.WEFT_TOKEN) console.log(`Generated WEFT_TOKEN (local access only): ${token}`);
   // Health check for the first launches of a new version: GUI loaded, API listening, store open.
-  updates?.confirmHealthy({ gui: !window.isDestroyed() && window.webContents.getURL() === guiUrl, api: server.listening, workspace: Boolean(workspace.data) });
+  updates?.confirmHealthy({ gui: !window.isDestroyed() && window.webContents.getURL() === guiUrl, api: server.listening, workspace: workspace.locked || Boolean(workspace.data) });
   updates?.startBackground();
 }).catch(error => {
   console.error('Weft startup failed:', error.message);
