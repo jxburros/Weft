@@ -9,6 +9,7 @@ const httpUrl = z.string().max(16384).refine(value => {
 }, 'Expected HTTP(S) URL without credentials');
 const references = z.array(id).max(1000);
 const tags = z.array(z.string().max(100)).max(100);
+export const finishReason = z.enum(['stop', 'length', 'content_filter', 'other', 'cancelled', 'timeout', 'emergency_stop', 'disconnected']);
 export const recordShapes = {
   materials: { title, localOnly: z.boolean().default(false), kind: z.enum(['note', 'website', 'file', 'linked-file', 'service']).default('note'), content: text.default(''), url: httpUrl.nullable().optional(), filename: z.string().max(255).optional(), mimeType: z.string().max(128).optional(), fileBase64: z.string().max(14000000).optional(), note: text.optional(), tags: tags.default([]), pinned: z.boolean().default(false) },
   context: { title, localOnly: z.boolean().default(false), content: text.default(''), category: z.enum(['confirmed', 'findings', 'questions', 'instructions', 'decisions']).default('findings'), sources: z.array(z.string().max(16384)).max(100).default([]), tags: tags.default([]) },
@@ -39,7 +40,7 @@ export const commandDefinitions = {
   'settings.get': ['Get non-secret application preferences', {}],
   'settings.update': ['Update application preferences; credentials are not accepted', { theme: z.enum(['system', 'light', 'dark']).optional(), model: z.strictObject(modelShape).optional(), sidebarCollapsed: z.boolean().optional(), agentPanelOpen: z.boolean().optional() }],
   'search.query': ['Search project records and saved text locally', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional() }],
-  'conversations.message': ['Append a durable conversation message', { id, localOnly: z.boolean().optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: text, model: z.string().max(200).optional(), status: z.enum(['complete', 'interrupted', 'error']).optional(), attachments: references.optional() }],
+  'conversations.message': ['Append a durable conversation message', { id, localOnly: z.boolean().optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: text, model: z.string().max(200).optional(), status: z.enum(['complete', 'interrupted', 'error']).optional(), attachments: references.optional(), turnId: id.optional(), finishReason: finishReason.optional(), continuable: z.boolean().optional() }],
   'tasks.transition': ['Change task state and record the cause', { id, status: recordShapes.tasks.status.removeDefault(), cause: z.string().max(2000).optional(), checkpoint: text.optional() }],
   'artifacts.list': ['List saved artifact metadata', optionalWorkspace],
   'artifacts.get': ['Read an offline artifact or exact immutable version', { id, versionId: id.optional() }],

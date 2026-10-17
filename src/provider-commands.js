@@ -7,17 +7,42 @@ export const modelEndpoint = z.string().min(1).max(2048).refine(value => {
   } catch { return false; }
 }, 'Expected an HTTP(S) API base URL without credentials, query or fragment');
 const id = z.string().min(1).max(128);
+const capabilities = z.strictObject({
+  images: z.boolean().optional().describe('Accepts actual image input (overrides probed/default).'),
+  streaming: z.boolean().optional().describe('Request incremental replies; off sends whole JSON requests.'),
+  contextWindow: z.number().int().min(256).max(100000000).optional().describe('Total context window in tokens.'),
+  maxOutputTokens: z.number().int().min(1).max(1000000).optional().describe('Reply tokens reserved per request.'),
+});
+const pricing = z.strictObject({
+  currency: z.string().regex(/^[A-Z]{3}$/).describe('ISO currency code for the configured price.'),
+  inputPerMillion: z.number().min(0).max(1000000).describe('Configured price per million input tokens.'),
+  outputPerMillion: z.number().min(0).max(1000000).describe('Configured price per million output tokens.'),
+});
+const passage = z.strictObject({ kind: z.literal('passage'), title: z.string().trim().min(1).max(300), content: z.string().min(1).max(100000),
+  source: z.string().max(2048).optional(), tabId: z.number().int().positive().optional(), localOnly: z.boolean().optional() });
+export const attachmentSchema = z.discriminatedUnion('kind', [
+  passage,
+  z.strictObject({ kind: z.literal('tab'), tabId: z.number().int().positive().describe('Tab whose readable text snapshot is attached.') }),
+  z.strictObject({ kind: z.literal('material'), id }),
+  z.strictObject({ kind: z.literal('context'), id }),
+  z.strictObject({ kind: z.literal('task'), id }),
+  z.strictObject({ kind: z.literal('artifact'), id, versionId: id.describe('Exact immutable artifact version.'),
+    parts: z.array(z.enum(['text', 'image'])).min(1).max(2).optional().describe('Version components to attach; default both when present.') }),
+]);
 export const providerCommandDefinitions = {
-  'models.list': ['List model connections and destinations (never returns keys)', {}],
+  'models.list': ['List model connections, destinations and capability records (never returns keys)', {}],
   'models.save': ['Save a model connection; keys require OS secure storage', {
     id: id.optional(), name: z.string().trim().min(1).max(100),
-    provider: z.enum(['openai', 'anthropic']), endpoint: modelEndpoint,
+    provider: z.enum(['openai', 'anthropic', 'ollama']), endpoint: modelEndpoint,
     model: z.string().trim().min(1).max(200), apiKey: z.string().max(16384).optional(),
     apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100).optional(),
     clearApiKey: z.boolean().optional(), tools: z.boolean().optional(),
+    capabilities: capabilities.optional(), pricing: pricing.optional(),
+    visionFallbackId: id.optional().describe('Explicit image-capable connection used only for image items this model cannot read.'),
   }],
+  'models.probe': ['Ask the connection endpoint for model capabilities and context window; sends no workspace data', { modelId: id }],
   'models.delete': ['Delete a saved model connection and its encrypted key', { modelId: id }],
-  'chat.send': ['Send text/context to the selected model, with optional scoped read-only tools', {
+  'chat.send': ['Send text, selected attachments and context to the selected model, streaming when supported, with optional scoped read-only tools', {
     conversationId: id, modelId: id, text: z.string().trim().min(1).max(100000),
     disclosureAck: z.boolean().optional(),
     allowReadTools: z.boolean().optional(), tabId: z.number().int().positive().optional(),
@@ -25,9 +50,11 @@ export const providerCommandDefinitions = {
       title: z.string().max(300), content: z.string().max(100000),
       id: id.optional(), recordType: z.enum(['context', 'materials']).optional(), source: z.string().max(2048).optional(), localOnly: z.boolean().optional(),
     })).max(12).optional(),
+    attachments: z.array(attachmentSchema).max(16).optional().describe('Selected passages, tab snapshots, stored materials, context, tasks and exact artifact versions.'),
+    exclude: z.array(z.string().min(1).max(300)).max(1000).optional().describe('Disclosure item keys (from chat.preview) to leave out of this turn.'),
   }],
-  'chat.cancel': ['Cancel a running model request', { conversationId: id }],
+  'chat.cancel': ['Cancel a running model request; any partial reply is kept and marked interrupted', { conversationId: id }],
 };
-providerCommandDefinitions['chat.preview'] = ['Preview destination and itemized outbound disclosure without sending', providerCommandDefinitions['chat.send'][1]];
+providerCommandDefinitions['chat.preview'] = ['Preview destinations, capabilities, context-window plan and itemized outbound disclosure without sending', providerCommandDefinitions['chat.send'][1]];
 export const providerSchemas = Object.fromEntries(Object.entries(providerCommandDefinitions)
   .map(([name, [, shape]]) => [name, z.strictObject(shape)]));

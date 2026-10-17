@@ -23,6 +23,30 @@ alone is not a shipped capability.
   claim/source/entity/opinion schema, file-based governance with
   `scripts/community-list.js`, `lists.matches` precedence/provenance and ADR-004.
   Fixture-validated; no hosted service, management screen or member authentication.
+- Model replies stream from OpenAI-compatible, Anthropic and Ollama-native
+  endpoints (SSE/NDJSON) to the GUI and to API clients (`Accept:
+  text/event-stream`), with a defined turn lifecycle: stops keep partial replies
+  marked interrupted, length/deadline stops are continuable, runtime and in-band
+  provider errors become failed turns, and first-token/idle/total deadlines apply.
+- `/v1/events` events have ids and replay from `Last-Event-ID` with bounded
+  retention and explicit gaps; `/v1/turns/{turnId}/events` resumes one turn.
+  Event types are a registry for other components.
+- Chat turns accept typed attachments (passages, tab snapshots, materials,
+  context, tasks, exact artifact versions) with item-level review/exclusion,
+  per-model context-window planning that omits oldest history visibly, and show
+  endpoint locality, provider-reported usage and configured-price estimates.
+- Per-model capability records (configured, probed via `models.probe`, or
+  default), typed `unsupported_capability` outcomes (CLI exit 8), bounded PNG
+  image input per API transport, and explicit acknowledged vision fallback with
+  provenance. Image paths are never treated as visual evidence. See ADR-006.
+- Streaming model turns run under the shared authority gate: `chat.send` is
+  `cloud_spend`, `models.probe` is human-only administration, and destination
+  decisions, primary/vision-fallback requests and turn outcomes are recorded in
+  durable activity without content. `unsupported_capability` uses CLI exit 8
+  so it stays distinct from `approval_required` (exit 5).
+- Verified only against local fake providers; Linux GUI goldens for the Ask
+  panel and settings need a reviewed update on the reference platform.
+
 - Added canonical agent guidance, a generated skill reference, and a local MCP
   client plugin manifest/configuration. Guidance is available as `guide.get`
   through the shared catalog.

@@ -60,3 +60,99 @@ Documentation examples are schema-validated offline, not executed against your
 browser. Their placeholder IDs require discovery in a running session. Eval
 reference tasks exercise the MCP bridge and real workspace service with a
 fixture browser; see `evals/README.md` for the boundaries of that evidence.
+
+## Model turns: preview, attachments and capabilities
+
+`models.list` returns each connection's effective capability record
+(`images`, `tools`, `streaming`, `contextWindow`, `maxOutputTokens`) and the
+source of each value: `configured` by a human, `probed` from the endpoint by the
+human-only `models.probe`, or an adapter/assumed default. Supported adapters are
+OpenAI-compatible (`/chat/completions`), Anthropic (`/messages`) and Ollama's
+native `/api/chat`. Call `chat.preview` with the same arguments before
+`chat.send`; each disclosure item has a stable `key`, a `delivery`
+(`text`, `image`, `image-via-fallback`, `reference-only`, `withheld`,
+`excluded`, `omitted`, `unsupported`, `unavailable`) and a reason when it is not
+sent. Put keys in `exclude` to leave items out of one turn.
+
+```json
+{"command":"chat.preview","args":{"conversationId":"conv_example","modelId":"local","text":"Compare the capture with the task.","attachments":[{"kind":"artifact","id":"artifact_example","versionId":"version_example"},{"kind":"task","id":"task_example"},{"kind":"passage","title":"Quoted clause","content":"Payment is due in 30 days."}],"exclude":["task:task_example"]}}
+```
+
+Attachment kinds are `passage`, `tab` (readable snapshot of a tab in the
+conversation workspace), `material`, `context`, `task` and `artifact` (an exact
+immutable version; `parts` selects `text` and/or `image`). Attached text is
+framed as untrusted data. Opaque files and linked paths are sent as references
+only and are never evidence that a file or image was inspected; only image bytes
+recorded in the turn manifest's `visualInputs` were delivered to a model. Images
+are PNG only, at most 4 per turn, 2048 px per edge and 4 MiB; the desktop app
+downscales larger captures locally and records both hashes.
+
+Context windows are planned per model: the new message and attachments are
+fixed, older history is omitted oldest-first (never summarized or rewritten) and
+`disclosure.context` reports the window, its source, reserved reply tokens, the
+estimate and omitted keys. A turn that cannot fit, or image items for a model
+without image input, fail before any request with the typed
+`unsupported_capability` code (HTTP 422, CLI exit 8) and `details.capability`.
+A vision fallback is used only when a human configured `visionFallbackId` on the
+selected connection; it receives only the new message text and the listed
+images, and its description returns to the selected model as untrusted text.
+Cloud destinations, images sent off-device and every fallback use require
+`disclosureAck: true` after preview. No request is ever retried against another
+provider or endpoint.
+
+## Streaming and the turn lifecycle
+
+Send `Accept: text/event-stream` to `POST /v1/execute` to receive progress for
+`chat.send`. Frames have ids `<turnId>:<seq>` and events `turn.start`,
+`turn.request` (a new model request; reset accumulated text), `turn.phase`
+(`vision_fallback` or `tools`), `turn.delta` (`text`) and `turn.end`. The
+stream finishes with one `event: outcome` carrying the standard command outcome.
+Every frame payload matches the published `TurnFrame` schema in
+`/v1/openapi.json`.
+
+<!-- docs-test: skip HTTP transport example, not a CLI command -->
+```sh
+curl -N -H "Authorization: Bearer $WEFT_TOKEN" -H 'Accept: text/event-stream' \
+  -H 'Content-Type: application/json' http://127.0.0.1:9222/v1/execute \
+  -d '{"command":"chat.send","args":{"conversationId":"conv_example","modelId":"local","text":"Hello"}}'
+```
+
+Lifecycle rules:
+
+- The originating request owns the turn. Disconnecting it before the outcome
+  stops the turn like `chat.cancel`; a follower disconnecting never does. This
+  applies to plain JSON `POST /v1/execute` requests too.
+- A stop (cancel, disconnect, emergency stop, the admission latch, or a deadline)
+  keeps any partial reply as an assistant message with `status: "interrupted"`
+  and `finishReason`; the outcome error (`cancelled`, `emergency_stop`, `timeout`)
+  carries `details.turnId`, `partialSaved` and `continuable`.
+- Length limits (`finishReason: "length"`, outcome `result.status: "partial"`)
+  and deadline stops are continuable; send another message such as "Continue"
+  to resume from the saved partial.
+- A runtime error, an in-band provider error frame or a stream that ends without
+  a finish signal is recorded as a failed turn manifest, never as a reply.
+- Deadlines: first data frame (default 120 s), idle gap between frames (60 s)
+  and total turn time (300 s). `details.deadline` names the one that fired.
+- Usage is the provider-reported token count when present, otherwise `null`;
+  `cost` is an estimate only when a human configured pricing for the connection.
+
+Followers and reconnecting clients use `GET /v1/turns/{turnId}/events` with
+`Last-Event-ID` to replay retained frames and continue live until `turn.end`.
+Turn frames are retained in memory only (at most 10,000 frames or 4 MiB per turn,
+60 seconds after the end); missing frames produce `event: gap`. After a gap,
+read the saved conversation instead. MCP and the CLI return the final outcome
+only; they do not stream.
+
+## Event replay
+
+`GET /v1/events` events carry SSE ids `<boot>-<seq>`. Reconnect with the last
+received id in `Last-Event-ID` to receive retained later events in order. When
+those events are no longer retained (at most 1,000 events, 1 MiB or 15 minutes),
+the process restarted or the id is unknown, an `event: gap` frame with a
+`reason` precedes whatever is still retained; re-read current state before
+relying on derived assumptions. Replay applies the same metadata allowlist and
+workspace scope as live delivery. Event types are registered in
+`src/server.js` (`command`, `navigation`, `workspace`, `activity`, `task`,
+`handoff`, `policy`, `artifact`, `turn`, `approval`, plus `registerEventType`);
+`turn` events report `started`, `completed`, `partial`, `interrupted` or
+`failed` with turn and conversation IDs, never model text.

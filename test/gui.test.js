@@ -12,23 +12,22 @@ if (process.argv.includes("--gui-workflows")) {
   const { app, BrowserWindow } = electron;
   app.setPath("userData", process.env.WEFT_TEST_PROFILE);
   let fixture;
+  const modelRequests = [];
   (async () => {
-    fixture = createServer((request, response) => {
+    fixture = createServer(async (request, response) => {
       if (request.url === "/v1/chat/completions") {
-        response.setHeader("content-type", "application/json");
-        response.end(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content:
-                    "A real fixture response from your selected endpoint.",
-                },
-              },
-            ],
-            usage: { prompt_tokens: 15, completion_tokens: 10 },
-          }),
-        );
+        let body = "";
+        for await (const chunk of request) body += chunk;
+        modelRequests.push(JSON.parse(body));
+        // Stream like a real OpenAI-compatible server so the GUI renders deltas before the reply is saved.
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        const frame = (value) => response.write(`data: ${JSON.stringify(value)}\n\n`);
+        frame({ choices: [{ index: 0, delta: { content: "A real fixture " } }] });
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        frame({ choices: [{ index: 0, delta: { content: "response from your selected endpoint." } }] });
+        frame({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] });
+        frame({ choices: [], usage: { prompt_tokens: 15, completion_tokens: 10 } });
+        response.end("data: [DONE]\n\n");
         return;
       }
       response.setHeader("content-type", "text/html");
@@ -180,13 +179,44 @@ if (process.argv.includes("--gui-workflows")) {
     await run(
       `document.getElementById('chat-model').value=${JSON.stringify(model.id)};document.getElementById('chat-model').dispatchEvent(new Event('change'));document.getElementById('chat-input').value='Help organize this project.';document.getElementById('chat-form').requestSubmit()`,
     );
+    await until('document.getElementById("chat-live")?.textContent.includes("A real fixture")');
+    assert.equal(
+      await run('document.getElementById("chat-messages").textContent.includes("selected endpoint")'),
+      false,
+      "the streamed delta is visible before the reply completes",
+    );
     await until(
       'document.getElementById("chat-messages").textContent.includes("A real fixture response")',
     );
+    await until('document.getElementById("chat-live") === null');
     assert.match(
       await run('document.getElementById("model-destination").textContent'),
-      /127.0.0.1/,
+      /127.0.0.1.*on-device endpoint.*Text only/,
     );
+    await until('document.querySelector(".message-usage")?.textContent.includes("15 in / 10 out tokens (reported by provider)")');
+    assert.equal(modelRequests[0].stream, true);
+    // Attach a stored note and an exact capture version; the text-only model cannot take the image.
+    await click('[data-action="attach-chat"]');
+    await until('document.getElementById("attach-selected") !== null');
+    await run('for (const box of document.querySelectorAll(\'#dialog-content input[name="attach"]\')) if (/Research notes|Saved source/.test(box.parentElement.textContent)) box.checked = true;');
+    await click("#attach-selected");
+    await until('document.querySelectorAll("#chat-attachments .tag").length === 2');
+    await run(
+      `document.getElementById('chat-input').value='Use the attachments.';document.getElementById('chat-form').requestSubmit()`,
+    );
+    await until('document.getElementById("acknowledge-disclosure") !== null');
+    assert.equal(await run('document.getElementById("acknowledge-disclosure").disabled'), true, "image items for a text-only model block sending");
+    assert.match(await run('document.getElementById("dialog-content").textContent'), /does not accept image input/);
+    await run('for (const box of document.querySelectorAll("#dialog-content .disclosure-item")) if (box.value.endsWith(":image")) box.checked = false;');
+    await click("#update-disclosure");
+    await until('document.getElementById("acknowledge-disclosure")?.disabled === false');
+    assert.match(await run('document.getElementById("dialog-content").textContent'), /excluded by you/);
+    await click("#acknowledge-disclosure");
+    await until(`document.querySelectorAll("#chat-messages .chat-message.assistant").length === 2`);
+    const attached = JSON.stringify(modelRequests.at(-1));
+    assert.match(attached, /Keep this useful source/);
+    assert.match(attached, /Evidence saved for the project/);
+    assert.doesNotMatch(attached, /image_url/);
     await click("#add-workspace");
     await fill("name", "Second workspace");
     await submit();

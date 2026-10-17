@@ -34,7 +34,7 @@ add('code_exec', 'page.evaluate');
 add('cloud_spend', 'chat.send');
 add('administration', `clients.create clients.list clients.update clients.revoke lists.install lists.status lists.rollback lists.subscribe lists.preview lists.update lists.configure lists.exception lists.unsubscribe lists.check lists.matches approvals.approve approvals.reject autonomy.update activity.configure
   browser.emergencyStop browser.resumeAutomation downloads.approve tabs.takeover page.allowOnce cookies.list cookies.set cookies.clear storage.clear history.clear
-  settings.update workspaces.delete workspaces.import workspaces.export workspaces.switch models.save models.delete`);
+  settings.update workspaces.delete workspaces.import workspaces.export workspaces.switch models.save models.delete models.probe`);
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');

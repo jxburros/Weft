@@ -1549,3 +1549,54 @@ button { min-height: 24px; min-width: 24px; }
   margin-right: var(--space-8);
   accent-color: var(--brand);
 }
+
+/* Chat attachments, streaming, usage and item-level disclosure review. */
+.chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+}
+.chat-attachments:not(:empty) {
+  padding-bottom: var(--space-8);
+}
+.chat-attachments .icon-button {
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: inherit;
+}
+.message-usage {
+  display: block;
+  margin-top: var(--space-6);
+  font-size: var(--font-size-10);
+  color: var(--muted);
+  white-space: normal;
+}
+#chat-live .message-body {
+  border-left: 2px solid var(--brand-soft);
+  padding-left: var(--space-10);
+}
+.disclosure-items {
+  padding-left: var(--space-18);
+  font-size: var(--font-size-12);
+}
+.disclosure-items li {
+  margin-bottom: var(--space-6);
+}
+.disclosure-items input[type="checkbox"],
+.attach-choice input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  margin-right: var(--space-8);
+  accent-color: var(--brand);
+}
+.attach-choice {
+  display: block;
+  font-size: var(--font-size-12);
+  margin: var(--space-4) 0;
+}
+#dialog fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-7);
+  margin-bottom: var(--space-16);
+}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, safeStorage } from 'electron';
+import { app, BrowserWindow, ipcMain, safeStorage, nativeImage } from 'electron';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import { createDispatcher } from './dispatch.js';
 import { Authority } from './authority.js';
 import { ActivityLog } from './activity-log.js';
 import { Providers } from './providers.js';
+import { TurnRelay } from './turn-relay.js';
 
 let browser;
 let workspace;
@@ -25,6 +26,7 @@ let lists;
 let listTimer;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
+const relay = new TurnRelay();
 const guiUrl = new URL('./gui.html', import.meta.url).href;
 // Disable speculative connections; site rules are enforced on actual Chromium requests.
 app.commandLine.appendSwitch('dns-prefetch-disable');
@@ -50,7 +52,16 @@ app.whenReady().then(async () => {
     if (outcome.error) throw new CommandError(outcome.error);
     return outcome.result;
   };
-  providers = new Providers({ directory, workspace, safeStorage, admission, audit: entry => activity.append(entry),
+  providers = new Providers({ directory, workspace, safeStorage, admission, relay, audit: entry => activity.append(entry),
+    onEvent: event => events.emit('event', event),
+    // Downscale oversized PNGs locally before any image is sent to a model.
+    resizeImage: (bytes, { maxEdge }) => {
+      const image = nativeImage.createFromBuffer(bytes);
+      const { width, height } = image.getSize();
+      if (!width || !height) throw new Error('Unreadable image');
+      const scale = Math.min(1, maxEdge / Math.max(width, height));
+      return image.resize({ width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)), quality: 'good' }).toPNG();
+    },
     readPage: ({ tabId, workspaceId }) => modelTool('page.readable', { tabId, workspaceId }, workspaceId),
     searchWorkspace: ({ workspaceId, query }) => modelTool('search.query', { workspaceId, query, limit: 20 }, workspaceId),
   });
@@ -77,6 +88,8 @@ app.whenReady().then(async () => {
   const authority = new Authority({ directory, workspace, browser, clients, activity });
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
+  // Streamed model deltas reach only the trusted GUI frame.
+  relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
   ipcMain.handle('weft:execute', (event, name, args) => {
@@ -85,7 +98,7 @@ app.whenReady().then(async () => {
   });
   await browser.restore();
   await window.loadURL(guiUrl);
-  server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
+  server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, turns: relay, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
@@ -103,6 +116,7 @@ app.on('before-quit', () => {
   clearInterval(listTimer);
   server?.close();
   providers?.close();
+  relay.close();
   browser?.close();
   browser = null;
   workspace?.close();

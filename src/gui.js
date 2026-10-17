@@ -83,6 +83,8 @@ let tabs = [],
   conversationId = null,
   agentOpen = false,
   chatBusy = false,
+  chatAttachments = [],
+  liveTurn = null,
   filter = "",
   taskFilter = "",
   splitTabId = null,
@@ -606,7 +608,7 @@ function privacyView() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests" };
@@ -1166,14 +1168,48 @@ function exportWorkspace() {
     } finally { button.disabled = false; }
   };
 }
-function acknowledgeDisclosure(disclosure) {
-  return new Promise(resolve => {
-    let accepted = false;
-    openDialog("Review model destination",
-      `<p>Your request will be sent to <strong>${esc(disclosure.endpoint)}</strong> using ${esc(disclosure.model)} (${esc(disclosure.locality)}).</p><ul>${(disclosure.items || []).map(item => `<li>${esc(item.kind)}: ${esc(item.title || item.id || "Request data")} · ${Number(item.bytes) || 0} bytes${item.withheld ? " · withheld" : ""}</li>`).join("")}</ul><p>Total disclosed bytes: ${Number(disclosure.totalBytes) || 0}. Tools: ${esc((disclosure.tools || []).join(", ") || "None")}.</p>${disclosure.toolScope ? `<p>Tool scope: workspace ${esc(disclosure.toolScope.workspaceId)}${disclosure.toolScope.tabId ? `, tab ${esc(disclosure.toolScope.tabId)}` : ""}; at most ${Number(disclosure.toolScope.maxCalls)} calls.</p>` : ""}<p>This acknowledgement applies to this workspace and this model destination. Review your selections before each request.</p>`,
-      action("close-dialog", "Cancel") + '<button id="acknowledge-disclosure" class="primary">Acknowledge and send</button>');
-    $("dialog").addEventListener("close", () => resolve(accepted), { once: true });
-    $("acknowledge-disclosure").onclick = () => { accepted = true; closeDialog(); };
+function disclosureBody(d, exclude) {
+  const items = (d.items || []).map((item) => {
+    const key = item.key || "";
+    const excludable = key && item.kind !== "message" && !["withheld", "unavailable", "omitted"].includes(item.delivery);
+    const regions = item.regions && (item.regions.redacted || item.regions.inaccessible) ? ` · ${Number(item.regions.redacted)} redacted / ${Number(item.regions.inaccessible)} inaccessible regions (not visible)` : "";
+    const label = `${esc(item.kind)}: ${esc(item.title || item.id || "Request data")} · ${Number(item.bytes) || 0} bytes${item.estimatedTokens ? ` · ~${Number(item.estimatedTokens)} tokens` : ""}${item.delivery ? ` · ${esc(deliveryLabel[item.delivery] || item.delivery)}` : item.withheld ? " · withheld" : ""}${item.reason ? ` — ${esc(item.reason)}` : ""}${esc(regions)}`;
+    return `<li>${excludable ? `<label><input type="checkbox" class="disclosure-item" value="${esc(key)}" ${exclude.includes(key) || item.delivery === "excluded" ? "" : "checked"}>${label}</label>` : label}</li>`;
+  }).join("");
+  const caps = d.capabilities;
+  const ctx = d.context;
+  const reasons = d.acknowledgementReasons || ["destination"];
+  return `<p>Your request will be sent to <strong>${esc(d.endpoint)}</strong> using ${esc(d.model)} (${esc(d.locality)}).</p>`
+    + (caps ? `<p>Model capabilities: ${caps.images ? "text and images" : "text only"}${caps.streaming ? ", streaming" : ""}${caps.tools ? ", read-only tools" : ""}; context window ${Number(caps.contextWindow)} tokens (${esc(caps.sources?.contextWindow || "unknown")}).</p>` : "")
+    + (d.fallback ? `<div class="notice">Selected images will be sent to the vision fallback <strong>${esc(d.fallback.name)}</strong> · ${esc(d.fallback.model)} at ${esc(d.fallback.endpoint)} (${esc(d.fallback.locality)}). ${esc(d.fallback.scope)} Its description returns to ${esc(d.model)} as untrusted text.</div>` : "")
+    + (d.blocked ? `<div class="notice" role="alert">${esc(d.blocked.message)} Uncheck the item and update the preview, or choose another model.</div>` : "")
+    + `<ul class="disclosure-items">${items}</ul>`
+    + (ctx ? `<p>Estimated input about ${Number(ctx.estimatedInputTokens)} of ${Number(ctx.window)} tokens; ${Number(ctx.reservedOutputTokens)} reserved for the reply.${ctx.omitted ? ` ${Number(ctx.omitted)} earlier messages will be omitted to fit (not summarized); the saved conversation is unchanged.` : ""}</p>` : "")
+    + `<p>Total disclosed bytes: ${Number(d.totalBytes) || 0}. Tools: ${esc((d.tools || []).join(", ") || "None")}.</p>`
+    + (d.toolScope ? `<p>Tool scope: workspace ${esc(d.toolScope.workspaceId)}${d.toolScope.tabId ? `, tab ${esc(d.toolScope.tabId)}` : ""}; at most ${Number(d.toolScope.maxCalls)} calls.</p>` : "")
+    + (d.requiresAcknowledgement ? `<p>${reasons.includes("destination") ? "This acknowledgement applies to this workspace and this model destination. " : ""}${reasons.some((r) => r !== "destination") ? "Images and vision fallback use need acknowledgement every time. " : ""}Review your selections before each request.</p>` : "");
+}
+// Item-level review: unchecked items are excluded; "Update preview" recomputes delivery and limits.
+function reviewDisclosure(disclosure, request) {
+  return new Promise((resolve) => {
+    let result = null;
+    let d = disclosure;
+    let exclude = [];
+    const collect = () => [...document.querySelectorAll("#dialog-content .disclosure-item")].filter((box) => !box.checked).map((box) => box.value);
+    const render = () => {
+      const selectable = (d.items || []).some((item) => item.key && item.kind !== "message");
+      const send = `<button id="acknowledge-disclosure" class="primary" ${d.blocked ? "disabled" : ""}>${d.requiresAcknowledgement ? "Acknowledge and send" : "Send"}</button>`;
+      openDialog(d.requiresAcknowledgement ? "Review model destination" : "Review what the model receives", disclosureBody(d, exclude),
+        action("close-dialog", "Cancel") + (selectable ? '<button id="update-disclosure" class="secondary">Update preview</button>' : "") + send);
+      if ($("update-disclosure")) $("update-disclosure").onclick = async () => {
+        exclude = collect();
+        try { d = (await execute("chat.preview", { ...request, ...(exclude.length ? { exclude } : {}) }, true)).disclosure; render(); }
+        catch (error) { $("form-error").textContent = errorMessage(error); }
+      };
+      $("acknowledge-disclosure").onclick = () => { result = { exclude: collect(), acknowledged: Boolean(d.requiresAcknowledgement) }; closeDialog(); };
+    };
+    render();
+    $("dialog").addEventListener("close", () => resolve(result), { once: true });
   });
 }
 function importWorkspace() {
@@ -1206,6 +1242,7 @@ function modelForm(id) {
         [
           ["openai", "OpenAI-compatible (including local models)"],
           ["anthropic", "Anthropic"],
+          ["ollama", "Ollama native API (local)"],
         ],
         r?.provider || "openai",
       ) +
@@ -1233,19 +1270,42 @@ function modelForm(id) {
         "password",
       ) +
       field("Or environment variable name", "apiKeyEnv", r?.apiKeyEnv || "") +
-      "<p>Keys are stored separately from project files. Saving a key requires OS secure storage. Local models may not require a key.</p>",
+      "<p>Keys are stored separately from project files. Saving a key requires OS secure storage. Local models may not require a key.</p>" +
+      `<fieldset><legend>Capabilities</legend><p>Your settings take priority over what the endpoint reports.${r?.probed ? ` Last discovery: ${esc(date(r.probed.probedAt))}.` : ""}</p>` +
+      choice("Image input", "imageInput", [["auto", `Use discovered or default (${r?.capabilities?.images ? "images" : "text only"})`], ["true", "Accepts images"], ["false", "Text only"]],
+        r?.configuredCapabilities?.images === undefined ? "auto" : String(r.configuredCapabilities.images)) +
+      choice("Replies", "streaming", [["true", "Stream as they are written"], ["false", "Wait for the whole reply"]], String(r?.configuredCapabilities?.streaming ?? true)) +
+      field(`Context window in tokens (blank: ${r?.capabilities?.sources?.contextWindow === "probed" ? "discovered" : "assumed"} ${r?.capabilities?.contextWindow || 32768})`, "contextWindow", r?.configuredCapabilities?.contextWindow ?? "", "number") +
+      field("Maximum reply tokens (blank: 4096)", "maxOutputTokens", r?.configuredCapabilities?.maxOutputTokens ?? "", "number") +
+      choice("Vision fallback for images this model cannot read", "visionFallbackId", [["", "None — refuse image items"], ...models.filter((m) => m.id !== r?.id).map((m) => [m.id, `${m.name} · ${m.model} (${m.locality})`])], r?.visionFallbackId || "") +
+      "</fieldset>" +
+      `<fieldset><legend>Cost estimates (optional)</legend><p>Estimates use your prices and provider-reported tokens. They are not a bill.</p>${field("Currency (ISO code)", "currency", r?.pricing?.currency || "")}${field("Price per million input tokens", "inputPerMillion", r?.pricing?.inputPerMillion ?? "")}${field("Price per million output tokens", "outputPerMillion", r?.pricing?.outputPerMillion ?? "")}</fieldset>`,
     async (values) => {
       values.tools = values.tools === "true";
       if (!values.apiKey) delete values.apiKey;
       if (!values.apiKeyEnv) delete values.apiKeyEnv;
+      const capabilities = {};
+      if (values.imageInput !== "auto") capabilities.images = values.imageInput === "true";
+      if (values.streaming === "false") capabilities.streaming = false;
+      if (values.contextWindow) capabilities.contextWindow = Number(values.contextWindow);
+      if (values.maxOutputTokens) capabilities.maxOutputTokens = Number(values.maxOutputTokens);
+      if (Object.keys(capabilities).length) values.capabilities = capabilities;
+      if (values.currency || values.inputPerMillion || values.outputPerMillion) {
+        if (!values.currency || values.inputPerMillion === "" || values.outputPerMillion === "") throw new Error("Cost estimates need a currency and both prices.");
+        values.pricing = { currency: values.currency.trim().toUpperCase(), inputPerMillion: Number(values.inputPerMillion), outputPerMillion: Number(values.outputPerMillion) };
+      }
+      if (!values.visionFallbackId) delete values.visionFallbackId;
+      for (const key of ["imageInput", "streaming", "contextWindow", "maxOutputTokens", "currency", "inputPerMillion", "outputPerMillion"]) delete values[key];
       await execute("models.save", { ...values, ...(r ? { id: r.id } : {}) });
       await loadModels();
       if (agentOpen) renderAgent();
     },
     {
       save: "Save connection",
+      wide: true,
       extra: r
-        ? action(
+        ? action("probe-model", "Discover capabilities", "search", `data-id="${esc(r.id)}"`) +
+          action(
             "delete-model",
             "Remove connection",
             "trash",
@@ -1288,8 +1348,9 @@ function renderAgent() {
   );
   if (!conversation) conversationId = null;
   $("agent-panel").innerHTML =
-    `<div class="agent-header"><span class="agent-symbol icon">${icon("spark")}</span><div><strong>${esc(conversation?.title || "A thinking partner")}</strong><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="polite" aria-relevant="additions text"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
+    `<div class="agent-header"><span class="agent-symbol icon">${icon("spark")}</span><div><strong>${esc(conversation?.title || "A thinking partner")}</strong><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="polite" aria-relevant="additions text"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><div id="chat-attachments" class="chat-attachments" aria-label="Selected attachments"></div><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button type="button" class="text-button" data-action="attach-chat">${icon("plus")}Attach</button><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
   updateDestination();
+  renderAttachments();
   renderMessages();
   $("chat-model").onchange = () => {
     modelId = $("chat-model").value;
@@ -1299,31 +1360,121 @@ function renderAgent() {
 }
 function updateDestination() {
   const m = models.find((m) => m.id === modelId);
+  const caps = m?.capabilities || {};
   $("model-destination").textContent = m
-    ? `${m.endpoint} · ${m.capabilities?.tools ? "Read-only tools available (opt-in below)" : "Text only · No automatic page access"}`
+    ? `${m.endpoint} · ${m.locality || "endpoint"} · ${caps.images ? "Text and images" : caps.visionFallback?.available ? `Text only · images via ${caps.visionFallback.name} (asks first)` : "Text only"}${caps.contextWindow ? ` · ${Math.round(caps.contextWindow / 1024)}k context${caps.sources?.contextWindow === "assumed default" ? " (assumed)" : ""}` : ""} · ${caps.tools ? "Read-only tools available (opt-in below)" : "No automatic page access"}`
     : "Add a model connection in Settings to start.";
   if ($("allow-read-tools")) {
     $("allow-read-tools").disabled = !m?.capabilities?.tools;
     if (!m?.capabilities?.tools) $("allow-read-tools").checked = false;
   }
 }
+function turnUsage(manifest) {
+  if (!manifest) return "";
+  const usage = manifest.usage;
+  const tokens = usage && (usage.inputTokens !== null || usage.outputTokens !== null)
+    ? `${usage.inputTokens ?? "?"} in / ${usage.outputTokens ?? "?"} out tokens (reported by provider)`
+    : "Usage not reported by provider";
+  const cost = manifest.cost ? ` · ≈ ${manifest.cost.currency} ${Number(manifest.cost.amount).toFixed(6)} estimated from your configured pricing` : "";
+  const omitted = manifest.context?.omitted ? ` · ${Number(manifest.context.omitted)} earlier messages omitted to fit the context window (originals kept)` : "";
+  const images = manifest.visualInputs?.length ? ` · ${manifest.visualInputs.length} image(s) sent${manifest.visualInputs.some((v) => v.destination === "vision-fallback") ? " via vision fallback" : ""}` : "";
+  return `<small class="message-usage">${esc(`${manifest.locality || "endpoint"} · ${tokens}${cost}${omitted}${images}`)}</small>`;
+}
+function messageAuthor(m) {
+  if (m.role === "user") return "YOU";
+  if (m.role === "tool") return /"tool":"vision_fallback"/.test(m.content) ? `VISION FALLBACK · ${m.model || "model"}` : "READ-ONLY TOOL";
+  return m.model || "MODEL";
+}
 function renderMessages() {
   if (!$("chat-messages")) return;
   const c = records("conversations").find((c) => c.id === conversationId);
   const messages = c?.messages || [];
+  const manifests = new Map((c?.turnManifests || []).filter((t) => t.turnId).map((t) => [t.turnId, t]));
+  const last = messages.at(-1);
   $("chat-messages").innerHTML = messages.length
     ? messages
-        .map(
-          (m) =>
-            `<div class="chat-message ${m.role === "user" ? "user" : "assistant"}"><div class="message-author">${esc(m.role === "user" ? "YOU" : m.role === "tool" ? "READ-ONLY TOOL" : m.model || "MODEL")}${m.status && m.status !== "complete" ? " · " + esc(m.status) : ""}</div><div class="message-body">${m.role === "tool" ? `<details><summary>Source and tool result</summary><pre class="tool-result">${esc(m.content)}</pre></details>` : esc(m.content)}</div></div>`,
-        )
+        .map((m) => {
+          const manifest = m.turnId && manifests.get(m.turnId);
+          const failed = m.role === "user" && manifest?.status === "failed" && !messages.some((x) => x.role === "assistant" && x.turnId === m.turnId)
+            ? `<div class="notice" role="status">Request failed: ${esc(manifest.error || "Unknown error")} No reply was saved.</div>` : "";
+          const status = m.status && m.status !== "complete" ? ` · ${esc(m.status)}${m.finishReason ? ` (${esc(m.finishReason.replace("_", " "))})` : ""}` : "";
+          const resume = m === last && m.role === "assistant" && m.continuable && !chatBusy ? action("continue-chat", "Continue reply", "arrow", "", "text-button") : "";
+          return `<div class="chat-message ${m.role === "user" ? "user" : "assistant"}"><div class="message-author">${esc(messageAuthor(m))}${status}</div><div class="message-body">${m.role === "tool" ? `<details><summary>Source and tool result</summary><pre class="tool-result">${esc(m.content)}</pre></details>` : esc(m.content)}</div>${m.role === "assistant" ? turnUsage(manifest) : ""}${resume}</div>${failed}`;
+        })
         .join("")
     : `<div class="chat-welcome"><span class="agent-symbol icon">${icon("spark")}</span><h3>A little help,<br>a fresh perspective.</h3><p>Think through an idea, make a plan, or ask a question. Choose a model above to get started.</p><button data-action="chat-prompt" data-text="Help me turn a project idea into a clear plan.">Help me make a plan ${icon("arrow")}</button><button data-action="chat-prompt" data-text="Help me organize my research. What should I collect first?">Organize my research ${icon("arrow")}</button><button data-action="section" data-section="settings">Configure a model ${icon("settings")}</button></div>`;
   if (chatBusy)
     $("chat-messages").innerHTML +=
       '<p class="muted">Waiting for your model…</p>';
+  renderLiveTurn();
   $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
 }
+// Streamed deltas arrive over trusted IPC; the durable message replaces this bubble once saved.
+function renderLiveTurn() {
+  const box = $("chat-messages");
+  if (!box) return;
+  let bubble = $("chat-live");
+  if (!liveTurn || liveTurn.conversationId !== conversationId) { bubble?.remove(); return; }
+  if (!bubble) {
+    bubble = document.createElement("div");
+    bubble.id = "chat-live";
+    bubble.className = "chat-message assistant";
+    bubble.innerHTML = '<div class="message-author"></div><div class="message-body"></div>';
+    const waiting = $("chat-waiting");
+    if (waiting) box.insertBefore(bubble, waiting); else box.append(bubble);
+  }
+  bubble.querySelector(".message-author").textContent = `${liveTurn.model || "MODEL"} · ${liveTurn.phase === "vision_fallback" ? "describing images with the vision fallback" : "streaming"}`;
+  bubble.querySelector(".message-body").textContent = liveTurn.text || "…";
+  box.scrollTop = box.scrollHeight;
+}
+function onTurnFrame(frame) {
+  if (frame.type === "start") liveTurn = { turnId: frame.turnId, conversationId: frame.conversationId, model: frame.model, text: "" };
+  if (!liveTurn || liveTurn.turnId !== frame.turnId) return;
+  if (frame.type === "request") liveTurn.text = "";
+  if (frame.type === "delta") liveTurn.text += frame.text;
+  if (frame.type === "phase") liveTurn.phase = frame.phase;
+  if (frame.type === "end") {
+    liveTurn = null;
+    // Turns started by other clients also settle into durable messages.
+    if (!chatBusy) void refresh(true).catch(() => {});
+  }
+  if (agentOpen) renderLiveTurn();
+}
+function renderAttachments() {
+  if (!$("chat-attachments")) return;
+  $("chat-attachments").innerHTML = chatAttachments
+    .map((a, i) => `<span class="tag">${esc(a.label)}<button type="button" class="icon-button" data-action="remove-attachment" data-id="${i}" aria-label="Remove ${esc(a.label)}">${icon("close")}</button></span>`)
+    .join("");
+}
+function attachDialog() {
+  const tab = active();
+  const check = (value, label) => `<label class="attach-choice"><input type="checkbox" name="attach" value="${esc(value)}">${esc(label)}</label>`;
+  const group = (title, list) => list.length ? `<fieldset><legend>${esc(title)}</legend>${list.join("")}</fieldset>` : "";
+  const artifacts = records("artifacts").flatMap((a) => (a.versions || []).slice(-3).reverse().map((v) =>
+    check(`artifact|${a.id}|${v.id}`, `${a.title} · version ${v.number || ""} · ${date(v.createdAt)}${(v.components || []).some((c) => c.type === "image/png") ? " · text + image" : ""}`)));
+  openDialog("Attach to this message",
+    `<p>Choose exactly what this message may use. The next step shows what the selected model will receive, item by item, before anything is sent.</p>${tab && tab.url !== "about:blank" ? group("Current tab", [check(`tab|${tab.id}`, `Readable snapshot of ${displayTitle(tab)}`)]) : ""}${group("Materials", records("materials").map((r) => check(`material|${r.id}`, r.title)))}${group("Context", records("context").map((r) => check(`context|${r.id}`, r.title)))}${group("Tasks", records("tasks").map((r) => check(`task|${r.id}`, r.title)))}${group("Captures (exact versions)", artifacts)}<fieldset><legend>Selected passage</legend>${field("Passage title", "passageTitle", "Selected passage")}${area("Paste the passage to attach", "passage")}</fieldset>`,
+    action("close-dialog", "Cancel") + '<button id="attach-selected" class="primary">Attach selected</button>', true);
+  $("attach-selected").onclick = () => {
+    for (const input of document.querySelectorAll('#dialog-content input[name="attach"]:checked')) {
+      const [kind, id, versionId] = input.value.split("|");
+      const label = input.parentElement.textContent.trim();
+      chatAttachments.push({ label: short(label, 48), attachment: kind === "tab" ? { kind, tabId: Number(id) } : kind === "artifact" ? { kind, id, versionId } : { kind, id } });
+    }
+    const passage = document.querySelector('#dialog-content [name="passage"]').value.trim();
+    if (passage) {
+      const title = document.querySelector('#dialog-content [name="passageTitle"]').value.trim() || "Selected passage";
+      chatAttachments.push({ label: short(title, 48), attachment: { kind: "passage", title: title.slice(0, 300), content: passage.slice(0, 100000) } });
+    }
+    chatAttachments = chatAttachments.slice(0, 16);
+    closeDialog();
+    renderAttachments();
+  };
+}
+const deliveryLabel = {
+  text: "sent as text", image: "sent as image", "image-via-fallback": "image sent to vision fallback", "reference-only": "reference only (not read or inspected)",
+  withheld: "withheld (local only)", excluded: "excluded by you", omitted: "omitted to fit the context window", unsupported: "cannot be sent", unavailable: "unavailable",
+};
 async function sendChat(e) {
   e.preventDefault();
   if (chatBusy) return;
@@ -1354,22 +1505,30 @@ async function sendChat(e) {
       : [];
     const request = {
       conversationId, modelId, text, context,
+      ...(chatAttachments.length ? { attachments: chatAttachments.map((a) => a.attachment) } : {}),
       allowReadTools: $("allow-read-tools").checked,
       ...($("allow-read-tools").checked && active() && active().url !== "about:blank" ? { tabId: active().id } : {}),
     };
     if (catalog["chat.preview"]) {
       const preview = await execute("chat.preview", request, true);
-      if (preview.disclosure.requiresAcknowledgement) {
-        if (!await acknowledgeDisclosure(preview.disclosure)) return;
-        request.disclosureAck = true;
+      const d = preview.disclosure;
+      if (d.requiresAcknowledgement || d.blocked || request.attachments || d.context?.omitted) {
+        const review = await reviewDisclosure(d, request);
+        if (!review) return;
+        if (review.exclude.length) request.exclude = review.exclude;
+        if (review.acknowledged) request.disclosureAck = true;
       }
     }
     input.value = "";
+    chatAttachments = [];
+    renderAttachments();
     $("chat-messages").innerHTML +=
       `<div class="chat-message user"><div class="message-author">YOU</div><div class="message-body">${esc(text)}</div></div><p class="muted" id="chat-waiting">Waiting for your model… ${action("cancel-chat", "Cancel", "", "", "text-button")}</p>`;
     await execute("chat.send", request, true);
+    liveTurn = null;
     await refresh(true);
   } catch (error) {
+    liveTurn = null;
     toast(errorMessage(error));
     await refresh(true);
   } finally {
@@ -1667,6 +1826,24 @@ async function act(button) {
     case "cancel-chat":
       await execute("chat.cancel", { conversationId }, true);
       break;
+    case "attach-chat":
+      attachDialog();
+      break;
+    case "remove-attachment":
+      chatAttachments.splice(Number(id), 1);
+      renderAttachments();
+      break;
+    case "continue-chat":
+      $("chat-input").value = "Continue exactly where your previous reply stopped.";
+      $("chat-form").requestSubmit();
+      break;
+    case "probe-model": {
+      const probe = await execute("models.probe", { modelId: id }, true);
+      toast(probe.probed ? `Endpoint reported: ${probe.reported.join(", ")}. Your explicit settings still take priority.` : probe.reason);
+      await loadModels();
+      modelForm(id);
+      break;
+    }
     case "new-model":
       modelForm();
       break;
@@ -1933,6 +2110,7 @@ try {
     $("command").append(option);
   }
   selectCommand();
+  window.weft.onTurnFrame?.(onTurnFrame);
   await loadModels();
   await refresh(true);
   $("app").classList.toggle(

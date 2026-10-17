@@ -295,6 +295,15 @@ test('purpose-bound grants enforce scope changes, destinations, data classes, us
   const chatter = await f.grant({ scopes: ['read', 'records.write'], actionClasses: ['cloud_spend'], dataAccess: ['conversations', 'workspace_records'], autonomy: 'autonomous' });
   const laundered = await f.rest('chat.send', { conversationId: conversation.id, modelId: 'local', text: 'Summarize the open page', allowReadTools: true, tabId: 1 }, chatter.token);
   assert.equal(laundered.error.details.authority.reason, 'data_class_not_granted');
+  // Tab snapshot attachments disclose page content too; streaming adds no way around the data class.
+  const attached = await f.rest('chat.send', { conversationId: conversation.id, modelId: 'local', text: 'Summarize', attachments: [{ kind: 'tab', tabId: 1 }] }, chatter.token);
+  assert.equal(attached.error.details.authority.reason, 'data_class_not_granted');
+  // Capability probing contacts a model endpoint and is human-only administration for every automation identity.
+  for (const bearer of [f.token, chatter.token]) {
+    const probe = await f.rest('models.probe', { modelId: 'local' }, bearer);
+    assert.equal(probe.error.code, 'permission_required');
+    assert.equal(probe.error.details.authority.reason, 'human_only');
+  }
   const noSpend = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'autonomous' });
   assert.equal((await f.rest('chat.send', { conversationId: conversation.id, modelId: 'local', text: 'Hi' }, noSpend.token)).error.details.authority.reason, 'action_class_not_granted');
   const entries = (await f.dispatch('activity.list', { workspaceId: f.firstId, types: ['decision'], limit: 100 }, human)).result.items;
