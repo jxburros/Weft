@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, net, safeStorage, shell, nativeImage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell, nativeImage } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
@@ -18,6 +18,8 @@ import { Providers } from './providers.js';
 import { TurnRelay } from './turn-relay.js';
 import { WorkspaceExtensions } from './extensions.js';
 import { PluginRegistry } from './plugins/registry.js';
+import { Knowledge } from './knowledge.js';
+import { ServiceCredentials } from './linked-sources.js';
 import { UpdateService, createElectronTransport, createWindowsSignatureVerifier, detectInstall } from './updater.js';
 import { WEFT_VERSION } from './version.js';
 
@@ -29,6 +31,7 @@ let window;
 let dispatch;
 let lists;
 let listTimer;
+let freshnessTimer;
 let plugins;
 let updates;
 const admission = new AutomationAdmission();
@@ -133,12 +136,21 @@ app.whenReady().then(async () => {
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, onEvent: event => events.emit('event', event) });
+  // Service credentials live only in OS-protected storage; scheduled freshness checks are opt-in per workspace.
+  const knowledge = new Knowledge({ workspace, credentials: new ServiceCredentials({ directory, safeStorage }), audit: entry => activity.append(entry) });
+  freshnessTimer = setInterval(() => { if (!admission.status.stopped) knowledge.runScheduled().catch(error => console.warn(`Weft freshness: ${error.message}`)); }, 15 * 60_000); freshnessTimer.unref?.();
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, knowledge, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
+  // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
+  ipcMain.handle('weft:pickPath', async (event, kind) => {
+    trusted(event);
+    const result = await dialog.showOpenDialog(window, { title: kind === 'folder' ? 'Link a folder' : 'Link a file', properties: [kind === 'folder' ? 'openDirectory' : 'openFile', 'dontAddToRecent'] });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
   ipcMain.handle('weft:execute', (event, name, args) => {
     trusted(event);
     return dispatch(name, args, { actor: 'human', source: 'gui' });
@@ -165,6 +177,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit());
 app.on('before-quit', event => {
   clearInterval(listTimer);
+  clearInterval(freshnessTimer);
   updates?.stopBackground();
   server?.close();
   providers?.close();

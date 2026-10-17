@@ -7,12 +7,14 @@ import { Authority } from './authority.js';
 import { raiseActionClass } from './autonomy.js';
 import { executeHookCommand, pluginCommandAdminDefinitions } from './plugin-commands.js';
 import { PluginRegistry } from './plugins/registry.js';
+import { Knowledge } from './knowledge.js';
 
 const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status'];
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, plugins = new PluginRegistry(), admission, authority, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, plugins = new PluginRegistry(), knowledge, admission, authority, onEvent = () => {} }) {
+  knowledge ??= new Knowledge({ workspace });
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
 
@@ -171,6 +173,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       return providers.execute(command, args, context);
     }
     if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);
+    if (knowledge.handles(command)) return knowledge.execute(command, args, context);
     if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
     if (command === 'browser.emergencyStop' && context.actor === 'human') {
       admission.stop();
@@ -224,5 +227,6 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   };
   dispatch.authority = authority;
   dispatch.plugins = plugins;
+  dispatch.knowledge = knowledge;
   return dispatch;
 }

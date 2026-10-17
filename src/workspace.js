@@ -12,6 +12,8 @@ import { componentPath, sha256 } from './components.js';
 import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 import { executeHandoffCommand, importHandoffs, recordTakeover } from './handoffs.js';
 import { effectiveRule, explainRules } from './site-rules.js';
+import { originFor, importedOrigin } from './provenance.js';
+import { TRUSTED_CATEGORIES, buildCitations, exportCollections, exportMaterial, forCaller, importCollections, importConflicts, importContextFields, linkedOmissions, prefetchSourceTexts, quotedSources, recheckCitations, sharedAccess, sharedInto } from './context-records.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -37,9 +39,14 @@ const ID_TOKEN = /\b[a-z]{2,12}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 const EXPORT_EXCLUDED = Object.freeze(['Browser sessions, tabs, cookies and site storage', 'Credentials, provider keys and model connection settings', 'Global site rules', 'Activity log and browsing history', 'Local search index and request identities', 'Local backups',
   'Site storage modes and exceptions: browser privacy policy for this profile; set them again after import',
   'Community list subscriptions: signed list state is verified on install; subscribe again to receive and track rules',
-  'Approvals, autonomy ceilings and agent connection grants: authority is never transferred with data']);
+  'Approvals, autonomy ceilings and agent connection grants: authority is never transferred with data',
+  'Shared collection participants and roles: grants to other workspaces are authority and must be given again',
+  'Linked file and folder contents and local paths, service credentials and cached service content: relink or refresh after import',
+  'Scheduled freshness check settings']);
+/** Workspace-scoped collections handled outside recordShapes: shared collections, evidence conflicts and freshness policies. */
+const KNOWLEDGE_COLLECTIONS = Object.freeze(['sharedCollections', 'conflicts', 'freshnessPolicies']);
 // Workspace-scoped profile state that is deliberately not part of the export format (listed above with the reason).
-const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists']);
+const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists', 'freshnessPolicies']);
 
 export function sanitizeUrl(value) {
   try {
@@ -54,7 +61,8 @@ export function sanitizeUrl(value) {
 // Capture text and binary fields are hashed components: never rewrite them.
 function cleanExport(value, key = '', parent = '') {
   if (Array.isArray(value)) return value.map(item => cleanExport(item, '', key));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([name]) => !secretKey.test(name)).map(([name, item]) => [name, (parent === 'versions' && name === 'text') || /Base64$/.test(name) || name === '$component' ? item : cleanExport(item, name)]));
+  // Quote selectors are cited evidence text, kept exactly so citations re-anchor after import.
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([name]) => !secretKey.test(name)).map(([name, item]) => [name, (parent === 'versions' && name === 'text') || /Base64$/.test(name) || name === '$component' || (parent === 'citations' && ['exact', 'prefix', 'suffix'].includes(name)) ? item : cleanExport(item, name)]));
   if (typeof value === 'string' && (/url|endpoint/i.test(key) || (/^https?:\/\//i.test(value) && !/\s/.test(value)))) return sanitizeUrl(value);
   return value;
 }
@@ -89,7 +97,8 @@ function createWorkspace(name = 'My workspace') {
 }
 function initialState() {
   const initial = createWorkspace();
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [] };
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [],
+    ...Object.fromEntries(KNOWLEDGE_COLLECTIONS.map(name => [name, []])) };
 }
 function artifactSummary(record) {
   const copy = clone(record);
@@ -116,16 +125,17 @@ function substitutePlaceholders(value, index, results) {
 }
 const componentRef = z.strictObject({ $component: z.strictObject({ sha256: z.string().regex(/^[0-9a-f]{64}$/), size: z.number().int().min(0), encoding: z.enum(['base64', 'utf8']) }) });
 const timestamp = z.string().max(100);
-const historyEntry = z.object({ revision: z.number().int().min(1), content: z.string().max(500000), actor: z.string().max(200).default('human'), createdAt: timestamp });
+const historyEntry = z.object({ revision: z.number().int().min(1), content: z.string().max(500000), actor: z.string().max(200).default('human'), createdAt: timestamp, origin: z.unknown().optional() });
 const messageSchema = z.object({ id: z.string().max(128).optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: timestamp, model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional(), attachments: z.array(z.string().max(128)).max(1000).optional(),
   turnId: z.string().max(128).optional(), finishReason: finishReason.optional(), continuable: z.boolean().optional() });
 const annotationSchema = z.object({ note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).optional(), revision: z.number().int().min(1).optional(), actor: z.string().max(200).optional(), createdAt: timestamp.optional() });
 const versionSchema = z.object({ id: z.string().max(128).optional(), number: z.number().int().min(1).optional(), createdAt: timestamp.optional(), actor: z.string().max(200).optional(), method: z.string().max(50).optional(),
   url: z.string().max(16384).nullable().optional(), title: z.string().max(240).optional(), text: z.union([z.string().max(2000000), componentRef]).optional(), pngBase64: z.union([z.string().max(28000000), componentRef]).optional(),
   components: z.array(z.object({ type: z.string().max(100), size: z.number().int().min(0), sha256: z.string().regex(/^[0-9a-f]{64}$/) })).max(10).optional(),
-  navigationVersion: z.number().int().nullable().optional(), limitations: z.array(z.string().max(2000)).max(50).optional(), redactionStatus: z.string().max(50).optional(), previousVersionId: z.string().max(128).nullable().optional() });
+  navigationVersion: z.number().int().nullable().optional(), limitations: z.array(z.string().max(2000)).max(50).optional(), redactionStatus: z.string().max(50).optional(), previousVersionId: z.string().max(128).nullable().optional(), origin: z.unknown().optional() });
 const artifactSchema = z.object({ title: z.string().min(1).max(240), note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).default([]), versions: z.array(versionSchema).max(1000), annotations: z.array(annotationSchema).max(10000).default([]) });
-const SYSTEM_FIELDS = { common: ['id', 'workspaceId', 'createdAt', 'updatedAt', 'revision'], materials: ['history', 'size', 'sha256'], context: ['history'], conversations: ['messages', 'turnManifests'], artifacts: ['versions', 'annotations'],
+const SYSTEM_FIELDS = { common: ['id', 'workspaceId', 'createdAt', 'updatedAt', 'revision'], materials: ['history', 'size', 'sha256', 'link', 'service', 'copiedFrom', 'superseded', 'derivedFrom', 'lastOrigin'],
+  context: ['history', 'proposal', 'promotedFrom', 'promotionNote', 'superseded', 'derivedFrom', 'lastOrigin'], conversations: ['messages', 'turnManifests'], artifacts: ['versions', 'annotations'],
   siteRules: ['createdBy', 'revisions', 'lastReviewedAt', 'lastReviewedBy'] };
 // Site-rule provenance (#19) travels with format 2 exports: who created the rule, its bounded revision history and review state.
 const ruleRevisionSchema = z.object({ revision: z.number().int().min(1), actor: z.string().max(200), at: timestamp, summary: z.string().max(2400), changed: z.array(z.string().max(100)).max(50).default([]),
@@ -187,6 +197,8 @@ export class WorkspaceService {
       for (const name of collections) if (data[name] === undefined) data[name] = [];
       // Handoffs were added without a schema bump; older stores start with none.
       if (!Array.isArray(data.handoffs)) data.handoffs = [];
+      // Shared collections, conflicts and freshness policies (#21, #23) were also added without a schema bump.
+      for (const name of KNOWLEDGE_COLLECTIONS) if (!Array.isArray(data[name])) data[name] = [];
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
         rejectSecretKeys(migrated);
@@ -302,10 +314,35 @@ export class WorkspaceService {
     if (!record) throw new Error('Workspace not found');
     return record;
   }
-  record(collection, id, context = {}) {
-    const record = this.data[collection].find(item => item.id === id);
+  /**
+   * Find a record inside the caller's workspace. `shared: true` (reads only) also admits a
+   * record shared into that workspace through an active collection membership (#21), so
+   * people, internal models and agents meet the same collection boundary.
+   */
+  record(collection, id, context = {}, { shared = false } = {}) {
+    const record = this.data[collection]?.find(item => item.id === id);
     if (!record) throw new Error(`${collection} record not found`);
-    if (context.workspaceId && record.workspaceId && record.workspaceId !== context.workspaceId) throw new Error('PERMISSION_REQUIRED: record is outside the authorized workspace');
+    if (context.workspaceId && record.workspaceId && record.workspaceId !== context.workspaceId && !(shared && sharedAccess(this.data, collection, record, context.workspaceId))) throw new Error('PERMISSION_REQUIRED: record is outside the authorized workspace');
+    return record;
+  }
+  /** Validate a command's arguments with its catalog schema (used by modules that compose record commands). */
+  parseCommand(name, input) {
+    const { requestId, dryRun, ...args } = workspaceSchemas[name].parse(input);
+    return args;
+  }
+  /** Run a module command inside the mutation queue; it commits atomically or rolls back with its activity. */
+  executeModule(work, context = {}) {
+    const run = this.queue.then(() => { context.assertAuthorized?.(); this.storage.assertOpen(); return this.transact(work, { context }); });
+    this.queue = run.catch(() => {});
+    return run;
+  }
+  /** Insert a record created by a trusted module path (promotion, merge) with its server-set origin. */
+  insertRecord(collection, fields, workspaceId, origin) {
+    const record = createRecord(fields, workspaceId, collection.slice(0, 4));
+    record.origin = origin;
+    if (['materials', 'context'].includes(collection)) record.history = [{ revision: 1, content: record.content, actor: origin.actor, createdAt: record.createdAt, origin }];
+    this.data[collection].push(record);
+    this.log(`${collection}.create`, workspaceId, record.id, origin.actor, origin.promotion ? 'Promoted from a proposal' : origin.conflictId ? 'Created by conflict resolution' : '');
     return record;
   }
   /** Deep copy for callers, including verified component-backed content. */
@@ -475,7 +512,11 @@ export class WorkspaceService {
       if (snapshot.siteLists) snapshot.siteLists = snapshot.siteLists.filter(item => item.workspaceId === workspaceId);
       snapshot.workspaces = snapshot.workspaces.filter(item => item.id === workspaceId);
       if (snapshot.storagePolicies) snapshot.storagePolicies = snapshot.storagePolicies.filter(item => item.workspaceId === workspaceId);
-      for (const key of [...collections, 'activity', 'history', 'handoffs']) snapshot[key] = (snapshot[key] ?? []).filter(item => item.workspaceId === workspaceId);
+      for (const key of [...collections, 'activity', 'history', 'handoffs', 'conflicts', 'freshnessPolicies']) snapshot[key] = (snapshot[key] ?? []).filter(item => item.workspaceId === workspaceId);
+      // Collections this workspace owns or participates in; members of other workspaces are visible only to the owner.
+      snapshot.sharedCollections = (snapshot.sharedCollections ?? []).filter(item => item.workspaceId === workspaceId || item.members?.some(member => member.workspaceId === workspaceId && !member.revokedAt))
+        .map(item => item.workspaceId === workspaceId ? item : { ...item, members: item.members.filter(member => member.workspaceId === workspaceId), history: [] });
+      if (!['human', 'admin'].includes(context.actor ?? 'human')) snapshot.materials = snapshot.materials.map(item => forCaller('materials', item, context));
       snapshot.browserSession.tabs = snapshot.browserSession.tabs.filter(item => item.workspaceId === workspaceId);
       if (!snapshot.browserSession.tabs.some(tab => tab.id === snapshot.browserSession.activeId)) snapshot.browserSession.activeId = null;
       snapshot.activeWorkspaceId = workspaceId;
@@ -486,22 +527,36 @@ export class WorkspaceService {
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
     if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms);
-    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? withoutFile(item) : clone(item));
-    const record = this.record(collection, args.id, context);
+    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? forCaller(collection, withoutFile(item), context) : clone(item));
+    const record = this.record(collection, args.id, context, { shared: ['materials', 'context', 'artifacts'].includes(collection) });
     if (collection === 'artifacts' && args.versionId) {
       const version = record.versions.find(item => item.id === args.versionId);
       if (!version) throw new Error('Artifact version not found');
       return { artifactId: record.id, workspaceId: record.workspaceId, ...this.output(version) };
     }
-    return this.output(record);
+    return forCaller(collection, this.output(record), context);
   }
-  /** Ranked local full-text search. Results cite the record revision or exact capture version. */
+  /**
+   * Ranked local full-text search. Results cite the record revision or exact capture version.
+   * Records shared into the workspace through an active collection are included and labelled.
+   */
   search(query, workspaceId, limit) {
-    return this.storage.search({ workspaceId, query, limit }).map(row => {
+    const format = (row, shared) => {
       const citation = { recordType: row.collection, recordId: row.record_id, revision: row.revision, versionId: row.version_id || null, versionNumber: row.version_number };
       return { type: row.collection, id: row.record_id, ...(row.version_id ? { versionId: row.version_id, versionNumber: row.version_number } : {}), revision: row.revision,
-        localOnly: row.local_only === 1, title: row.title, content: String(row.excerpt || '').slice(0, 300), updatedAt: row.updated_at, score: Number((-row.score).toFixed(6)), match: row.match, citation };
-    });
+        localOnly: row.local_only === 1, title: row.title, content: String(row.excerpt || '').slice(0, 300), updatedAt: row.updated_at, score: Number((-row.score).toFixed(6)), match: row.match, citation, ...(shared && { shared }) };
+    };
+    const results = this.storage.search({ workspaceId, query, limit }).map(row => format(row, null));
+    const shared = sharedInto(this.data, workspaceId);
+    if (!shared.length) return results;
+    const allowed = new Map(shared.map(item => [`${item.type}:${item.id}`, item]));
+    for (const owner of new Set(shared.map(item => item.ownerWorkspaceId))) {
+      for (const row of this.storage.search({ workspaceId: owner, query, limit })) {
+        const entry = allowed.get(`${row.collection}:${row.record_id}`);
+        if (entry) results.push(format(row, { collectionId: entry.collectionId, ownerWorkspaceId: entry.ownerWorkspaceId, role: entry.role }));
+      }
+    }
+    return results.sort((a, b) => b.score - a.score).slice(0, limit);
   }
   async apply(name, args, context, effects) {
     const { actor, admin, workspaceId } = this.authorize(name, args, context);
@@ -551,6 +606,10 @@ export class WorkspaceService {
       return record;
     }
     if (collection === 'artifacts') return this.mutateArtifact(action, args, workspaceId, actor, context);
+    if (collection === 'context' && !context.citationTexts) {
+      const sources = quotedSources(args.citations ?? args.changes?.citations);
+      if (sources.length) context = { ...context, citationTexts: await prefetchSourceTexts(this.data, workspaceId, sources) };
+    }
     if (Object.hasOwn(recordShapes, collection)) return this.mutateRecord(collection, action, args, workspaceId, actor, admin, context);
     throw new Error(`Unsupported workspace command: ${name}`);
   }
@@ -586,13 +645,15 @@ export class WorkspaceService {
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
       if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
       if (this.data.storagePolicies) this.data.storagePolicies = this.data.storagePolicies.filter(item => item.workspaceId !== record.id);
-      for (const key of [...collections, 'activity', 'history', 'handoffs']) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
+      for (const key of [...collections, 'activity', 'history', 'handoffs', ...KNOWLEDGE_COLLECTIONS]) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
+      // Access granted to the deleted workspace ends with it; the membership stays as history.
+      for (const shared of this.data.sharedCollections) for (const member of shared.members ?? []) if (member.workspaceId === record.id && !member.revokedAt) Object.assign(member, { revokedAt: now(), revokedBy: actor, reason: 'workspace deleted' });
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
       effects.push(() => this.browser?.closeWorkspace?.(record.id), switchBrowser);
     } else if (action === 'duplicate') {
-      const exported = this.exportWorkspace(record.id, undefined, { mode: 'package' });
+      const exported = this.exportWorkspace(record.id, undefined, { mode: 'package', keepLocalPaths: true });
       exported.workspace.name = args.name || `${record.name} copy`;
-      const { workspace: copy } = this.importWorkspace(exported, actor, false, { resolver: { read: marker => this.storage.components.read(marker.sha256, marker.size) } });
+      const { workspace: copy } = this.importWorkspace(exported, actor, false, { resolver: { read: marker => this.storage.components.read(marker.sha256, marker.size) }, keepLocalPaths: true });
       this.log('workspaces.duplicate', copy.id, record.id, actor, 'Records, revisions and stored components copied. Browser sessions and credentials excluded.');
       return copy;
     } else throw new Error('Unsupported workspace action');
@@ -607,14 +668,19 @@ export class WorkspaceService {
   mutateRecord(collection, action, args, workspaceId, actor, admin, context) {
     let record;
     if (action === 'create') {
-      const { workspaceId: ignored, ...fields } = args;
-      if (!admin && collection === 'context' && ['confirmed', 'instructions', 'decisions'].includes(fields.category)) throw new Error('PERMISSION_REQUIRED: only a human may establish trusted project context');
+      const { workspaceId: ignored, origin: originArg, citations: citationArgs, ...fields } = args;
+      if (!admin && collection === 'context' && TRUSTED_CATEGORIES.includes(fields.category)) throw new Error('PERMISSION_REQUIRED: only a human may establish trusted project context');
       if (collection === 'siteRules') this.validateRule(fields);
       if (collection === 'materials') this.validateMaterial(fields);
       record = createRecord(fields, collection === 'siteRules' && fields.scope === 'global' ? null : workspaceId, collection.slice(0, 4));
       if (collection === 'siteRules') { record.createdBy = actor; record.revisions = [{ revision: 1, actor, at: record.createdAt, summary: 'Created', changed: Object.keys(fields).sort() }]; }
       if (collection === 'conversations') record.messages = [];
-      if (['materials', 'context'].includes(collection)) record.history = [{ revision: 1, content: record.content, actor, createdAt: record.createdAt }];
+      if (['materials', 'context'].includes(collection)) {
+        // Provenance is set from the authenticated caller; arguments only add descriptive detail (#66).
+        record.origin = originFor(context, originArg, context.originExtra);
+        if (collection === 'context') record.citations = buildCitations(this.data, record.workspaceId, citationArgs, context.citationTexts);
+        record.history = [{ revision: 1, content: record.content, actor, createdAt: record.createdAt, origin: record.origin }];
+      }
       this.data[collection].push(record);
     } else {
       record = this.record(collection, args.id, context);
@@ -625,15 +691,25 @@ export class WorkspaceService {
       else if (action === 'update') {
         if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: record changed; reload before updating');
         if (!admin && collection === 'workflows' && record.enabled === false && args.changes.enabled === true) throw new Error('PERMISSION_REQUIRED: imported workflow requires human review');
-        const updated = { ...record, ...args.changes };
+        const { origin: originArg, citations: citationArgs, ...changes } = args.changes;
+        const revisionOrigin = ['materials', 'context'].includes(collection) ? originFor(context, originArg, context.originExtra) : null;
+        const updated = { ...record, ...changes };
+        // Citations are append-only evidence: new ones are added, earlier ones keep their pinned versions.
+        if (collection === 'context' && citationArgs?.length) updated.citations = [...(record.citations ?? []), ...buildCitations(this.data, record.workspaceId, citationArgs, context.citationTexts)].slice(-200);
         if (collection === 'siteRules') { this.validateRule(updated); updated.workspaceId = updated.scope === 'global' ? null : (record.workspaceId || workspaceId); this.recordRuleRevision(record, updated, actor, 'Updated'); }
         if (collection === 'materials') this.validateMaterial(updated);
         Object.assign(record, updated); this.touch(record);
-        if (record.history && args.changes.content !== undefined) record.history.push({ revision: record.revision, content: record.content, actor, createdAt: now() });
+        if (record.history && changes.content !== undefined) record.history.push({ revision: record.revision, content: record.content, actor, createdAt: now(), ...(revisionOrigin && { origin: revisionOrigin }) });
+        if (revisionOrigin) record.lastOrigin = revisionOrigin;
       } else throw new Error('Unsupported record action');
+      if (action === 'delete' && ['materials', 'context'].includes(collection)) this.forgetSharedItem(collection, record.id);
     }
     this.log(`${collection}.${action}`, record.workspaceId, record.id, actor);
     return action === 'delete' ? { deleted: true, id: record.id } : record;
+  }
+  /** A deleted record leaves every shared collection that listed it. */
+  forgetSharedItem(type, id) {
+    for (const collection of this.data.sharedCollections ?? []) if (collection.items?.some(item => item.type === type && item.id === id)) collection.items = collection.items.filter(item => !(item.type === type && item.id === id));
   }
   recordRuleRevision(record, updated, actor, summary) {
     const changed = Object.keys(updated).filter(key => !['revisions', 'updatedAt', 'revision'].includes(key) && JSON.stringify(record[key]) !== JSON.stringify(updated[key])).sort();
@@ -657,6 +733,7 @@ export class WorkspaceService {
     if (action === 'delete') {
       const record = this.record('artifacts', args.id, context);
       this.data.artifacts = this.data.artifacts.filter(item => item.id !== record.id);
+      this.forgetSharedItem('artifacts', record.id);
       this.log('artifacts.delete', record.workspaceId, record.id, actor);
       return { id: record.id, deleted: true };
     }
@@ -691,7 +768,7 @@ export class WorkspaceService {
       record = createRecord({ title: source.title || 'Saved page', note: args.note || '', tags: args.tags || [], versions: [], annotations: [] }, workspaceId, 'artifact');
       this.data.artifacts.push(record);
     }
-    const version = { id: uuid('version'), number: record.versions.length + 1, createdAt: now(), actor, method: action === 'capture' ? 'browser-capture' : 'supplied-content', url: sanitizeUrl(source.url), title: source.title || record.title, components, text: source.text, pngBase64: source.pngBase64, navigationVersion: source.navigationVersion, limitations: [...(source.limitations || []), 'Stored text is untrusted source content. Active scripts and external resources are not replayed.', 'Captures may contain personal information; inspect before sharing.'], redactionStatus: 'not-reviewed', previousVersionId: record.versions.at(-1)?.id || null };
+    const version = { id: uuid('version'), number: record.versions.length + 1, createdAt: now(), actor, origin: originFor(context), method: action === 'capture' ? 'browser-capture' : 'supplied-content', url: sanitizeUrl(source.url), title: source.title || record.title, components, text: source.text, pngBase64: source.pngBase64, navigationVersion: source.navigationVersion, limitations: [...(source.limitations || []), 'Stored text is untrusted source content. Active scripts and external resources are not replayed.', 'Captures may contain personal information; inspect before sharing.'], redactionStatus: 'not-reviewed', previousVersionId: record.versions.at(-1)?.id || null };
     record.versions.push(version); this.touch(record);
     this.log('artifacts.capture', workspaceId, record.id, actor, `Version ${version.number}`);
     return artifactSummary(record);
@@ -705,13 +782,19 @@ export class WorkspaceService {
    * history.
    * `package` mode references components by digest instead of inlining them.
    */
-  exportWorkspace(id, sensitiveTerms, { mode = 'inline' } = {}) {
+  exportWorkspace(id, sensitiveTerms, { mode = 'inline', keepLocalPaths = false } = {}) {
     const record = this.workspace(id);
-    const plain = (name, item) => mode === 'inline' ? this.output(item) : JSON.parse(this.storage.serialize(name, item, { write: false }).doc);
-    const notExported = Object.entries(this.data).filter(([key, value]) => !collections.includes(key) && !['workspaces', 'activity', 'history', 'handoffs'].includes(key) && !NOT_EXPORTED.has(key) && Array.isArray(value) && value.some(item => item?.workspaceId === id)).map(([key, value]) => `${key} (${value.filter(item => item?.workspaceId === id).length} records not supported by this export format)`);
+    const plain = (name, item) => {
+      const copy = mode === 'inline' ? this.output(item) : JSON.parse(this.storage.serialize(name, item, { write: false }).doc);
+      return name === 'materials' ? exportMaterial(copy, { keepLocalPaths }) : copy;
+    };
+    const notExported = Object.entries(this.data).filter(([key, value]) => !collections.includes(key) && !['workspaces', 'activity', 'history', 'handoffs', ...KNOWLEDGE_COLLECTIONS].includes(key) && !NOT_EXPORTED.has(key) && Array.isArray(value) && value.some(item => item?.workspaceId === id)).map(([key, value]) => `${key} (${value.filter(item => item?.workspaceId === id).length} records not supported by this export format)`);
     const exported = cleanExport({ format: 'weft-workspace', schemaVersion: CURRENT_SCHEMA_VERSION, formatVersion: 2, exportedAt: now(), workspace: clone(record),
       ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global')).map(item => plain(name, item))])),
       handoffs: (this.data.handoffs ?? []).filter(item => item.workspaceId === id).map(item => clone(item)),
+      sharedCollections: exportCollections(this.data, id),
+      conflicts: (this.data.conflicts ?? []).filter(item => item.workspaceId === id).map(item => clone(item)),
+      linkedContentOmitted: linkedOmissions(this.data.materials.filter(item => item.workspaceId === id)),
       excluded: [...EXPORT_EXCLUDED, ...notExported],
       limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
     if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(mode === 'inline' ? exported : this.exportWorkspace(id), null, 2), sensitiveTerms);
@@ -797,7 +880,7 @@ export class WorkspaceService {
    * are remapped and must resolve; free-form citations of exported IDs are
    * rewritten. Every lossy mapping is reported. Policies/workflows stay inactive.
    */
-  importWorkspace(input, actor, activate = true, { resolver = null, maxBytes = MAX_FILE } = {}) {
+  importWorkspace(input, actor, activate = true, { resolver = null, maxBytes = MAX_FILE, keepLocalPaths = false } = {}) {
     let raw = input;
     if (typeof input === 'string') { if (Buffer.byteLength(input) > MAX_FILE) throw new Error('Import exceeds 100 MiB'); raw = JSON.parse(input); }
     if (!raw || typeof raw !== 'object' || raw.format !== 'weft-workspace' || !raw.workspace) throw new Error('Expected a versioned Weft workspace export');
@@ -812,7 +895,7 @@ export class WorkspaceService {
     const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon });
     const workspace = { ...createWorkspace(), ...workspaceFields, importedFrom: { exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt.slice(0, 100) : null, createdAt: timestamp.safeParse(raw.workspace.createdAt).success ? raw.workspace.createdAt ?? null : null, formatVersion } };
     const mapping = new Map([[raw.workspace.id, workspace.id]]);
-    const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', 'handoffs', ...collections]);
+    const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', 'handoffs', 'sharedCollections', 'conflicts', 'linkedContentOmitted', ...collections]);
     for (const [key, value] of Object.entries(raw)) if (!knownKeys.has(key)) loss('export', key, Array.isArray(value) ? 'collection not supported by this Weft version; not imported' : 'unrecognized export field ignored', Array.isArray(value) ? value.length : 1);
     // First pass: allocate every new identifier so references resolve in any order.
     for (const collection of collections) {
@@ -824,6 +907,14 @@ export class WorkspaceService {
         mapping.set(item.id, uuid(collection === 'artifacts' ? 'artifact' : collection.slice(0, 4)));
         if (collection === 'artifacts') for (const version of Array.isArray(item.versions) ? item.versions : []) if (typeof version?.id === 'string' && !mapping.has(version.id)) mapping.set(version.id, uuid('version'));
         if (collection === 'conversations') for (const message of Array.isArray(item.messages) ? item.messages : []) if (typeof message?.id === 'string' && !mapping.has(message.id)) mapping.set(message.id, uuid('msg'));
+      }
+    }
+    for (const [key, prefix] of [['sharedCollections', 'coll'], ['conflicts', 'conflict']]) {
+      if (raw[key] !== undefined && !Array.isArray(raw[key])) throw new Error(`Invalid ${key} collection`);
+      for (const item of raw[key] || []) {
+        if (!item || typeof item !== 'object' || typeof item.id !== 'string') throw new Error(`Invalid imported ${key} record`);
+        if (mapping.has(item.id)) throw new Error('Duplicate imported record ID');
+        mapping.set(item.id, uuid(prefix));
       }
     }
     if (raw.handoffs !== undefined && !Array.isArray(raw.handoffs)) throw new Error('Invalid handoffs collection');
@@ -852,7 +943,8 @@ export class WorkspaceService {
         const deferred = [];
         if (collection === 'artifacts') { nested(collection, 'annotations', annotationSchema, item.annotations); fields = this.importArtifact(item, { heavy, lazy, deferred, mapping, loss, stats }); }
         else {
-          const picked = Object.fromEntries(Object.keys(shape).filter(key => item[key] !== undefined).map(key => [key, item[key]]));
+          // Provenance and citations are system-derived: they are remapped below, never parsed as caller input.
+          const picked = Object.fromEntries(Object.keys(shape).filter(key => item[key] !== undefined && !['origin', 'citations'].includes(key)).map(key => [key, item[key]]));
           let fileRef = null;
           if (collection === 'materials' && picked.fileBase64 && typeof picked.fileBase64 === 'object') {
             fileRef = heavy(componentRef.parse(picked.fileBase64), 'base64');
@@ -891,7 +983,9 @@ export class WorkspaceService {
             }
           }
           if (['materials', 'context'].includes(collection)) {
-            if (item.history !== undefined) { nested(collection, 'history', historyEntry, item.history); fields.history = z.array(historyEntry).max(10000).parse(item.history).map(entry => ({ revision: entry.revision, content: entry.content, actor: entry.actor, createdAt: entry.createdAt })); stats.revisions += fields.history.length; }
+            Object.assign(fields, importContextFields(item, collection, { mapping, actor, loss, keepLocalPaths }));
+            fields.origin ??= importedOrigin(null, actor, mapping);
+            if (item.history !== undefined) { nested(collection, 'history', historyEntry, item.history); fields.history = z.array(historyEntry).max(10000).parse(item.history).map(entry => ({ revision: entry.revision, content: entry.content, actor: entry.actor, createdAt: entry.createdAt, ...(entry.origin !== undefined && { origin: importedOrigin(entry.origin, actor, mapping) }) })); stats.revisions += fields.history.length; }
             else { loss(collection, 'history', 'revision history absent in source; started a new history'); fields.history = [{ revision: 1, content: fields.content, actor, createdAt: now() }]; }
           }
         }
@@ -911,19 +1005,30 @@ export class WorkspaceService {
     }
     const handoffs = importHandoffs(raw.handoffs, { workspaceId: workspace.id, mapping, actor, loss });
     for (const record of handoffs) this.rewriteCitations(record, mapping, stats);
+    const sharedCollections = importCollections(raw.sharedCollections, { workspaceId: workspace.id, mapping, actor, loss });
+    const conflicts = importConflicts(raw.conflicts, { workspaceId: workspace.id, mapping, actor, loss });
     if (stats.unresolvedCitations.size) loss('all', 'free-form citations', 'identifiers not present in the export were left unchanged and do not resolve in the new workspace', stats.unresolvedCitations.size);
     this.data.workspaces.push(workspace);
     for (const collection of collections) this.data[collection].push(...imported[collection]);
     this.data.handoffs = [...(this.data.handoffs ?? []), ...handoffs];
+    this.data.sharedCollections.push(...sharedCollections);
+    this.data.conflicts.push(...conflicts);
+    // Imported citation statuses are recomputed against the imported versions; nothing is taken on trust.
+    let citations = 0;
+    for (const record of imported.context) if (record.citations?.length) {
+      const unresolved = new Set(record.citations.filter(item => item.reason === 'not_in_export').map(item => item.id));
+      record.citations = recheckCitations(this.data, workspace.id, record).citations.map(item => unresolved.has(item.id) ? { ...item, status: 'unverified', reason: 'not_in_export' } : item);
+      citations += record.citations.length;
+    }
     if (activate) this.data.activeWorkspaceId = workspace.id;
     if (formatVersion === 1) loss('export', 'formatVersion', 'format 1 export: fields absent from the older format were initialized');
     const linked = [];
-    for (const record of imported.materials) if (['website', 'linked-file', 'service'].includes(record.kind)) linked.push({ collection: 'materials', id: record.id, kind: record.kind, title: record.title, ...(record.url ? { url: record.url } : {}), ...(record.filename ? { filename: record.filename } : {}) });
+    for (const record of imported.materials) if (['website', 'linked-file', 'linked-folder', 'service'].includes(record.kind) || record.link || record.service) linked.push({ collection: 'materials', id: record.id, kind: record.kind, title: record.title, ...(record.url ? { url: record.url } : {}), ...(record.filename ? { filename: record.filename } : {}) });
     for (const record of imported.context) for (const source of record.sources || []) if (/^https?:/i.test(source)) linked.push({ collection: 'context', id: record.id, kind: 'source', url: source });
     for (const record of imported.artifacts) for (const version of record.versions) if (version.url) linked.push({ collection: 'artifacts', id: record.id, versionId: version.id, kind: 'live page', url: version.url });
     const report = {
       formatVersion, sourceSchemaVersion: raw.schemaVersion, newIds: true,
-      records: { ...Object.fromEntries(collections.map(name => [name, imported[name].length])), handoffs: handoffs.length }, artifactVersions: stats.versions, revisionHistoryEntries: stats.revisions,
+      records: { ...Object.fromEntries(collections.map(name => [name, imported[name].length])), handoffs: handoffs.length, sharedCollections: sharedCollections.length, conflicts: conflicts.length }, artifactVersions: stats.versions, revisionHistoryEntries: stats.revisions, citations,
       remapped: { identifiers: mapping.size, structuredReferences: stats.structuredReferences, freeFormCitations: stats.freeFormCitations },
       lossy: [...lossy.values()],
       excluded: [...new Set([...EXPORT_EXCLUDED, ...(Array.isArray(raw.excluded) ? raw.excluded.filter(item => typeof item === 'string').map(item => item.slice(0, 300)).slice(0, 100) : [])])],
@@ -975,7 +1080,7 @@ export class WorkspaceService {
       const stored = { id: (version.id && mapping.get(version.id)) || uuid('version'), number: version.number ?? index + 1, createdAt: version.createdAt ?? now(), actor: version.actor ?? 'human', method: version.method ?? 'import',
         url: version.url ? sanitizeUrl(version.url) : '', title: version.title ?? fields.title, components, ...(text?.inline !== undefined ? { text: text.inline } : {}), ...(png?.inline !== undefined ? { pngBase64: png.inline } : {}),
         navigationVersion: version.navigationVersion ?? undefined, limitations: version.limitations ?? ['Imported content has not been independently verified.'], redactionStatus: version.redactionStatus ?? 'not-reviewed', previousVersionId: previous,
-        provenance: { imported: true, sourceVersionId: version.id ?? null } };
+        provenance: { imported: true, sourceVersionId: version.id ?? null }, ...(version.origin !== undefined && { origin: importedOrigin(version.origin, 'import', mapping) }) };
       if (text?.bytes) deferred.push(() => lazy(stored, 'text', text));
       if (png?.bytes) deferred.push(() => lazy(stored, 'pngBase64', png));
       return stored;
@@ -984,7 +1089,8 @@ export class WorkspaceService {
   }
   /** Rewrite exported identifiers cited inside free-form text. Captured text and hashed bytes are never altered. */
   rewriteCitations(record, mapping, stats) {
-    const skip = new Set(['id', 'workspaceId', 'evidence', 'materialIds', 'outputs', 'attachments', 'previousVersionId', 'provenance', 'components', 'sha256', 'text', 'pngBase64', 'fileBase64', 'taskId', 'revisions']);
+    const skip = new Set(['id', 'workspaceId', 'evidence', 'materialIds', 'outputs', 'attachments', 'previousVersionId', 'provenance', 'components', 'sha256', 'text', 'pngBase64', 'fileBase64', 'taskId', 'revisions',
+      'origin', 'lastOrigin', 'citations', 'proposal', 'promotedFrom', 'superseded', 'derivedFrom', 'link', 'service', 'subjects', 'resolution', 'items', 'members']);
     const visit = value => {
       if (typeof value === 'string') return value.replace(ID_TOKEN, token => { if (mapping.has(token)) { stats.freeFormCitations++; return mapping.get(token); } stats.unresolvedCitations.add(token); return token; });
       if (Array.isArray(value)) return value.map(visit);
