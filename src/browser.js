@@ -1,11 +1,15 @@
 import electron from 'electron';
 import { AutomationAdmission } from './admission.js';
-import { OBSERVATION_WORLD, MASK_CSS, SENSITIVE_FOCUS_SCRIPT, observationScript, pageString, pngSize } from './page-observation.js';
+import { OBSERVATION_WORLD, MASK_CSS, SENSITIVE_FOCUS_SCRIPT, credentialScript, observationScript, pageString, pngSize } from './page-observation.js';
 
 const mutatingCommands = new Set(['page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.zoom', 'page.allowOnce', 'tabs.close', 'tabs.move', 'tabs.pin']);
 // Commands whose newly observable site block means the requested input did not complete.
 const inputCommands = new Set(['page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.navigate', 'page.forward', 'page.reload']);
 const rawInputCommands = new Set(['page.clickAt', 'page.press']);
+// During a protected operation and its cooldown, automation may only read tab metadata or give up its lease on that tab.
+const PROTECTED_ALLOWED = new Set(['page.inspect', 'tabs.list', 'tabs.release']);
+// Observation routes that would show a brokered secret if the page revealed or copied it as plain text.
+const REVEAL_CHECKED = new Set(['page.snapshot', 'page.screenshot', 'page.pdf']);
 const isHuman = actor => ['human', 'admin'].includes(actor);
 const failure = (code, message, details) => Object.assign(new Error(message), { code, ...(details && { details }) });
 const stale = (reason, message, details = {}) => failure('stale_state', message, { reason, ...details });
@@ -57,8 +61,9 @@ function bounded(promise, timeout = 8000) {
 }
 
 export class Browser {
-  constructor({ window, session, workspaceService, admission = new AutomationAdmission(), electronApi = electron, siteStorage, threatIntel, downloadSafety, dataDirectory } = {}) {
+  constructor({ window, session, workspaceService, admission = new AutomationAdmission(), electronApi = electron, siteStorage, threatIntel, downloadSafety, dataDirectory, protectedCooldownMs = 1500 } = {}) {
     this.electron = electronApi;
+    this.protectedCooldownMs = protectedCooldownMs;
     const directory = dataDirectory ?? workspaceService?.directory;
     this.siteStorage = siteStorage ?? (workspaceService ? new SiteStoragePolicy({ workspaceService, journalPath: directory && join(directory, 'temporary-storage-journal.json'), sessionFor: id => this.partition(id) }) : null);
     this.threats = threatIntel ?? new ThreatIntel({ path: directory && join(directory, 'threat-intel.json') });
@@ -303,7 +308,7 @@ export class Browser {
       loading: contents.isLoading?.() ?? false, canGoBack: contents.navigationHistory?.canGoBack() ?? false,
       canGoForward: contents.navigationHistory?.canGoForward() ?? false, zoom: contents.getZoomFactor?.() ?? 1,
       blocked: tab.blocked ?? null, error: tab.error ?? null, warning: rule?.behavior === 'warn' ? `${rule.hostname}: ${rule.reason}` : null,
-      communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId), protection: this.protection(tab) };
+      communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId), protection: this.protection(tab), protectedOperation: this.protectedReason(tab) };
   }
 
   /** Informational community-list labels (never blocking); each names its list, claim kind and entry. */
@@ -405,6 +410,8 @@ export class Browser {
     contents.on('before-input-event', humanInput);
     contents.on('before-mouse-event', humanInput);
     contents.on('did-navigate', () => {
+      // A new document: credential residue protections keyed to the filled document end here.
+      tab.documentSerial = (tab.documentSerial ?? 0) + 1;
       tab.version++; tab.popupAudits = 0; this.stateBoundary(tab, 'navigation'); tab.observations = null; tab.error = null; tab.blocked = null; tab.securityWarning = null;
       // A gesture authorizes downloads/popups for the document it happened in, not the next page.
       if (typeof this.downloadGrants.get(tab.id) === 'number') this.downloadGrants.delete(tab.id);
@@ -574,6 +581,7 @@ export class Browser {
   async execute(name, args = {}, context = { actor: 'human' }) {
     this.admission.assertAutomationAdmitted(context.actor, name);
     const human = isHuman(context.actor);
+    if (!human) this.assertNotProtected(name, args);
     const tab = mutatingCommands.has(name) ? this.tab(args.tabId) : null;
     const slot = tab ? await this.acquireInput(tab, name, context.actor, human) : null;
     const epoch = tab?.controlEpoch ?? 0;
@@ -590,6 +598,8 @@ export class Browser {
       }
       if (newlyBlocked()) throw this.blockedError(tab.blocked);
       if (!human) this.noteInspection(result, context.actor);
+      // Page-controlled titles of protected tabs are withheld from automation until the protection ends.
+      if (!human && ['page.inspect', 'tabs.list'].includes(name)) for (const item of Array.isArray(result) ? result : [result]) if (item?.protectedOperation) item.title = '[protected operation]';
       return result;
     } catch (error) {
       // An engine abort caused by a rule is reported as a structured block, never a generic failure.
@@ -700,7 +710,7 @@ export class Browser {
   /** Secret-free tab state for handoff records. */
   handoffTabState(tab, actor) {
     const state = this.describe(tab);
-    return { tabId: tab.id, url: state.url, title: pageString(state.title, 200), navigationVersion: tab.version ?? 1, stateEpoch: tab.inspectionEpoch ?? 0,
+    return { tabId: tab.id, url: state.url, title: state.protectedOperation ? '[protected operation]' : pageString(state.title, 200), navigationVersion: tab.version ?? 1, stateEpoch: tab.inspectionEpoch ?? 0,
       controller: state.controller, controlMode: state.controlMode, latestSnapshotId: actor ? tab.observations?.latest.get(actor)?.id ?? null : null };
   }
 
@@ -717,9 +727,71 @@ export class Browser {
     this.tab(tabId).protectedOperation = reason ? String(reason).slice(0, 200) : null;
   }
 
+  /** Exclusive protected operation: active until ended, then a cooldown before automation may observe the tab again. */
+  beginProtected(tab, token, reason) {
+    clearTimeout(tab.protectionTimer);
+    tab.protection = { token, reason: String(reason).slice(0, 200), active: true, until: null };
+  }
+
+  endProtected(tab, token, cooldownMs = this.protectedCooldownMs) {
+    if (tab.protection?.token !== token) return;
+    clearTimeout(tab.protectionTimer);
+    if (!cooldownMs) { tab.protection = null; return; }
+    tab.protection.active = false;
+    tab.protection.until = Date.now() + cooldownMs;
+    tab.protectionTimer = setTimeout(() => { if (tab.protection?.token === token) tab.protection = null; }, cooldownMs);
+    tab.protectionTimer.unref?.();
+  }
+
+  protectedReason(tab) {
+    if (tab.protectedOperation) return tab.protectedOperation;
+    const protection = tab.protection;
+    return protection && (protection.active || protection.until > Date.now()) ? protection.reason : null;
+  }
+
+  /** Every automation command aimed at a protected tab is refused, not only observation routes. */
+  assertNotProtected(name, args) {
+    if (PROTECTED_ALLOWED.has(name)) return;
+    const tab = this.tabs.get(args.tabId ?? (name.startsWith('page.') ? this.activeId : null));
+    const reason = tab && this.protectedReason(tab);
+    if (reason) throw failure('permission_required', `This tab is in a protected operation (${reason}); automation may use only page.inspect until it and its cooldown end`, { credential: 'protected_operation' });
+  }
+
+  /** Run a frame-level credential script: isolated world for the top frame, the frame's own world for subframes. */
+  credentialFrameScript(contents, frame, op, args = {}) {
+    const top = !frame || frame === contents.mainFrame;
+    const code = credentialScript(op, { ...args, isolated: top });
+    if (!top) return frame.executeJavaScript(code, op === 'fill');
+    return typeof contents.executeJavaScriptInIsolatedWorld === 'function'
+      ? contents.executeJavaScriptInIsolatedWorld(OBSERVATION_WORLD, [{ code }], op === 'fill') : contents.executeJavaScript(code, op === 'fill');
+  }
+
+  /**
+   * After a credential fill: page.evaluate (main-world code) is refused on the filled
+   * document, and on any later document in this tab (for example a back/forward cache
+   * restore) while a password or brokered field still holds a value.
+   */
+  async assertNoCredentialResidue(tab) {
+    if (!tab.credentialFill) return;
+    const refuse = () => failure('permission_required', 'page.evaluate is refused on a page that received a brokered credential while the value may still be present; navigate or reload first', { credential: 'credential_residue' });
+    if (tab.credentialFill.document === (tab.documentSerial ?? 0)) throw refuse();
+    const contents = tab.view.webContents;
+    for (const frame of [contents.mainFrame, ...(contents.mainFrame?.framesInSubtree ?? []).filter(item => item !== contents.mainFrame)].filter(Boolean)) {
+      let present = true;
+      try { present = (await bounded(this.credentialFrameScript(contents, frame, 'residue'), 3000)) !== false; } catch { present = !frame.isDestroyed?.(); }
+      if (present) throw refuse();
+    }
+  }
+
   async assertObservable(tab, name, context) {
     if (isHuman(context.actor)) return;
-    if (tab.protectedOperation) throw failure('permission_required', `Page observation is unavailable to automation during a protected operation: ${tab.protectedOperation}`);
+    const reason = this.protectedReason(tab);
+    if (reason) throw failure('permission_required', `Page observation is unavailable to automation during a protected operation: ${reason}`, { credential: 'protected_operation' });
+    if (tab.credentialFill?.document === (tab.documentSerial ?? 0) && REVEAL_CHECKED.has(name)) {
+      let revealed = true;
+      try { revealed = (await bounded(this.credentialFrameScript(tab.view.webContents, null, 'revealed'), 3000)) !== false; } catch { /* Unknown: refuse. */ }
+      if (revealed) throw failure('permission_required', 'The page shows a brokered secret as plain text (revealed or copied field); automation snapshots, screenshots and PDFs are refused on this page', { credential: 'credential_revealed' });
+    }
     if (['page.screenshot', 'page.pdf'].includes(name)) {
       let focused = false;
       try { focused = (await this.observe(tab.view.webContents, null, {}, SENSITIVE_FOCUS_SCRIPT)) === true; } catch { /* Unavailable pages are reported by capture. */ }
@@ -1069,6 +1141,7 @@ export class Browser {
       })()`);
       case 'page.evaluate': {
         await this.assertObservable(tab, name, context);
+        if (!human) await this.assertNoCredentialResidue(tab);
         const result = await contents.executeJavaScript(args.expression, true);
         return result === undefined ? null : JSON.parse(JSON.stringify(result));
       }
@@ -1232,6 +1305,85 @@ export class Browser {
     }
     if (args.ref != null) this.assertRef(tab, args, context.actor);
     if (args.observationId != null) this.assertObservation(tab, args.observationId, context.actor);
+  }
+
+  /**
+   * Protected login operation (ADR-017). Serialized with other tab input and run as an
+   * exclusive protected operation: automation cannot observe or act on the tab until it
+   * and its cooldown end. The browser process verifies the top-level and target-frame
+   * origins, asks `release` (the credential broker) for the secret only for those exact
+   * origins, re-verifies nothing changed, and fills in the top frame's isolated world (or
+   * the authorized subframe). Returns sanitized status only; refusals carry a fixed reason.
+   */
+  async credentialFill(args, context, { credential, release }) {
+    const name = 'credentials.fill';
+    this.admission.assertAutomationAdmitted(context.actor, name);
+    const human = isHuman(context.actor);
+    const tab = this.tab(args.tabId);
+    if (args.workspaceId != null && tab.workspaceId !== args.workspaceId) throw failure('target_mismatch', 'Tab belongs to a different workspace');
+    if (!human) this.assertNotProtected(name, args);
+    const refuse = (reason, message, code = 'target_mismatch') => Object.assign(failure(code, message, { credential: reason }), { notStarted: true });
+    const slot = await this.acquireInput(tab, name, context.actor, human);
+    const token = Symbol('credential fill');
+    let released = false;
+    try {
+      this.checkControl(tab, args, context, name);
+      this.beginProtected(tab, token, 'credential fill');
+      const version = tab.version, epoch = tab.controlEpoch ?? 0;
+      const contents = tab.view.webContents;
+      if (tab.blocked) throw refuse('tab_blocked', 'The tab shows a blocked destination; nothing was filled');
+      if (contents.isLoadingMainFrame?.()) throw refuse('navigation_in_progress', 'The page is still navigating; inspect it again when it has loaded', 'stale_state');
+      if (contents.debugger?.isAttached?.()) throw refuse('debugger_attached', 'A debugger is attached to this tab; credentials are never filled while page internals can be observed', 'permission_required');
+      const main = contents.mainFrame;
+      let topOrigin = null;
+      try { topOrigin = main?.origin && new URL(contents.getURL()).origin === main.origin ? main.origin : null; } catch { topOrigin = null; }
+      if (!topOrigin || !credential.origins.includes(topOrigin)) throw refuse('origin_mismatch', 'This page is not on an origin authorized for this credential; nothing was filled');
+      let target;
+      if (args.ref != null) {
+        const probe = await bounded(this.credentialFrameScript(contents, null, 'probe', { ref: args.ref, origin: topOrigin }), 5000);
+        if (!probe?.ok) throw refuse(probe?.reason === 'origin_mismatch' ? 'frame_origin_not_authorized' : 'not_login_field', 'The ref is not a visible login password field (or its form) on the authorized page', probe?.reason === 'origin_mismatch' ? 'target_mismatch' : 'not_found');
+        target = { frame: main, origin: topOrigin, top: true };
+      } else {
+        const found = [];
+        for (const frame of [main, ...(main.framesInSubtree ?? []).filter(item => item !== main)]) {
+          if (frame.isDestroyed?.()) continue;
+          const origin = frame.origin;
+          let probe = null;
+          try { probe = await bounded(this.credentialFrameScript(contents, frame, 'probe', { origin }), 5000); } catch { continue; }
+          if (probe && (probe.ok || probe.count > 0)) found.push({ frame, origin, top: frame === main, count: probe.ok ? 1 : probe.count, authorized: origin === topOrigin || credential.frameOrigins.includes(origin) });
+        }
+        const authorized = found.filter(item => item.authorized);
+        if (!authorized.length && found.length) throw refuse('frame_origin_not_authorized', 'The only login form is in a frame whose origin is not authorized for this credential; nothing was filled');
+        if (!authorized.length) throw refuse('no_login_form', 'No visible login form (exactly one password field) was found on the authorized page', 'not_found');
+        if (authorized.length > 1 || authorized[0].count > 1) throw refuse('ambiguous_login_form', 'Several login forms are present; pass ref with the password field from your latest page.snapshot', 'ambiguous_target');
+        target = authorized[0];
+      }
+      released = true;
+      const secret = await release(topOrigin, target.origin);
+      const unchanged = () => tab.version === version && contents.mainFrame === main && main.origin === topOrigin && !target.frame.isDestroyed?.() && target.frame.origin === target.origin
+        && !contents.isLoadingMainFrame?.() && !contents.debugger?.isAttached?.();
+      let result;
+      let navigation = null;
+      try {
+        if ((tab.controlEpoch ?? 0) !== epoch) throw refuse('interrupted', 'Tab control changed before the fill; nothing was filled', 'action_interrupted');
+        if (!unchanged()) throw refuse('navigated', 'The page changed between the origin check and the fill; nothing was filled');
+        navigation = this.watchNavigation(tab, tab.blocked);
+        // From here the secret may be in the page: residue protections apply even if the script reports a failure.
+        tab.credentialFill = { document: tab.documentSerial ?? 0, at: Date.now(), top: target.top };
+        result = await bounded(this.credentialFrameScript(contents, target.frame, 'fill', { origin: target.origin, ref: args.ref ?? null, submit: args.submit === true,
+          username: secret.username || '', password: secret.password }), 8000);
+      } catch (error) { navigation?.cancel(); throw error; }
+      finally { secret.password = ''; secret.username = ''; }
+      if (!result?.ok) { navigation.cancel(); throw refuse(['navigated', 'no_login_form', 'ambiguous_login_form', 'not_login_field'].includes(result?.reason) ? result.reason : 'fill_failed', 'The login form changed before the fill; nothing was filled'); }
+      const observed = await navigation.wait(result.submitted === 'requested' ? 1000 : 0);
+      return { status: result.submitted === 'requested' ? 'submitted' : 'filled', fields: result.filled, submit: result.submitted, frame: target.top ? 'top' : 'subframe', origin: target.origin,
+        navigation: !observed ? 'none' : observed.blocked ? 'blocked' : observed.download ? 'download' : observed.committed ? 'committed' : observed.committed === false && !observed.pending ? 'failed' : 'started',
+        outcome: 'unverified', notice: 'Filled inside a protected operation. Whether sign-in succeeded is not verified; inspect the page after the protection cooldown.' };
+    } finally {
+      // The cooldown applies once a secret may have left the broker; a refusal before that ends the protection at once.
+      this.endProtected(tab, token, released ? this.protectedCooldownMs : 0);
+      this.releaseInput(tab, slot);
+    }
   }
 
   closeWorkspace(workspaceId) {

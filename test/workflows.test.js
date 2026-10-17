@@ -178,7 +178,7 @@ test('recording turns a person’s actions into secret-free steps and parameters
   assert.deepEqual(steps, [
     ['command', 'page.navigate', null],
     ['command', 'page.navigate', null],
-    ['instruction', null, null],
+    ['command', 'credentials.fill', null],
     ['command', 'page.fill', '{{field_2}}'],
     ['command', 'page.press', null],
     ['command', 'page.click', null],

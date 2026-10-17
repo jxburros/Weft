@@ -61,7 +61,7 @@ export const workflowStep = z.strictObject({
   recorded: z.strictObject({ source: z.enum(['command', 'navigation', 'page']), at: z.string().max(40), note: z.string().max(500).optional() }).optional().describe('Provenance of a recorded step.'),
 });
 export const credentialRef = z.strictObject({
-  name: parameterName, ref: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/, 'Opaque credential reference from the credential broker; never a secret value'),
+  name: parameterName, ref: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/, 'Opaque credential reference id from credentials.list; never a secret value'),
   purpose: z.string().max(500).optional(),
 });
 const parameters = z.record(parameterName, parameterValue).describe('Workflow parameter values by name.');

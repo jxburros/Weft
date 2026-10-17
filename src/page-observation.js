@@ -12,6 +12,8 @@ export const SENSITIVE_FIELD_CSS = [
   'input[type="password" i]', 'input[autocomplete*="cc-" i]', 'input[autocomplete*="one-time-code" i]',
   'input[autocomplete*="current-password" i]', 'input[autocomplete*="new-password" i]',
   'textarea[autocomplete*="one-time-code" i]', 'textarea[autocomplete*="cc-" i]',
+  // Fields that received a brokered credential stay masked even if the page later reveals them.
+  '[data-weft-credential]',
 ].join(',');
 // User-origin !important rules outrank page styles and are invisible to page DOM observers.
 export const MASK_CSS = `${SENSITIVE_FIELD_CSS} { color: transparent !important; text-shadow: none !important; -webkit-text-fill-color: transparent !important; caret-color: transparent !important; }`;
@@ -38,7 +40,7 @@ function weftObservation(op, args) {
   const sensitiveAutocomplete = /\b(cc-[a-z-]+|one-time-code|current-password|new-password)\b/i;
   const sensitiveName = /pass(word|code|phrase)?|\botp\b|one.?time|\bcvc|\bcvv|\bcsc\b|card.?(number|num|no)\b|security.?code|\bpin\b|\bssn\b|secret|token|api.?key/i;
   const isField = el => ['input', 'textarea', 'select'].includes(el.localName) || el.isContentEditable;
-  const sensitive = el => isField(el) && ((el.localName === 'input' && el.type === 'password')
+  const sensitive = el => isField(el) && (el.hasAttribute('data-weft-credential') || state.credentialFields?.has(el) || (el.localName === 'input' && el.type === 'password')
     || sensitiveAutocomplete.test(el.getAttribute('autocomplete') || '')
     || sensitiveName.test([el.getAttribute('name'), el.id, el.getAttribute('aria-label'), el.getAttribute('placeholder')].filter(Boolean).join(' ')));
   const inputRoles = { button: 'button', submit: 'button', reset: 'button', image: 'button', file: 'button', color: 'button', checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton', search: 'searchbox' };
@@ -240,3 +242,104 @@ export function observationScript(op, args = {}) {
 
 /** Sensitive-focus probe for image observation routes. */
 export const SENSITIVE_FOCUS_SCRIPT = `(() => { const el = document.activeElement; return !!el && el.matches?.(${JSON.stringify(SENSITIVE_FIELD_CSS)}); })()`;
+
+/* eslint-disable no-undef -- executed inside a page frame (isolated world for the top frame). */
+/**
+ * Login-form probe and protected credential fill (ADR-017). `probe` and the
+ * residue checks never see secret values. `fill` receives one secret for one
+ * frame whose origin the browser process already verified, re-checks the
+ * frame origin itself, writes only into a real visible password field (and its
+ * username field) and marks those fields so observation keeps redacting them.
+ */
+async function weftCredential(op, args) {
+  const isolated = args.isolated === true;
+  // The observation world's state is reused for snapshot refs; a subframe's main world gets no Weft state.
+  const state = isolated ? (globalThis.__weftObservation ??= { next: 1, nextFrame: 1, refs: new Map(), ids: new WeakMap(), frames: new WeakMap() }) : null;
+  const visible = el => el.isConnected && el.getClientRects().length > 0
+    && (typeof el.checkVisibility !== 'function' || el.checkVisibility({ visibilityProperty: true, opacityProperty: true }));
+  const usable = el => visible(el) && !el.disabled && !el.readOnly;
+  const isPassword = el => el?.localName === 'input' && el.type === 'password';
+  const textTypes = ['text', 'email', 'tel'];
+  const groups = doc => {
+    const byForm = new Map();
+    for (const el of doc.querySelectorAll('input')) if (isPassword(el) && usable(el)) byForm.set(el.form ?? doc, [...(byForm.get(el.form ?? doc) ?? []), el]);
+    // A login form has exactly one password field; sign-up and change-password forms are not login targets.
+    return [...byForm.entries()].filter(([, list]) => list.length === 1 && !/new-password/i.test(list[0].getAttribute('autocomplete') || ''))
+      .map(([form, [password]]) => ({ form: form === doc ? null : form, password }));
+  };
+  const usernameFor = target => {
+    const scope = target.form ? [...target.form.elements] : [...target.password.ownerDocument.querySelectorAll('input')];
+    const before = scope.filter(el => el.localName === 'input' && textTypes.includes(el.type) && usable(el)
+      && (el.compareDocumentPosition(target.password) & 4));
+    return before.find(el => /\b(username|email)\b/i.test(el.getAttribute('autocomplete') || '')) ?? before.at(-1) ?? null;
+  };
+  const select = () => {
+    if (args.ref) {
+      const el = state?.refs.get(args.ref)?.el.deref();
+      if (!el || !el.isConnected) return { reason: 'not_login_field' };
+      const doc = el.ownerDocument;
+      if (doc.defaultView?.location.origin !== args.origin) return { reason: 'origin_mismatch' };
+      const found = groups(doc).filter(group => group.password === el || (group.form && (group.form === el || (el.localName === 'input' && el.form === group.form))));
+      return found.length === 1 ? { target: found[0] } : { reason: 'not_login_field' };
+    }
+    const found = groups(document);
+    return found.length === 1 ? { target: found[0] } : { reason: found.length ? 'ambiguous_login_form' : 'no_login_form', count: found.length };
+  };
+  const digest = async value => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))].map(byte => byte.toString(16).padStart(2, '0')).join('');
+
+  if (op === 'probe') {
+    const chosen = select();
+    return chosen.target ? { ok: true, count: 1, username: Boolean(usernameFor(chosen.target)) } : { ok: false, reason: chosen.reason, count: chosen.count ?? 0 };
+  }
+  if (op === 'residue') {
+    // Any password field or brokered field that still holds a value in this document.
+    return [...document.querySelectorAll('input, textarea')].some(el => (isPassword(el) || el.hasAttribute('data-weft-credential')) && Boolean(el.value));
+  }
+  if (op === 'revealed') {
+    // A brokered secret now readable as plain text: a revealed (type changed) or copied field value.
+    const digests = state?.credentialDigests;
+    if (!digests?.size) return false;
+    for (const el of document.querySelectorAll('input, textarea')) {
+      if (isPassword(el) || !el.value || el.value.length > 4096) continue;
+      if (digests.has(await digest(el.value))) return true;
+    }
+    return false;
+  }
+  if (op !== 'fill') return { ok: false, reason: 'unsupported' };
+  // The browser process checked this frame's origin; a navigation since then must not receive the secret.
+  if (location.origin !== args.origin) return { ok: false, reason: 'navigated' };
+  const chosen = select();
+  if (!chosen.target) return { ok: false, reason: chosen.reason };
+  const { form, password } = chosen.target;
+  const username = args.username ? usernameFor(chosen.target) : null;
+  const view = password.ownerDocument.defaultView;
+  const setValue = (el, value) => {
+    Object.getOwnPropertyDescriptor(view.HTMLInputElement.prototype, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const filled = [];
+  if (username) { setValue(username, args.username); username.setAttribute('data-weft-credential', 'account'); filled.push('username'); }
+  setValue(password, args.password);
+  password.setAttribute('data-weft-credential', 'secret');
+  filled.push('password');
+  if (state) {
+    (state.credentialFields ??= new WeakSet()).add(password);
+    if (username) state.credentialFields.add(username);
+    if (globalThis.crypto?.subtle) (state.credentialDigests ??= new Set()).add(await digest(args.password));
+  }
+  let submitted = 'not_requested';
+  if (args.submit) {
+    if (form && typeof form.requestSubmit === 'function') { form.requestSubmit(); submitted = 'requested'; }
+    else {
+      const buttons = [...password.ownerDocument.querySelectorAll('button[type="submit" i], input[type="submit" i]')].filter(usable);
+      if (buttons.length === 1) { buttons[0].click(); submitted = 'requested'; } else submitted = 'no_submit_control';
+    }
+  }
+  return { ok: true, filled, submitted };
+}
+/* eslint-enable no-undef */
+
+export function credentialScript(op, args = {}) {
+  return `(${weftCredential.toString()})(${JSON.stringify(op)}, ${JSON.stringify(args)})`;
+}

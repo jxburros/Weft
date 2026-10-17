@@ -684,7 +684,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests" };
@@ -717,6 +717,40 @@ function grantValues(form, current = ws().id) {
   return { purpose: String(form.get("purpose") || "").trim(), scopes, actionClasses: form.getAll("actionClass"), autonomy: form.get("autonomy"), dataAccess: form.getAll("dataAccess"),
     destinations: destinations.length ? destinations : ["*"], maxCommands: limit ? Number(limit) : null,
     workspaceIds, crossWorkspace: workspaceIds.length > 1 && form.get("crossWorkspace") === "yes" };
+}
+const credentialStatus = { active: ["sage", "Active"], revoked: ["clay", "Revoked"], expired: ["clay", "Expired"], integrity_failed: ["clay", "Failed integrity check"] };
+async function manageCredentials() {
+  const [status, rows] = await Promise.all([execute("credentials.status", {}, true), execute("credentials.list", { workspaceId: ws().id, includeInactive: true }, true)]);
+  const protection = status.vault === "unprotected"
+    ? `Operating-system protected storage is unavailable (${status.keyProtection.backend}). Weft will not store sign-ins without it.`
+    : `Secrets are encrypted with a key protected by your operating system (${status.keyProtection.backend}) and handled by a separate broker process.`;
+  const card = (c) => {
+    const [tone, label] = credentialStatus[c.status] || ["", c.status];
+    const controls = c.status === "active"
+      ? action("fill-credential", "Sign in on current tab", "", `data-id="${esc(c.id)}"`) + action("grant-credential", "Allow a task", "", `data-id="${esc(c.id)}"`) + action("revoke-credential", "Revoke", "", `data-id="${esc(c.id)}"`, "secondary danger")
+      : action("delete-credential", "Delete", "trash", `data-id="${esc(c.id)}"`, "secondary danger");
+    return `<article class="record-card"><div class="card-top"><span class="tag ${tone}">${esc(label)}</span><span class="muted">${c.provider === "onepassword" ? "1Password CLI" : "Weft vault"}</span></div><h3>${esc(c.label)}</h3><p>${esc(c.purpose)}</p><small>Account: ${esc(c.account || "not shown")}</small><small>Only for: ${esc(c.origins.join(", "))}${c.frameOrigins.length ? ` · embedded sign-in frames: ${esc(c.frameOrigins.join(", "))}` : ""}</small><small>${c.expiresAt ? `Expires ${esc(new Date(c.expiresAt).toLocaleString())}` : "No expiry"}${c.taskGrants?.length ? ` · ${c.taskGrants.length} task grant(s): ${c.taskGrants.map((g) => `${g.usesLeft} use(s) left`).join(", ")}` : ""}</small><div class="inline-actions">${controls}</div></article>`;
+  };
+  openDialog(`Saved sign-ins in ${ws().name}`,
+    `<p>Agents never receive these secrets. Every use needs your one-time approval or a task grant, and Weft fills only the exact sites listed, never a different site or an embedded frame you did not allow. Weft does not verify whether sign-in succeeded.</p><div class="notice">${esc(protection)} This broker has not had an independent security review, and it cannot protect against malware running as your user.</div>` +
+      (rows.length ? `<div class="record-grid">${rows.map(card).join("")}</div>` : empty("No saved sign-ins", "Add one to let an agent sign in on a specific site after you approve.", "lock")),
+    action("close-dialog", "Close") + action("credential-provider", "1Password CLI") + (status.vault === "unprotected" ? "" : action("new-credential", "Add sign-in", "plus", "", "primary")), true);
+}
+function newCredential() {
+  formDialog("Add a saved sign-in",
+    field("Name", "label", "", "text", true) + field("Purpose (shown to agents)", "purpose", "", "text", true) +
+      area("Sites it may be used on (exact origins, one per line, e.g. https://accounts.example.com)", "origins", "", true) +
+      area("Embedded sign-in frames allowed (optional, exact origins)", "frameOrigins", "") + field("Expires (optional)", "expiresAt", "", "datetime-local") +
+      choice("Where the secret is kept", "provider", [["local", "Weft vault (enter it next, in a separate window)"], ["onepassword", "1Password CLI reference"]], "local") +
+      field("1Password password reference (op://vault/item/field)", "reference", "") + field("1Password username reference (optional)", "usernameReference", "") +
+      field("Account shown to agents (optional; default is a masked username)", "accountLabel", ""),
+    async (v) => {
+      const lines = (text) => String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      const created = await execute("credentials.create", { workspaceId: ws().id, label: v.label, purpose: v.purpose, origins: lines(v.origins), frameOrigins: lines(v.frameOrigins),
+        provider: v.provider, ...(v.expiresAt ? { expiresAt: new Date(v.expiresAt).toISOString() } : {}), ...(v.accountLabel ? { accountLabel: v.accountLabel } : {}),
+        ...(v.provider === "onepassword" ? { reference: { password: v.reference.trim(), ...(v.usernameReference.trim() ? { username: v.usernameReference.trim() } : {}) } } : {}) });
+      toast(`Saved ${created.label}. Agents see it as ${created.account || "an account without an identifier"}.`);
+    }, { save: "Continue", wide: true });
 }
 async function managePlugins() {
   const plugins = await execute("plugins.list", {}, true);
@@ -1094,7 +1128,14 @@ function blockerActions(t) {
   const attrs = `data-id="${esc(t.id)}"`;
   if (["review", "expected_outputs"].includes(b.kind))
     return `<div class="notice">${esc(b.message)}${b.instruction ? `<br>${esc(b.instruction)}` : ""}${b.expectedOutputs ? `<br>Expected: ${esc(b.expectedOutputs)}` : ""}</div><div class="inline-actions">${action("task-review", "Approve", "check", `${attrs} data-step="${esc(b.stepId)}" data-decision="approve"`, "primary")}${b.kind === "review" ? action("task-review-edit", "Edit steps", "note", `${attrs} data-step="${esc(b.stepId)}"`) : ""}${action("task-review", "Reject", "close", `${attrs} data-step="${esc(b.stepId)}" data-decision="reject"`, "secondary danger")}</div>`;
-  if (b.kind === "approval") return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("section", "Review requests", "shield", 'data-section="approvals"')}</div>`;
+  if (b.kind === "approval") {
+    // A sign-in step can instead get a limited task grant for one saved sign-in (ADR 017).
+    const step = (t.plan || []).find((s) => s.id === b.stepId);
+    let credential = step?.command === "credentials.fill" ? step.args?.id : null;
+    const placeholder = /^\{\{\s*(\w+)\s*\}\}$/.exec(credential || "");
+    if (placeholder) credential = t.workflowRun?.parameters?.[placeholder[1]] || null;
+    return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("section", "Review requests", "shield", 'data-section="approvals"')}${credential ? action("task-credential-grant", "Let this task use the sign-in…", "lock", `${attrs} data-credential="${esc(credential)}"`) : ""}</div>`;
+  }
   if (b.kind === "disclosure") return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("task-continue", "Acknowledge destination and continue", "check", `${attrs} data-ack="true"`, "primary")}</div>`;
   if (b.kind === "parameters_required") return `<div class="notice">${esc(b.message)}</div><div class="inline-actions">${action("task-parameters", "Enter values", "lock", `${attrs} data-names="${esc((b.parameters || []).join(","))}"`, "primary")}</div>`;
   if (b.kind === "uncertain") return `<div class="notice">${esc(b.message)}</div>`;
@@ -2189,6 +2230,42 @@ async function act(button) {
     case "manage-clients":
       await manageClients();
       break;
+    case "manage-credentials":
+      await manageCredentials();
+      break;
+    case "new-credential":
+      newCredential();
+      break;
+    case "fill-credential": {
+      if (!active()) throw new Error("Open the sign-in page in a tab first.");
+      const result = await execute("credentials.fill", { id, tabId: active().id, workspaceId: ws().id });
+      toast(result.status === "filled" ? `Filled on ${result.origin}. Check the page and submit when ready.` : `Sign-in ${result.status}.`);
+      break;
+    }
+    case "grant-credential": {
+      const open = records("tasks").filter((t) => !["completed", "failed", "cancelled"].includes(t.status));
+      if (!open.length) throw new Error("Create the task first; grants are bound to one open task.");
+      formDialog("Allow a task to use this sign-in",
+        `<p>The agent working on this task may fill this sign-in without asking each time, only on its listed sites, until the uses run out, the time ends or the task closes.</p>${choice("Task", "taskId", open.map((t) => [t.id, t.title]), open[0].id)}${field("Number of uses", "uses", "1", "number", true)}${field("Minutes", "minutes", "60", "number", true)}`,
+        async (v) => { await execute("credentials.grantTask", { id, taskId: v.taskId, uses: Number(v.uses), minutes: Number(v.minutes) }); toast("Task grant created."); });
+      break;
+    }
+    case "revoke-credential":
+      await execute("credentials.revoke", { id }, true);
+      toast("Revoked. Its secret was discarded and it can never be used again.");
+      await manageCredentials();
+      break;
+    case "delete-credential":
+      await execute("credentials.delete", { id }, true);
+      await manageCredentials();
+      break;
+    case "credential-provider": {
+      const status = await execute("credentials.status", {}, true);
+      formDialog("1Password CLI",
+        `<p>Optional. Weft's credential broker runs the 1Password command-line tool (<code>op read</code>) only when a saved sign-in that uses it is filled. Sign in to the CLI separately. This adapter has been tested only against a stand-in program, not a real 1Password account.</p>${choice("Status", "enabled", [["false", "Off"], ["true", "On"]], String(status.providers.onepassword.enabled))}${field("op program (path or name on PATH)", "command", status.providers.onepassword.command || "op")}`,
+        async (v) => { await execute("credentials.configureProvider", { provider: "onepassword", enabled: v.enabled === "true", command: v.command.trim() || "op" }); });
+      break;
+    }
     case "manage-plugins":
       await managePlugins();
       break;
@@ -2501,6 +2578,18 @@ async function act(button) {
       retryDialog(id, button.dataset.step, t?.status === "uncertain" || Boolean(button.dataset.op));
       break;
     }
+    case "task-credential-grant":
+      formDialog(
+        "Let this task use a saved sign-in",
+        `<p>The task may fill this one saved sign-in on its authorized sites without asking each time, for a limited number of uses. Agents never see the password.</p>${field("Uses (1–20)", "uses", "1", "number", true)}${field("For how many minutes", "minutes", "60", "number", true)}`,
+        async (values) => {
+          await execute("credentials.grantTask", { id: button.dataset.credential, taskId: id, uses: Number(values.uses), minutes: Number(values.minutes) });
+          await execute("tasks.continue", { id, note: "Granted a saved sign-in" });
+          await taskDetail(id);
+        },
+        { save: "Grant and continue" },
+      );
+      break;
     case "task-parameters":
       parametersDialog(id, (button.dataset.names || "").split(",").filter(Boolean));
       break;

@@ -371,6 +371,19 @@ if (process.argv.includes("--gui-workflows")) {
     await click('[data-action="manage-backups"]');
     await until('document.getElementById("dialog-content").textContent.includes("Manual backup")');
     await click('[data-action="close-dialog"]');
+    // Saved sign-ins: the GUI bridge never accepts a secret argument, and without OS-protected storage
+    // (Xvfb has no keyring, so safeStorage reports basic_text) the dialog says so and offers no way to add one.
+    await click("#settings-button");
+    await click('[data-action="manage-credentials"]');
+    await until('document.getElementById("dialog-content")?.textContent.includes("Saved sign-ins")');
+    if ((await run('window.weft.execute("credentials.status", {})')).vault === "unprotected") {
+      assert.match(await run('document.getElementById("dialog-content").textContent'), /will not store sign-ins/);
+      assert.equal(await run('document.querySelector("[data-action=new-credential]")'), null);
+    }
+    const smuggled = await run('window.weft.executeOutcome("credentials.create", {label: "x", purpose: "y", origins: ["https://example.com"], password: "hunter2"})');
+    assert.equal(smuggled.error.code, "invalid_arguments");
+    assert.ok(!JSON.stringify(smuggled).includes("hunter2"));
+    await click('[data-action="close-dialog"]');
     // An agent request waits in the single approval queue until the human decides in browser-owned UI.
     await click("#settings-button");
     await click('[data-action="manage-clients"]');

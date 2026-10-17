@@ -44,7 +44,7 @@ function weftRecorder(nonce) {
     if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement)) return;
     if (element instanceof HTMLInputElement && ['checkbox', 'radio', 'submit', 'button', 'reset', 'file', 'image'].includes(element.type)) return;
     const selector = selectorFor(element);
-    if (selector) send({ type: 'fill', selector, label: label(element), sensitive: sensitive(element) });
+    if (selector) send({ type: 'fill', selector, label: label(element), sensitive: sensitive(element), password: element.type === 'password' || /current-password|new-password/i.test(element.autocomplete || '') });
   }, true);
   return true;
 }

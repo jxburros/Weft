@@ -17,6 +17,7 @@ import { threatCommandDefinitions } from './threat-intel.js';
 import { downloadSafetyCommandDefinitions } from './download-safety.js';
 import { updateCommandDefinitions } from './updater.js';
 import { taskCommandDefinitions } from './task-commands.js';
+import { credentialCommandDefinitions, CREDENTIAL_ADMIN_COMMANDS, CREDENTIAL_REASONS } from './credentials.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -122,6 +123,7 @@ const definitions = {
   ...downloadSafetyCommandDefinitions,
   ...updateCommandDefinitions,
   ...taskCommandDefinitions,
+  ...credentialCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -135,7 +137,7 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
   'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
-  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete', ...CREDENTIAL_ADMIN_COMMANDS,
   'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
@@ -251,6 +253,8 @@ export function toCommandError(error, commandName, input) {
   // Fixed vocabularies only: page-sourced or caller-supplied values never reach error details.
   const word = value => typeof value === 'string' && /^[a-z_]{1,40}$/.test(value);
   if (code === 'stale_state' && word(error.details?.reason)) details.reason = error.details.reason;
+  // Credential refusals carry one fixed status word; never origins, values or page data.
+  if (CREDENTIAL_REASONS.includes(error?.details?.credential)) details.credential = error.details.credential;
   if (code === 'stale_state' && Array.isArray(error.details?.changed)) details.changed = error.details.changed.filter(item => ['url', 'width', 'height', 'scrollX', 'scrollY', 'devicePixelRatio'].includes(item));
   if (code === 'action_interrupted' && error.details) details.interrupted = { command: Object.hasOwn(commands, error.details.command) ? error.details.command : null, cancellable: false };
   if (code === 'tab_busy' && error.details) details.queued = Number.isSafeInteger(error.details.queued) ? error.details.queued : 0;

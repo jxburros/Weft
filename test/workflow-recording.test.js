@@ -82,7 +82,8 @@ if (process.argv.includes('--recording-smoke')) {
       for (const secret of [...secrets, 'abc']) assert.equal(json.includes(secret), false, `recorded workflow contains ${secret}`);
       assert.equal(json.includes('#evil'), false, 'untrusted page events and forged reports are not recorded');
       const summary = workflow.steps.map(step => `${step.kind}:${step.command ?? ''}:${step.args?.selector ?? ''}:${step.args?.value ?? ''}`);
-      assert.deepEqual(summary, [`command:page.navigate::`, 'command:page.fill:#q:{{field_1}}', 'instruction:::', 'command:page.click:#go:'], JSON.stringify(summary));
+      assert.deepEqual(summary, [`command:page.navigate::`, 'command:page.fill:#q:{{field_1}}', 'command:credentials.fill::', 'command:page.click:#go:'], JSON.stringify(summary));
+      assert.equal(workflow.steps[2].args.id, '{{field_2}}', 'the password field becomes a protected login step bound to a saved sign-in chosen at run time');
       assert.equal(workflow.steps[0].args.url, `${origin}/start`);
       assert.equal(workflow.enabled, false);
       assert.deepEqual(workflow.parameters.map(item => item.type), ['string', 'credential']);

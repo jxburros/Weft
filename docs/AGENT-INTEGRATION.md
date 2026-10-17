@@ -221,6 +221,48 @@ requests and check outcomes are recorded in durable activity.
 weft update.status
 ```
 
+## Signing in without seeing secrets
+
+Agents never receive passwords. A person saves a sign-in in Settings > Saved
+sign-ins: the secret is typed into a separate Weft window (never a command
+argument), and agents see an opaque reference with a label, purpose, the exact
+authorized origins (and any allowed embedded sign-in frame origins), a masked
+account identifier, expiry and status:
+
+```sh
+weft credentials.list
+```
+
+Open the login page on an authorized origin, inspect it, then ask Weft to fill
+it. Pass the password field `ref` from your latest `page.snapshot` when the page
+has more than one login form, and `submit: true` to submit:
+
+```json
+{"command":"credentials.fill","args":{"id":"cred_00000000-0000-4000-8000-000000000000","tabId":1,"expectedVersion":4,"submit":true}}
+```
+
+`credentials.fill` is a once-only `credential_use` action: every use needs an
+exact one-time approval (the card shows the credential, masked account and
+origins; a redirect or any argument change needs a new one) unless a person
+granted your task a limited number of uses (`credentials.grantTask`, matched by
+the task id in your connection's grant or the task runtime). Refusals are typed
+with a fixed `error.details.credential` word: `origin_mismatch`,
+`frame_origin_not_authorized`, `navigated`, `no_login_form`,
+`ambiguous_login_form`, `expired`, `revoked`, `integrity_failed` and others. The
+result is sanitized status (`filled`/`submitted`, fields, frame, origin,
+navigation, `outcome: "unverified"`) and does not prove sign-in succeeded.
+
+While the fill runs and for a short cooldown, every other automation command on
+that tab except `page.inspect` is refused with `details.credential:
+"protected_operation"`. Afterwards snapshots and screenshots keep the filled
+fields redacted, `page.evaluate` is refused on that page (`credential_residue`)
+until it navigates, and observation is refused if the page reveals or copies the
+secret into a plain field (`credential_revealed`). Never type a password with
+`page.fill` or ask a person to paste one into chat. Creating, changing,
+revoking and granting credentials are human-only. The broker has not had an
+independent security review; see
+[ADR-017](decisions/017-credential-broker-and-protected-login.md) for its limits.
+
 
 ## Safe retries, atomic batches, previews and search
 

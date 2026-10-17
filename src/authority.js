@@ -121,6 +121,12 @@ export class Authority {
     let approvalId;
     let approvedOnce = false;
     if (result.decision === 'approval' && deferApproval) return { ...result, actionClass, level: effective, destination };
+    // A human task grant (credential broker) is the only non-approval evidence for a once-only class: bound to one task, credential and use count.
+    let grantId;
+    if (result.decision === 'approval' && actionClass === 'credential_use' && this.taskGrant) {
+      const grant = this.taskGrant(command, args, { ...context, taskId: this.clients?.current?.(context.clientId)?.taskId ?? context.taskId }, target);
+      if (grant?.grantId) { grantId = grant.grantId; result = { decision: 'auto_preapproved', reason: 'task_credential_grant' }; }
+    }
     if (result.decision === 'approval') {
       const fingerprint = approvalFingerprint({ command, args, actor: base.actor, workspaceId: target.workspaceId, tabId: target.tabId, destination });
       const match = this.approvals.match({ fingerprint, actor: base.actor, command, workspaceId: target.workspaceId, destination, taskId: context.taskId, actionClass }, id => this.taskOpen(id));
@@ -128,7 +134,8 @@ export class Authority {
       if (result.decision === 'approval') {
         const request = this.approvals.request({ fingerprint, actor: base.actor, clientId: context.clientId, command, args, actionClass,
           categories: sensitiveCategoriesForCommand(command), workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId, destination, reason: result.reason, level: effective,
-          ...(context.sensitiveValues?.length ? { preview: withholdValues(previewArgs(args), context.sensitiveValues) } : {}) });
+          previewExtra: this.approvalPreview?.(command, args) ?? null,
+          ...(context.sensitiveValues?.length ? { preview: { ...withholdValues(previewArgs(args), context.sensitiveValues), ...(this.approvalPreview?.(command, args) ?? {}) } } : {}) });
         this.record({ ...base, type: 'approval', decision: 'approval', reason: result.reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args) });
         throw authorityError('approval_required', `${command} needs human approval in the Weft window (request ${request.id}). Retry the identical command after approval; changed arguments need a new approval.`,
           { decision: 'approval', reason: result.reason, actionClass, level: effective, approvalId: request.id, fingerprint, expiresAt: new Date(request.expiresAt).toISOString() });
@@ -136,7 +143,7 @@ export class Authority {
     }
     if (result.decision === 'deny') throw deny(result.reason, `Autonomy level ${effective} does not permit ${actionClass} (${command})${workspaceCap ? '; the workspace has an autonomy ceiling' : ''}`, { level: effective });
     if (context.clientId && countUse) this.clients.recordUse?.(context.clientId);
-    return { ...result, actionClass, level: effective, approvalId, approvedOnce, destination };
+    return { ...result, actionClass, level: effective, approvalId, approvedOnce, destination, ...(grantId && { grantId }) };
   }
 
   /**

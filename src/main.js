@@ -20,6 +20,8 @@ import { WorkspaceExtensions } from './extensions.js';
 import { PluginRegistry } from './plugins/registry.js';
 import { UpdateService, createElectronTransport, createWindowsSignatureVerifier, detectInstall } from './updater.js';
 import { WEFT_VERSION } from './version.js';
+import { CredentialService, safeStorageProtector } from './credentials.js';
+import { promptCredentialSecret } from './credential-entry.js';
 
 let browser;
 let workspace;
@@ -31,6 +33,7 @@ let lists;
 let listTimer;
 let plugins;
 let updates;
+let credentials;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const relay = new TurnRelay();
@@ -133,7 +136,12 @@ app.whenReady().then(async () => {
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, onEvent: event => events.emit('event', event) });
+  // Credential vault and broker (ADR-017): outside workspace-data, so workspace exports and backups never include it.
+  // The broker process starts at launch only when a vault already exists.
+  credentials = new CredentialService({ directory: join(app.getPath('userData'), 'credentials'), protector: safeStorageProtector(safeStorage), browser, workspace,
+    promptSecret: request => promptCredentialSecret(window, request) });
+  credentials.start().catch(error => console.warn(`Weft credential vault: ${error.message}`));
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, admission, onEvent: event => events.emit('event', event) });
   // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain.
   await dispatch.tasks.init();
   dispatch.tasks.start();
@@ -171,6 +179,7 @@ app.on('before-quit', event => {
   updates?.stopBackground();
   server?.close();
   providers?.close();
+  credentials?.close();
   relay.close();
   plugins?.close();
   dispatch?.tasks?.close();

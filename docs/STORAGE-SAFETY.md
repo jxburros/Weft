@@ -133,6 +133,7 @@ These are deliberately **not** in a backup and a restore leaves them as they are
 | Hash-chained activity log | Append-only evidence. Rewinding it would break or hide the chain; a restore is appended to it as a `backups.restore` entry with the backup ID, and `activity.verify` stays intact. |
 | Approvals, autonomy policy, agent connection grants | Authority must never be widened by old data: a restore could revive revoked grants, used approvals or higher autonomy. Current authority applies to restored workspaces. |
 | Model connections and keys | Credentials; never copied into backups. |
+| Credential vault, wrapped key, task grants (`<profile>/credentials`) | Saved sign-ins live outside `workspace-data` (ADR-017), so backups, exports and packages never contain them; restoring cannot revive a revoked sign-in. |
 | Temporary-storage journal, threat intelligence, download scanner settings, quarantine | Current browser security state. Rewinding could restore stale threat lists or forget origins that still need erasing. |
 | Plugin grants, extension installs | Enablement is a human decision bound to code digests; a restore must not re-enable revoked code. |
 | Updater state | Tracks installed and staged application versions, not project data. |

@@ -18,8 +18,8 @@ import { sanitizeUrl } from './workspace.js';
 export const RUNTIME_COMMANDS = Object.freeze(Object.keys(taskCommandDefinitions));
 const FORBIDDEN_STEP_COMMANDS = new Set([...RUNTIME_COMMANDS, 'chat.send', 'chat.cancel', 'handoffs.create', 'browser.close', 'browser.emergencyStop', 'browser.resumeAutomation']);
 // Browser commands that need a current inspection and expectedVersion from an automation identity.
-const INPUT_COMMANDS = new Set(['page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.zoom', 'tabs.close', 'tabs.move', 'tabs.pin']);
-const TAB_COMMANDS = name => name.startsWith('page.') || name === 'artifacts.capture';
+const INPUT_COMMANDS = new Set(['credentials.fill', 'page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.zoom', 'tabs.close', 'tabs.move', 'tabs.pin']);
+const TAB_COMMANDS = name => name.startsWith('page.') || ['artifacts.capture', 'credentials.fill'].includes(name);
 // Refusals that happen before any effect: the step did not run and may be attempted again safely.
 const NOT_STARTED_CODES = new Set(['approval_required', 'permission_required', 'human_required', 'site_blocked', 'stale_state', 'lease_conflict', 'tab_busy', 'ambiguous_target',
   'target_mismatch', 'invalid_arguments', 'unknown_command', 'not_found', 'idempotency_conflict', 'unsupported_capability']);
@@ -32,10 +32,26 @@ const typed = (code, message, extra = {}) => Object.assign(new Error(message), {
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sensitiveName = /pass|card|cvv|cvc|otp|one-time|ssn|token|secret|pin\b|security.?code/i;
 
-/** Credential references are opaque. Until the credential broker (#6) exists, no reference resolves. */
+/** Credential references are opaque. Without a credential broker (#6, ADR 017) no reference resolves. */
 export const unavailableCredentials = Object.freeze({
-  status: () => ({ available: false, reason: 'The credential broker is not available in this version; credential references cannot be resolved yet.' }),
+  status: () => ({ available: false, reason: 'The credential broker is not available in this process; credential references cannot be resolved.' }),
 });
+/**
+ * Adapter over the credential broker (src/credentials.js): a reference resolves when it is an active
+ * credential id of the same workspace. Only metadata is read; secrets never leave the broker here.
+ */
+export function brokerCredentials(service) {
+  return {
+    refresh: () => service.refresh?.().catch(() => {}),
+    status(ref, { workspaceId } = {}) {
+      const entry = service.cache?.find(item => item.id === ref);
+      if (!entry) return { available: false, reason: `No saved sign-in ${ref} exists in the credential vault` };
+      if (workspaceId && entry.workspaceId !== workspaceId) return { available: false, reason: 'The saved sign-in belongs to another workspace' };
+      if (entry.state !== 'active') return { available: false, reason: `The saved sign-in is ${entry.state}` };
+      return { available: true, label: entry.label, account: entry.account ?? null };
+    },
+  };
+}
 
 export function normalizeParameters(list = []) {
   const seen = new Set();
@@ -67,6 +83,11 @@ export function substitute(value, values) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substitute(item, values)]));
   return value;
 }
+/** Validation sample: the runtime supplies the workspace and the task's tab when a step omits them. */
+function withRuntimeTargets(command, args) {
+  const properties = commands[command]?.inputSchema?.properties ?? {};
+  return { ...(properties.workspaceId && args.workspaceId == null ? { workspaceId: 'ws_runtime' } : {}), ...(properties.tabId && args.tabId == null && TAB_COMMANDS(command) ? { tabId: 1 } : {}), ...args };
+}
 /** Expected-URL patterns: origin and path, `*` matches any characters; query and fragment are ignored. */
 export function matchUrlPattern(pattern, url) {
   let target;
@@ -78,7 +99,8 @@ export function matchUrlPattern(pattern, url) {
 
 export class TaskRuntime {
   constructor({ workspace, browser = null, admission = null, clients = null, providers = null, credentials = unavailableCredentials, onEvent = () => {}, pollMs = 30000 } = {}) {
-    Object.assign(this, { workspace, browser, admission, clients, providers, credentials, onEvent, pollMs });
+    Object.assign(this, { workspace, browser, admission, clients, providers, onEvent, pollMs });
+    this.credentials = credentials?.execute && Array.isArray(credentials.cache) ? brokerCredentials(credentials) : credentials ?? unavailableCredentials;
     this.active = new Map();
     this.sensitive = new Map();
     this.recordings = new Map();
@@ -192,7 +214,7 @@ export class TaskRuntime {
         if (FORBIDDEN_STEP_COMMANDS.has(step.command)) fail(`${step.command} cannot be a command step; use a model or handoff step, or the task controls`, 'command');
         try { rejectSecretKeys(step.args ?? {}); } catch (error) { fail(error.message, 'args'); }
         if (!placeholders(step.args ?? {}).size) {
-          try { validateCommand(step.command, step.args ?? {}); } catch (error) { fail(error.message, 'args'); }
+          try { validateCommand(step.command, withRuntimeTargets(step.command, step.args ?? {})); } catch (error) { fail(error.message, 'args'); }
         } else if (!allowPlaceholders) fail('{{placeholders}} are available only in workflows', 'args');
       }
       if (step.expect?.urlPattern && !/^https?:\/\/[^/\s]+/.test(step.expect.urlPattern)) fail('urlPattern must start with an http(s) origin', 'expect.urlPattern');
@@ -219,8 +241,8 @@ export class TaskRuntime {
       case 'tasks.review': return this.review(args, context);
       case 'tasks.reconcile': return this.reconcile(args, context);
       case 'tasks.retryStep': return this.retryStep(args, context);
-      case 'workflows.run': return this.runWorkflow(args, context);
-      case 'workflows.validate': return this.validateWorkflow(this.workspace.record('workflows', args.id, context.workspaceId ? { workspaceId: context.workspaceId } : {}), args.parameters);
+      case 'workflows.run': await this.credentials.refresh?.(); return this.runWorkflow(args, context);
+      case 'workflows.validate': await this.credentials.refresh?.(); return this.validateWorkflow(this.workspace.record('workflows', args.id, context.workspaceId ? { workspaceId: context.workspaceId } : {}), args.parameters);
       case 'workflows.recordStart': return this.recordStart(args, context);
       case 'workflows.recordStop': return this.recordStop(args, context);
     }
@@ -857,9 +879,15 @@ export class TaskRuntime {
     try { parameters = normalizeParameters(workflow.parameters); } catch (error) { errors.push(error.message); }
     const declared = new Map(parameters.map(item => [item.name, item]));
     const resolved = {};
+    // Workflow-level credential references are fixed credential parameters: {{name}} resolves to the opaque id.
+    for (const ref of workflow.credentialRefs ?? []) {
+      if (declared.has(ref.name)) { errors.push(`Credential reference ${ref.name} has the same name as a parameter`); continue; }
+      declared.set(ref.name, { name: ref.name, label: ref.purpose || ref.name, type: 'credential', required: true, fixed: true });
+      resolved[ref.name] = ref.ref;
+    }
     if (values) {
       try { rejectSecretKeys(values); } catch { errors.push('Parameter names must not be secret field names; use a credential parameter for credentials'); }
-      for (const name of Object.keys(values)) if (!declared.has(name)) errors.push(`Unknown parameter ${name}`);
+      for (const name of Object.keys(values)) if (!declared.has(name) || declared.get(name).fixed) errors.push(`Unknown parameter ${name}`);
     }
     for (const parameter of parameters) {
       const supplied = values && Object.hasOwn(values, parameter.name) ? values[parameter.name] : parameter.default;
@@ -867,7 +895,6 @@ export class TaskRuntime {
       const problem = this.checkParameter(parameter, supplied, workflow.workspaceId);
       if (problem) errors.push(`Parameter ${parameter.name}: ${problem}`);
       else resolved[parameter.name] = parameter.type === 'number' ? Number(supplied) : parameter.type === 'boolean' ? supplied === true || supplied === 'true' : supplied;
-      if (parameter.type === 'credential') warnings.push(`Credential parameter ${parameter.name} is validated by reference only; no step can use credentials until protected login operations exist.`);
     }
     for (const site of workflow.allowedSites ?? []) if (!validDestinationPattern(site)) errors.push(`Allowed site ${site} is not a valid destination pattern (use example.com, *.example.com or https://example.com)`);
     for (const id of workflow.materialIds ?? []) if (!this.workspace.data.materials.some(item => item.id === id && item.workspaceId === workflow.workspaceId)) errors.push(`Required material ${id} is missing from this workspace`);
@@ -880,8 +907,10 @@ export class TaskRuntime {
       const used = [...placeholders([step.args, step.prompt, step.instruction, step.title])];
       for (const name of used) {
         if (!declared.has(name)) issues.push(`uses undeclared parameter {{${name}}}`);
-        else if (values && declared.get(name).type !== 'credential' && !Object.hasOwn(resolved, name)) issues.push(`parameter {{${name}}} has no value`);
-        else if (declared.get(name).type === 'credential' && placeholders(step.args ?? {}).has(name)) issues.push(`credential parameter {{${name}}} cannot be placed in command arguments; credentials are never typed by automation`);
+        else if (values && !Object.hasOwn(resolved, name)) issues.push(`parameter {{${name}}} has no value`);
+        else if (declared.get(name).type === 'credential' && placeholders(step.args ?? {}).has(name) && !(step.command === 'credentials.fill' && step.args?.id === `{{${name}}}` && !placeholders({ ...step.args, id: '' }).has(name))) {
+          issues.push(`credential parameter {{${name}}} can only be the id of a credentials.fill step; credentials are never typed by automation`);
+        }
       }
       const kind = step.kind && step.kind !== 'instruction' ? step.kind : 'review';
       if (kind === 'command') {
@@ -890,7 +919,7 @@ export class TaskRuntime {
         else if (spec.humanOnly || spec.actionClass === 'administration') issues.push(`${step.command} is human-only`);
         else if (FORBIDDEN_STEP_COMMANDS.has(step.command)) issues.push(`${step.command} cannot be a workflow step`);
         else if (values && !issues.length) {
-          try { validateCommand(step.command, substitute(step.args ?? {}, { ...resolved, ...Object.fromEntries(parameters.filter(item => item.type !== 'credential' && !Object.hasOwn(resolved, item.name)).map(item => [item.name, 'x'])) })); }
+          try { validateCommand(step.command, withRuntimeTargets(step.command, substitute(step.args ?? {}, { ...resolved, ...Object.fromEntries(parameters.filter(item => !Object.hasOwn(resolved, item.name)).map(item => [item.name, item.type === 'credential' ? 'cred_00000000-0000-4000-8000-000000000000' : 'x'])) }))); }
           catch (error) { issues.push(`arguments: ${error.message}`); }
         }
         const url = step.args?.url;
@@ -916,7 +945,7 @@ export class TaskRuntime {
       case 'boolean': return [true, false, 'true', 'false'].includes(value) ? null : 'expected true or false';
       case 'url': try { const url = new URL(String(value)); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? null : 'expected an http(s) URL without credentials'; } catch { return 'expected an http(s) URL'; }
       case 'enum': return (parameter.options ?? []).includes(String(value)) ? null : `expected one of ${(parameter.options ?? []).join(', ')}`;
-      case 'credential': { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(value)) return 'expected an opaque credential reference'; const status = this.credentialStatus(value, workspaceId); return status.available ? null : status.reason; }
+      case 'credential': { if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(value)) return 'expected an opaque credential reference'; const status = this.credentialStatus(value, workspaceId); return status.available ? null : status.reason; }
       default: return typeof value === 'string' || typeof value === 'number' ? (String(value).length <= 10000 ? null : 'too long') : 'expected text';
     }
   }
@@ -990,10 +1019,12 @@ export class TaskRuntime {
     recording.expectNext = null;
     return step;
   }
-  addParameter(recording, hint, sensitive) {
+  addParameter(recording, hint, sensitive, password = false) {
     const name = `field_${recording.parameters.length + 1}`;
-    recording.parameters.push(sensitive
-      ? { name, label: String(hint || name).slice(0, 200), type: 'credential', required: false, description: 'Sensitive field: a person fills it; a credential reference will be usable once protected login operations exist.' }
+    recording.parameters.push(password
+      ? { name, label: String(hint || name).slice(0, 200), type: 'credential', required: true, description: 'Saved sign-in (credential reference id from credentials.list) used to fill the login form.' }
+      : sensitive
+      ? { name, label: String(hint || name).slice(0, 200), type: 'credential', required: false, description: 'Sensitive field: a person fills it during the run.' }
       : { name, label: String(hint || name).slice(0, 200), type: 'string', required: true, description: 'Value typed during recording was not stored; supply it when running.' });
     return name;
   }
@@ -1018,9 +1049,17 @@ export class TaskRuntime {
     if (event.type === 'click') { recording.steps.push(this.recordedStep(recording, { command: 'page.click', args: { selector: event.selector }, title: `Click ${event.label || event.selector}`.slice(0, 240), source })); recording.lastInputAt = Date.now(); }
     if (event.type === 'fill') {
       const sensitive = Boolean(event.sensitive) || sensitiveName.test(`${event.selector} ${event.label ?? ''}`);
-      const name = this.addParameter(recording, event.label || event.selector, sensitive);
+      const password = sensitive && (event.password === true || /pass/i.test(`${event.selector} ${event.label ?? ''}`));
+      const name = this.addParameter(recording, event.label || event.selector, sensitive, password);
+      // A password field becomes a protected login step: the credential broker fills it from a saved sign-in chosen at run time.
+      if (password) {
+        if (recording.steps.at(-1)?.command !== 'credentials.fill') recording.steps.push(this.recordedStep(recording, { command: 'credentials.fill', args: { id: `{{${name}}}` }, title: 'Sign in with a saved sign-in', source,
+          note: 'Login field: Weft fills it from a saved sign-in you choose when running; the typed password was not recorded.' }));
+        else recording.parameters.pop();
+        return;
+      }
       const step = this.recordedStep(recording, { command: 'page.fill', args: { selector: event.selector, value: `{{${name}}}` }, title: `Fill ${event.label || event.selector}`.slice(0, 240), source,
-        note: sensitive ? 'Sensitive field: replaced by a credential parameter; automation cannot type credentials.' : undefined });
+        note: sensitive ? 'Sensitive field: a person fills it; it was never recorded and is not typed by automation.' : undefined });
       if (sensitive) step.kind = 'instruction', step.instruction = `Fill ${event.label || event.selector} yourself (sensitive field; never recorded or typed by automation).`, step.reviewRequired = true, delete step.command, delete step.args;
       recording.steps.push(step);
     }
@@ -1031,7 +1070,7 @@ export class TaskRuntime {
     const selector = typeof event.selector === 'string' && event.selector.length <= 1000 ? event.selector : null;
     const label = typeof event.label === 'string' ? event.label.replace(/[\u0000-\u001f]/g, ' ').slice(0, 120) : '';
     if (!['click', 'fill'].includes(event.type) || !selector) return;
-    this.recordElement(recording, { type: event.type, selector, label, sensitive: event.sensitive === true }, 'page');
+    this.recordElement(recording, { type: event.type, selector, label, sensitive: event.sensitive === true, password: event.password === true }, 'page');
   }
   recordNavigation({ tabId, url }) {
     const recording = this.recordings.get(tabId);

@@ -114,7 +114,7 @@ export class ApprovalQueue {
     this.onChange();
     return item.status === 'approved';
   }
-  request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level, preview: shown }) {
+  request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level, preview: shown, previewExtra = null }) {
     this.expire();
     const existing = this.items.find(item => item.status === 'pending' && item.fingerprint === fingerprint && item.actor === actor);
     if (existing) return structuredClone(existing);
@@ -125,7 +125,7 @@ export class ApprovalQueue {
     const now = this.clock();
     const item = { id: `appr_${randomUUID()}`, status: 'pending', fingerprint, actor, clientId: clientId ?? null, command, actionClass, categories: categories ?? [], level: level ?? null,
       workspaceId: workspaceId ?? null, tabId: tabId ?? null, taskId: taskId ?? null, destinationOrigin: origin(destination), destination: destination ? minimizeUrl(destination) : null,
-      reason, summary: summarizeArgs(args), preview: shown ?? preview(args), createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null };
+      reason, summary: summarizeArgs(args), preview: shown ?? { ...preview(args), ...(previewExtra ?? {}) }, createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null };
     this.items.push(item);
     this.save();
     this.onChange();

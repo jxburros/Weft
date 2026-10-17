@@ -194,3 +194,14 @@ Human-only describes an unconditional administration gate. Every other non-human
 | update.install | Human installs the verified staged update now; Weft hands off to the platform installer and restarts | administration | Human only | GUI IPC, CLI, REST, MCP |
 | update.rollback | Human restores the retained previous verified version where the platform allows | administration | Human only | GUI IPC, CLI, REST, MCP |
 | update.configure | Human turns disclosed background checks on or off (at most daily; they only download and stage) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.status | Describe the credential vault: OS key protection, isolated broker process, external vault providers and limits (never secrets) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| credentials.list | List credential references in a workspace: opaque ids, labels, purposes, exact authorized origins, masked account identifiers, expiry and status (never secret values) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| credentials.get | Read one credential reference (metadata only, never the secret) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| credentials.fill | Fill the login form on an exactly authorized origin from a credential reference inside an exclusive protected operation (needs an exact one-time human approval or a task grant); returns sanitized status only | credential_use | Policy checked | GUI IPC, CLI, REST, MCP |
+| credentials.create | Human creates a credential reference; the secret is typed only into a browser-owned dialog, never passed as a command argument | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.update | Human changes a credential reference label, purpose, authorized origins, frames or expiry (the entry is re-sealed) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.revoke | Human revokes a credential reference permanently; its stored secret is discarded and task grants end | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.delete | Human deletes a credential reference and its encrypted record | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.grantTask | Human lets one open task fill one credential a limited number of times without a per-use approval | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.revokeGrant | Human revokes a task credential grant | administration | Human only | GUI IPC, CLI, REST, MCP |
+| credentials.configureProvider | Human enables or disables the external 1Password CLI (op) vault adapter (implemented against a test double; not validated with a real account) | administration | Human only | GUI IPC, CLI, REST, MCP |
