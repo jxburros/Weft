@@ -1616,3 +1616,54 @@ button { min-height: 24px; min-width: 24px; }
 .address-field button.has-activity {
   color: var(--brand);
 }
+/* Offline archive preview and redaction editor (#16, #17). */
+.preview-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-16);
+  padding: var(--space-10) var(--space-16);
+  border-bottom: 1px solid var(--border);
+  background: var(--clay-soft);
+  color: var(--ink);
+  font-size: var(--font-size-13);
+}
+.preview-banner small {
+  display: block;
+  color: var(--muted);
+  font-size: var(--font-size-12);
+}
+.preview-area {
+  height: calc(100% - 64px);
+}
+.redact-canvas {
+  position: relative;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+}
+.redact-canvas img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-6);
+}
+.redact-box {
+  position: absolute;
+  background: var(--ink);
+  border: 1px solid var(--danger);
+  pointer-events: none;
+}
+.diff .diff-added {
+  color: var(--sage);
+  background: var(--sage-soft);
+}
+.diff .diff-removed {
+  color: var(--danger);
+  background: var(--clay-soft);
+  text-decoration: line-through;
+}
+.diff .diff-gap {
+  color: var(--muted);
+}

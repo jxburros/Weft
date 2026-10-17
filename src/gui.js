@@ -92,7 +92,8 @@ let tabs = [],
   refreshPromise = null,
   lastSnapshot = "",
   toastTimer,
-  dialogRestore;
+  dialogRestore,
+  previewing = null;
 const ws = () =>
   state.workspaces.find((w) => w.id === state.activeWorkspaceId) || {
     name: "My workspace",
@@ -154,6 +155,8 @@ function errorMessage(e) {
 }
 async function execute(name, args = {}, quiet = false) {
   if (!quiet) $("status").textContent = `Running ${name}…`;
+  // Leaving the offline archive preview for live browsing closes it first.
+  if (previewing && ["page.navigate", "tabs.new", "tabs.activate", "page.back", "page.forward", "page.reload", "workspaces.switch"].includes(name)) await closePreview(true);
   try {
     const result = await window.weft.execute(name, args);
     if (!quiet) {
@@ -365,6 +368,11 @@ function overview() {
  ${artifacts.length ? `<section class="settings-section"><div class="section-heading"><h2>Recently saved captures</h2>${action("section", "Open collection", "arrow", 'data-section="artifacts"', "text-button")}</div><div class="record-grid">${artifacts.map(artifactCard).join("")}</div></section>` : ""}<div class="workspace-footnote icon">${icon("lock")} Local by default. Your workspace stays ready for your next session.</div>`;
 }
 function renderContent() {
+  if (section === "browse" && previewing) {
+    $("content").innerHTML = `<div class="preview-banner" role="status"><div><strong>Offline archive preview</strong> · ${esc(previewing.title || "Saved capture")} · version ${esc(String(previewing.number || ""))}<small>Archived content only. Scripts, network requests, navigation, form submission, popups and downloads are disabled. ${esc(String(previewing.unavailable?.length || 0))} damaged and ${esc(String(previewing.notStored || 0))} unarchived resources are not shown.</small></div>${action("close-preview", "Close preview", "close")}</div><div id="preview-area" class="preview-area" aria-label="Archived page (not live)"></div>`;
+    layout();
+    return;
+  }
   if (section === "browse") {
     const tab = active();
     $("content").innerHTML =
@@ -678,7 +686,8 @@ function settingsView() {
     `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
-const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests" };
+const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests", restricted_original: "Restricted capture originals (each read still needs your approval)" };
+const defaultDataAccess = Object.keys(dataClassLabels).filter((key) => key !== "restricted_original");
 const levelLabels = { observe: "Observe only", assist: "Ask before any change", scoped: "Local changes; ask before external actions", autonomous: "Standing approval for external actions" };
 function grantCard(grant) {
   const names = grant.workspaceIds.map((id) => state.workspaces.find((w) => w.id === id)?.name || id).join(", ");
@@ -697,7 +706,7 @@ async function manageClients() {
 function grantFields(grant = {}) {
   const others = state.workspaces.filter((w) => !w.archived && w.id !== ws().id);
   const checked = (list, value, fallback) => ((list ?? fallback).includes(value) ? "checked" : "");
-  return `${field("Purpose", "purpose", grant.purpose || "")}<fieldset><legend>Allowed actions</legend><label><input type="checkbox" name="scope" value="read" ${checked(grant.scopes, "read", ["read"])}> Read workspace records and page evidence</label><label><input type="checkbox" name="scope" value="records.write" ${checked(grant.scopes, "records.write", [])}> Create, edit, and delete records</label><label><input type="checkbox" name="scope" value="tabs.control" ${checked(grant.scopes, "tabs.control", [])}> Control tabs, navigate, and interact with pages</label><label><input type="checkbox" name="actionClass" value="code_exec" ${checked(grant.actionClasses, "code_exec", [])}> Run page scripts (always an external action)</label><label><input type="checkbox" name="actionClass" value="cloud_spend" ${checked(grant.actionClasses, "cloud_spend", [])}> Send messages to model connections</label></fieldset>${choice("Autonomy", "autonomy", Object.entries(levelLabels), grant.autonomy || "scoped")}<fieldset><legend>Data this agent may read</legend>${Object.entries(dataClassLabels).map(([v, l]) => `<label><input type="checkbox" name="dataAccess" value="${v}" ${checked(grant.dataAccess, v, Object.keys(dataClassLabels))}> ${esc(l)}</label>`).join("")}</fieldset>${area("Allowed sites (one per line, e.g. https://docs.example.com or *.example.org; blank for any site)", "destinations", (grant.destinations || []).filter((d) => d !== "*").join("\n"))}${field("Command limit (blank for none)", "maxCommands", grant.maxCommands ?? "", "number")}${others.length ? `<fieldset><legend>Additional workspaces</legend>${others.map((w) => `<label><input type="checkbox" name="workspace" value="${esc(w.id)}" ${checked(grant.workspaceIds, w.id, [])}> ${esc(w.name)}</label>`).join("")}<label><input type="checkbox" name="crossWorkspace" value="yes" ${grant.crossWorkspace ? "checked" : ""}> I explicitly allow this agent to work across these workspaces</label></fieldset>` : ""}`;
+  return `${field("Purpose", "purpose", grant.purpose || "")}<fieldset><legend>Allowed actions</legend><label><input type="checkbox" name="scope" value="read" ${checked(grant.scopes, "read", ["read"])}> Read workspace records and page evidence</label><label><input type="checkbox" name="scope" value="records.write" ${checked(grant.scopes, "records.write", [])}> Create, edit, and delete records</label><label><input type="checkbox" name="scope" value="tabs.control" ${checked(grant.scopes, "tabs.control", [])}> Control tabs, navigate, and interact with pages</label><label><input type="checkbox" name="actionClass" value="code_exec" ${checked(grant.actionClasses, "code_exec", [])}> Run page scripts (always an external action)</label><label><input type="checkbox" name="actionClass" value="cloud_spend" ${checked(grant.actionClasses, "cloud_spend", [])}> Send messages to model connections</label></fieldset>${choice("Autonomy", "autonomy", Object.entries(levelLabels), grant.autonomy || "scoped")}<fieldset><legend>Data this agent may read</legend>${Object.entries(dataClassLabels).map(([v, l]) => `<label><input type="checkbox" name="dataAccess" value="${v}" ${checked(grant.dataAccess, v, defaultDataAccess)}> ${esc(l)}</label>`).join("")}</fieldset>${area("Allowed sites (one per line, e.g. https://docs.example.com or *.example.org; blank for any site)", "destinations", (grant.destinations || []).filter((d) => d !== "*").join("\n"))}${field("Command limit (blank for none)", "maxCommands", grant.maxCommands ?? "", "number")}${others.length ? `<fieldset><legend>Additional workspaces</legend>${others.map((w) => `<label><input type="checkbox" name="workspace" value="${esc(w.id)}" ${checked(grant.workspaceIds, w.id, [])}> ${esc(w.name)}</label>`).join("")}<label><input type="checkbox" name="crossWorkspace" value="yes" ${grant.crossWorkspace ? "checked" : ""}> I explicitly allow this agent to work across these workspaces</label></fieldset>` : ""}`;
 }
 function grantValues(form, current = ws().id) {
   const destinations = String(form.get("destinations") || "").split(/\n+/).map((v) => v.trim()).filter(Boolean);
@@ -907,13 +916,14 @@ async function sha256Hex(text) {
 }
 function layout() {
   if (!window.weft.layout) return;
-  const box = $("content").getBoundingClientRect();
+  const area = previewing && section === "browse" ? $("preview-area") : null;
+  const box = (area || $("content")).getBoundingClientRect();
   const show =
     section === "browse" &&
-    !!active() &&
     !$("dialog").open &&
+    (Boolean(area) || (!!active() &&
     active().url !== "about:blank" &&
-    !active().blocked;
+    !active().blocked));
   return window.weft
     .layout({
       x: Math.round(box.x),
@@ -1300,12 +1310,13 @@ async function capture(artifactId) {
         "kind",
         [
           ["bundle", "Reference bundle · text + screenshot"],
+          ["archive", "Resource archive · page, resources, text + screenshot"],
           ["text", "Readable text"],
           ["screenshot", "Screenshot"],
         ],
         "bundle",
       ) +
-      "<p>Saved captures are historical references. Review the page for private information before saving it.</p>",
+      "<p>Saved captures are historical references. Review the page for private information before saving it. A resource archive stores the page as Chromium rendered it, without scripts, and lists anything it could not keep.</p>",
     async (values) => {
       closeDialog();
       section = "browse";
@@ -1327,34 +1338,142 @@ async function capture(artifactId) {
     { save: "Save capture" },
   );
 }
+const incompleteLabels = { "page-not-ready": "page had not finished loading", "resources-not-stored": "some resources were not stored", "archive-failed": "archive could not be created", "archive-timeout": "archive timed out",
+  "capture-time-limit": "capture time limit reached", "page-changed-during-capture": "page changed during capture", "in-page-state-changed": "page state changed during capture", "virtualized-content": "list content is virtualized",
+  "lazy-content-pending": "lazy content had not loaded", "busy-regions": "regions were still loading", "inaccessible-frames": "cross-origin frames not included", "screenshot-unavailable": "no screenshot", "coverage-unavailable": "coverage unknown" };
+function versionLabel(v) {
+  return `Version ${v.number || ""}${v.derivedFrom ? " · sanitized" : ""}${v.access === "restricted" ? " · restricted original" : ""}${v.purged ? " · content purged" : ""} · ${date(v.createdAt)}`;
+}
+function archiveSummary(version) {
+  const archive = version.archive;
+  const capture = version.capture;
+  if (!archive && !capture) return "";
+  const parts = Object.entries(archive?.counts || {}).map(([status, count]) => `${count} ${status.replaceAll("-", " ")}`);
+  const unstored = (archive?.resources || []).filter((r) => r.status !== "stored");
+  return `<div class="notice"><strong>${capture?.complete ? "Complete capture" : "Incomplete capture"}</strong>${capture?.incomplete?.length ? ": " + esc(capture.incomplete.map((i) => incompleteLabels[i] || i).join(", ")) : ""}<br>`
+    + `${archive ? `Resource archive: ${esc(parts.join(" · ") || archive.status || "no resources")}${archive.reason ? " — " + esc(archive.reason) : ""}<br>` : ""}`
+    + `${capture ? `Captured in ${esc(String(capture.durationMs ?? "?"))} ms${capture.readiness ? ` · readiness ${esc(capture.readiness.state)}` : ""}${capture.viewport ? ` · viewport ${esc(String(capture.viewport.width))}×${esc(String(capture.viewport.height))}` : ""}${capture.originalUrl && capture.finalUrl && capture.originalUrl !== capture.finalUrl ? `<br>Started at ${esc(capture.originalUrl)}, ended at ${esc(capture.finalUrl)}` : ""}` : ""}`
+    + `${unstored.length ? `<details><summary>Resources not stored (${esc(String(unstored.length))})</summary><ul>${unstored.slice(0, 30).map((r) => `<li>${esc(r.status)}${r.httpStatus ? " " + esc(String(r.httpStatus)) : ""} · ${esc(r.url)}</li>`).join("")}</ul></details>` : ""}`
+    + `<small>Hashes show stored bytes are unchanged since capture; they do not prove what the site served or when.</small></div>`;
+}
 async function viewArtifact(id, versionId) {
-  const r = await execute(
-    "artifacts.get",
-    { id, ...(versionId ? { versionId } : {}) },
-    true,
-  );
-  const version = r.version || r.versions?.at(-1) || r;
-  const text = version.text ?? r.text ?? "";
-  const png = version.pngBase64 ?? r.pngBase64;
-  const versions =
-    r.versions || state.artifacts.find((a) => a.id === id)?.versions || [];
+  const r = await execute("artifacts.get", { id }, true);
+  const versions = r.versions || [];
+  const version = versions.find((v) => v.id === versionId) || versions.at(-1) || {};
+  const text = version.text ?? "";
+  const png = version.pngBase64;
+  const derived = version.derivedFrom ? versions.find((v) => v.id === version.derivedFrom) : null;
+  const derivatives = versions.filter((v) => v.derivedFrom === version.id);
+  const vattr = `data-id="${esc(id)}" data-version="${esc(version.id || "")}"`;
+  const redactions = version.redactions || [];
   openDialog(
     r.title || "Saved capture",
-    `<span class="tag sage">Saved capture · Offline</span><div class="notice">${esc(version.url || version.sourceUrl || "Local capture")}<br>${esc(new Date(version.createdAt || r.createdAt).toLocaleString())}<br>${esc((version.limitations || []).join?.(" ") || version.limitations || "Text and image are captured separately. Dynamic or lazy-loaded content may be incomplete.")}</div>${versions.length > 1 ? `<label>Version<select id="capture-version">${versions.map((v, i) => `<option value="${esc(v.id)}" ${v.id === (version.id || versionId) ? "selected" : ""}>Version ${i + 1} · ${date(v.createdAt)}</option>`).join("")}</select></label>` : ""}${png ? `<img class="artifact-image" src="data:image/png;base64,${esc(png)}" alt="Saved page screenshot">` : ""}<pre class="artifact-text">${esc(text)}</pre>`,
-    action(
-      "delete-record",
-      "Delete all versions",
-      "trash",
-      `data-kind="artifacts" data-id="${esc(id)}"`,
-      "secondary danger",
-    ) + action("close-dialog", "Close"),
+    `<span class="tag sage">Saved capture · Offline</span>${version.access === "restricted" ? '<span class="tag">Restricted original · withheld from agents, search and default exports</span>' : ""}${version.derivedFrom ? `<span class="tag">Sanitized derivative of version ${esc(String(derived?.number || version.derivedFromNumber || "?"))}</span>` : ""}`
+      + `<div class="notice">${esc(version.url || "Local capture")}<br>${esc(new Date(version.createdAt || r.createdAt).toLocaleString())}<br>${esc((version.limitations || []).join(" "))}</div>${archiveSummary(version)}`
+      + `${redactions.length ? `<p>${esc(String(redactions.filter((x) => x.type === "text").length))} text spans and ${esc(String(redactions.filter((x) => x.type === "region").length))} image regions were removed in this version.</p>` : ""}`
+      + `${derivatives.length ? `<p>Sanitized versions: ${derivatives.map((d) => esc("version " + d.number)).join(", ")}.</p>` : ""}`
+      + `${versions.length > 1 ? `<label>Version<select id="capture-version">${versions.map((v) => `<option value="${esc(v.id)}" ${v.id === version.id ? "selected" : ""}>${esc(versionLabel(v))}</option>`).join("")}</select></label>` : ""}`
+      + `${version.purged ? "<p>The stored content of this version was purged. Its metadata and hashes remain.</p>" : ""}${png ? `<img class="artifact-image" src="data:image/png;base64,${esc(png)}" alt="Saved page screenshot">` : ""}<pre class="artifact-text">${esc(text)}</pre>`,
+    (version.archive?.resources?.length && !version.purged ? action("preview-archive", "Preview offline", "globe", vattr) : "")
+      + (versions.length > 1 ? action("compare-versions", "Compare versions", "", vattr) : "")
+      + (!version.purged ? action("redact-version", "Review & redact", "shield", vattr) : "")
+      + (version.access === "restricted" ? action("allow-version", "Allow agent access", "", vattr) : action("restrict-version", "Restrict original", "lock", vattr))
+      + action("verify-artifact", "Verify", "", vattr)
+      + (!version.purged ? action("purge-version", "Purge content", "trash", vattr, "secondary danger") : "")
+      + action("delete-record", "Delete all versions", "trash", `data-kind="artifacts" data-id="${esc(id)}"`, "secondary danger")
+      + action("close-dialog", "Close"),
     true,
   );
   if ($("capture-version"))
     $("capture-version").onchange = () =>
-      void viewArtifact(id, $("capture-version").value).catch((e) =>
-        toast(errorMessage(e)),
-      );
+      void viewArtifact(id, $("capture-version").value).catch((e) => toast(errorMessage(e)));
+}
+async function openPreview(id, versionId) {
+  const result = await execute("artifacts.preview", { id, versionId }, true);
+  previewing = result;
+  closeDialog();
+  navigateSection("browse");
+  toast(result.unavailable?.length ? `${result.unavailable.length} archived resources failed verification and are not shown.` : "Showing the archived page offline.");
+}
+async function closePreview(quiet = false) {
+  if (!previewing) return;
+  previewing = null;
+  try { await window.weft.execute("artifacts.closePreview", {}); } catch { /* already closed */ }
+  if (!quiet) { renderContent(); layout(); }
+}
+async function compareDialog(id, versionId) {
+  const r = await execute("artifacts.get", { id }, true);
+  const versions = (r.versions || []).filter((v) => !v.purged);
+  const current = Math.max(0, versions.findIndex((v) => v.id === versionId));
+  const from = versions[Math.max(0, current - 1)]?.id, to = versions[Math.max(current, Math.min(1, versions.length - 1))]?.id;
+  const select = (name, value) => `<label>${name === "from" ? "Earlier version" : "Later version"}<select name="${name}">${versions.map((v) => `<option value="${esc(v.id)}" ${v.id === value ? "selected" : ""}>${esc(versionLabel(v))}</option>`).join("")}</select></label>`;
+  openDialog("Compare capture versions", `<form id="compare-form">${select("from", from)}${select("to", to)}<label><input type="checkbox" name="pixels" checked> Compare screenshots pixel by pixel</label><button class="primary" type="submit">Compare</button></form><div id="compare-result" aria-live="polite"></div>`, action("close-dialog", "Close"), true);
+  $("compare-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const pixels = form.get("pixels") === "on";
+      const c = await execute("artifacts.compare", { id, fromVersionId: form.get("from"), toVersionId: form.get("to"), pixels, diffImage: pixels }, true);
+      const lines = (c.text.hunks || []).map((h) => h.lines.map((l) => `<span class="diff-${l.op}">${l.op === "added" ? "+ " : l.op === "removed" ? "− " : "  "}${esc(l.text)}</span>`).join("\n")).join('\n<span class="diff-gap">…</span>\n');
+      const t = c.resources.totals;
+      const res = t ? `${t.added} added · ${t.removed} removed · ${t.changed} changed · ${t.statusChanged} changed status · ${c.resources.unchanged} unchanged` : esc(c.resources.reason);
+      const px = c.pixels.available ? `${c.pixels.changedPixels} of ${c.pixels.comparedPixels} pixels changed (${(c.pixels.changedRatio * 100).toFixed(2)}%)${c.pixels.note ? " · " + esc(c.pixels.note) : ""}` : esc(c.pixels.reason);
+      const changes = t ? [...c.resources.added.map((x) => ["Added", x.url]), ...c.resources.removed.map((x) => ["Removed", x.url]), ...c.resources.changed.map((x) => ["Changed", x.url]), ...c.resources.statusChanged.map((x) => [`${x.from} → ${x.to}`, x.url])].slice(0, 50) : [];
+      $("compare-result").innerHTML = `<div class="notice"><strong>${c.identical ? "No differences found" : "Differences found"}</strong><br>Text: ${c.text.available === false ? esc(c.text.reason) : `${c.text.added} lines added, ${c.text.removed} removed${c.text.approximate ? " (approximate)" : ""}`}<br>Resources: ${res}<br>Screenshot: ${px}<br><small>${esc(c.limitations.join(" "))}</small></div>`
+        + `${lines ? `<pre class="artifact-text diff">${lines}</pre>` : ""}${changes.length ? `<ul>${changes.map(([k, u]) => `<li>${esc(k)} · ${esc(u)}</li>`).join("")}</ul>` : ""}${c.pixels.diffPngBase64 ? `<img class="artifact-image" src="data:image/png;base64,${esc(c.pixels.diffPngBase64)}" alt="Changed pixels highlighted in red">` : ""}`;
+    } catch (error) { $("form-error").textContent = errorMessage(error); }
+  };
+}
+async function redactionEditor(id, versionId) {
+  const [version, review] = await Promise.all([execute("artifacts.get", { id, versionId }, true), execute("artifacts.review", { id, versionId }, true)]);
+  const regions = [];
+  const findings = review.textFindings || [];
+  const metadata = review.findings || [];
+  openDialog("Review and redact",
+    `<div class="notice">A sanitized copy is saved as a new version; this version is not changed. ${esc(review.scope)}</div><form id="redact-form">`
+      + `${findings.length ? `<fieldset><legend>Detected in the text (assistance only)</legend>${findings.map((f, i) => `<label><input type="checkbox" name="finding" value="${i}" checked> ${esc(f.kind)} · ${esc(f.preview)}</label>`).join("")}</fieldset>` : "<p>Detection assistance found nothing. Review the text yourself; detection is incomplete.</p>"}`
+      + `${area("Exact text to remove (one entry per line; every occurrence, also in the title)", "literals")}${field("Pattern to remove (optional regular expression)", "pattern")}`
+      + `${metadata.length ? `<fieldset><legend>Address and metadata review</legend><ul>${metadata.slice(0, 30).map((f) => `<li>${esc(f.field)}: ${esc(f.detail)}${f.parameter ? " (" + esc(f.parameter) + ")" : ""}</li>`).join("")}</ul></fieldset>` : ""}`
+      + `${choice("Keep of the web address", "url", [["origin-path", "Site and path, no query (recommended)"], ["origin", "Site only"], ["remove", "Nothing"], ["keep", "Full address"]], "origin-path")}`
+      + `${version.pngBase64 ? `${choice("Screenshot", "image", [["redact", "Keep, with the areas drawn below blacked out"], ["omit", "Leave the screenshot out"]], "redact")}<p>Drag on the screenshot to mark areas to black out. ${esc(review.image || "")}</p><div class="redact-canvas" id="redact-canvas"><img id="redact-image" src="data:image/png;base64,${esc(version.pngBase64)}" alt="Screenshot to redact" draggable="false"></div><div id="redact-regions" class="muted">No areas marked.</div>` : ""}`
+      + `${review.archive ? `<p>${esc(review.archive)}</p>` : ""}<label><input type="checkbox" name="restrict" ${version.access === "restricted" ? "checked disabled" : "checked"}> Restrict the original: withhold it from agents, search and default exports</label></form><div id="redact-preview" aria-live="polite"></div>`,
+    `<button class="secondary" type="button" id="redact-show">Preview</button>` + action("close-dialog", "Cancel") + `<button class="primary" type="button" id="redact-save">Save sanitized version</button>`, true);
+  const image = $("redact-image");
+  const listRegions = () => { $("redact-regions").innerHTML = regions.length ? regions.map((r, i) => `${esc(String(i + 1))}: ${r.width}×${r.height} px at ${r.x}, ${r.y} <button type="button" class="text-button" data-remove-region="${i}">Remove</button>`).join("<br>") : "No areas marked."; };
+  if (image) {
+    const canvas = $("redact-canvas");
+    let start = null, box = null;
+    const point = (event) => { const rect = image.getBoundingClientRect(); const scale = image.naturalWidth / rect.width; return { x: Math.max(0, Math.min(image.naturalWidth, Math.round((event.clientX - rect.left) * scale))), y: Math.max(0, Math.min(image.naturalHeight, Math.round((event.clientY - rect.top) * scale))), scale }; };
+    canvas.onpointerdown = (event) => { event.preventDefault(); start = point(event); box = document.createElement("div"); box.className = "redact-box"; canvas.append(box); canvas.setPointerCapture(event.pointerId); };
+    canvas.onpointermove = (event) => { if (!start) return; const p = point(event); Object.assign(box.style, { left: `${Math.min(start.x, p.x) / p.scale + image.offsetLeft}px`, top: `${Math.min(start.y, p.y) / p.scale + image.offsetTop}px`, width: `${Math.abs(p.x - start.x) / p.scale}px`, height: `${Math.abs(p.y - start.y) / p.scale}px` }); };
+    canvas.onpointerup = (event) => { if (!start) return; const p = point(event); const r = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), width: Math.abs(p.x - start.x), height: Math.abs(p.y - start.y) }; start = null; if (r.width >= 2 && r.height >= 2) regions.push(r); else box.remove(); listRegions(); };
+    $("redact-regions").onclick = (event) => { const index = event.target.dataset?.removeRegion; if (index === undefined) return; regions.splice(Number(index), 1); canvas.querySelectorAll(".redact-box")[Number(index)]?.remove(); listRegions(); };
+  }
+  const collect = () => {
+    const form = new FormData($("redact-form"));
+    const text = [...form.getAll("finding").map((i) => ({ start: findings[Number(i)].start, end: findings[Number(i)].end, label: findings[Number(i)].kind })),
+      ...String(form.get("literals") || "").split(/\r?\n/).map((x) => x.trim()).filter(Boolean).map((literal) => ({ literal, label: "selected text" })),
+      ...(String(form.get("pattern") || "").trim() ? [{ pattern: String(form.get("pattern")).trim(), label: "pattern" }] : [])];
+    const image = version.pngBase64 ? form.get("image") || "redact" : undefined;
+    return { args: { id, versionId, text, regions: image === "redact" ? regions.map((r) => ({ ...r, label: "marked area" })) : [], url: form.get("url"), ...(image ? { image } : {}) }, restrict: form.get("restrict") === "on" };
+  };
+  $("redact-show").onclick = async () => {
+    try {
+      const preview = await execute("artifacts.redact", { ...collect().args, preview: true }, true);
+      $("redact-preview").innerHTML = `<h3>Preview of the sanitized version</h3><div class="notice">${esc(String(preview.redactions.length))} removals · address kept: ${esc(preview.url || "none")} · title: ${esc(preview.title)}${preview.unmatchedSelectors?.length ? ` · ${esc(String(preview.unmatchedSelectors.length))} entries matched nothing` : ""}${Object.values(preview.remainingMatches || {}).some(Boolean) ? "<br>Matches remain in this capture’s notes, tags or annotations; edit them separately." : ""}</div>`
+        + `${preview.pngBase64 ? `<img class="artifact-image" src="data:image/png;base64,${esc(preview.pngBase64)}" alt="Sanitized screenshot preview">` : ""}${preview.text !== undefined ? `<pre class="artifact-text">${esc(preview.text)}</pre>` : ""}`;
+    } catch (error) { $("form-error").textContent = errorMessage(error); }
+  };
+  $("redact-save").onclick = async () => {
+    try {
+      const { args, restrict } = collect();
+      const result = await execute("artifacts.redact", args, true);
+      if (restrict && version.access !== "restricted") await execute("artifacts.setAccess", { id, versionId, access: "restricted" }, true);
+      toast(`Sanitized version ${result.derivative.number} saved${restrict ? "; the original is restricted" : ""}.`);
+      await refresh(true);
+      await viewArtifact(id, result.derivative.versionId);
+    } catch (error) { $("form-error").textContent = errorMessage(error); }
+  };
 }
 function downloadJson(name, value) {
   const a = document.createElement("a");
@@ -1372,7 +1491,7 @@ function downloadText(name, text, type) {
 }
 function exportWorkspace() {
   openDialog("Review workspace export",
-    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${choice("Format", "format", [["json", "Weft JSON (can be imported again)"], ["markdown", "Markdown (readable; produced by the markdown plugin)"]], "json")}${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
+    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${choice("Format", "format", [["json", "Weft JSON (can be imported again)"], ["markdown", "Markdown (readable; produced by the markdown plugin)"]], "json")}${choice("Captures", "captures", [["exclude-restricted", "Leave out restricted originals (recommended)"], ["derivatives-only", "Only sanitized versions"], ["all", "Include restricted originals"]], "exclude-restricted")}<label><input type="checkbox" name="reviewMetadata"> Review web addresses and detected personal data in the export (assistance only)</label>${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
     action("close-dialog", "Cancel"));
   $("export-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -1382,9 +1501,13 @@ function exportWorkspace() {
       const form = new FormData(event.currentTarget);
       const sensitiveTerms = form.get("sensitiveTerms").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
       const format = form.get("format") || "json";
-      const bundle = await execute(format === "json" ? "workspaces.export" : "workspaces.exportAs", { id: ws().id, ...(format === "json" ? {} : { format }), ...(sensitiveTerms.length ? { sensitiveTerms } : {}) }, true);
+      const captures = form.get("captures") || "exclude-restricted";
+      const reviewMetadata = form.get("reviewMetadata") === "on";
+      const bundle = await execute(format === "json" ? "workspaces.export" : "workspaces.exportAs", { id: ws().id, captures, ...(format === "json" ? { reviewMetadata } : { format }), ...(sensitiveTerms.length ? { sensitiveTerms } : {}) }, true);
       const scan = bundle.residueScan;
-      $("export-review").innerHTML = `<div class="notice">${scan ? `Sensitive-term scan: <strong>${esc(scan.status)}</strong>. ${scan.found?.length || 0} term matches; ${scan.unverifiable?.length || 0} items could not be verified. ${esc(scan.scope || "")}` : "No sensitive-term scan requested."} Review this result before saving; a clean text scan does not establish that the export is free of private information.</div>${bundle.exclusions ? `<p>This ${esc(bundle.format)} export omits:</p><ul>${bundle.exclusions.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}<button id="save-export" class="primary">Save reviewed export</button>`;
+      const excludedContent = bundle.excludedContent || [];
+      const review = bundle.metadataReview;
+      $("export-review").innerHTML = `${excludedContent.length ? `<div class="notice">${esc(String(excludedContent.length))} capture versions or captures are left out: ${esc([...new Set(excludedContent.map((x) => x.reason))].join(", "))}.</div>` : ""}${bundle.linkedSourcesNotIncluded?.count ? `<p>${esc(String(bundle.linkedSourcesNotIncluded.count))} records cite live pages, files or services that are not included in the export.</p>` : ""}${review ? `<details><summary>Metadata review: ${esc(String(review.findings.length))} findings (assistance only)</summary><ul>${review.findings.slice(0, 50).map((f) => `<li>${esc(f.field)}: ${esc(f.kind)}${f.preview ? " " + esc(f.preview) : ""}${f.parameter ? " (" + esc(f.parameter) + ")" : ""}</li>`).join("")}</ul><small>${esc(review.scope)}</small></details>` : ""}<div class="notice">${scan ? `Sensitive-term scan: <strong>${esc(scan.status)}</strong>. ${scan.found?.length || 0} term matches; ${scan.unverifiable?.length || 0} items could not be verified. ${esc(scan.scope || "")}` : "No sensitive-term scan requested."} Review this result before saving; a clean text scan does not establish that the export is free of private information.</div>${bundle.exclusions ? `<p>This ${esc(bundle.format)} export omits:</p><ul>${bundle.exclusions.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}<button id="save-export" class="primary">Save reviewed export</button>`;
       $("save-export").onclick = () => {
         const base = ws().name.replace(/[^a-z\d -]/gi, "") || "workspace";
         if (bundle.format === "weft-workspace") downloadJson(`${base}.weft.json`, bundle);
@@ -1502,9 +1625,9 @@ function importWorkspace() {
 function exportPackage() {
   const suggested = `${(ws().name || "workspace").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 60) || "workspace"}-${new Date().toISOString().slice(0, 10)}`;
   formDialog("Export a large project",
-    `<p>Writes a folder with project records, exact capture and file components, and a checksum manifest into the transfers folder of this profile. Copy the folder to move the project. Browser sessions and credentials are excluded.</p>${field("Package name (letters, digits, dots, dashes)", "name", suggested, "text", true)}`,
+    `<p>Writes a folder with project records, exact capture and file components, and a checksum manifest into the transfers folder of this profile. Copy the folder to move the project. Browser sessions and credentials are excluded.</p>${field("Package name (letters, digits, dots, dashes)", "name", suggested, "text", true)}${choice("Captures", "captures", [["exclude-restricted", "Leave out restricted originals (recommended)"], ["derivatives-only", "Only sanitized versions"], ["all", "Include restricted originals"]], "exclude-restricted")}`,
     async (values) => {
-      const result = await execute("workspaces.exportPackage", { id: ws().id, name: values.name }, true);
+      const result = await execute("workspaces.exportPackage", { id: ws().id, name: values.name, captures: values.captures || "exclude-restricted" }, true);
       toast(`Package written to ${result.path}`);
     }, { save: "Export package" });
 }
@@ -1757,7 +1880,7 @@ function attachDialog() {
   const check = (value, label) => `<label class="attach-choice"><input type="checkbox" name="attach" value="${esc(value)}">${esc(label)}</label>`;
   const group = (title, list) => list.length ? `<fieldset><legend>${esc(title)}</legend>${list.join("")}</fieldset>` : "";
   const artifacts = records("artifacts").flatMap((a) => (a.versions || []).slice(-3).reverse().map((v) =>
-    check(`artifact|${a.id}|${v.id}`, `${a.title} · version ${v.number || ""} · ${date(v.createdAt)}${(v.components || []).some((c) => c.type === "image/png") ? " · text + image" : ""}`)));
+    check(`artifact|${a.id}|${v.id}`, `${a.title} · version ${v.number || ""} · ${date(v.createdAt)}${(v.components || []).some((c) => c.type === "image/png") ? " · text + image" : ""}${v.derivedFrom ? " · sanitized" : ""}${v.access === "restricted" ? " · restricted original: its newest sanitized version is sent instead" : ""}`)));
   openDialog("Attach to this message",
     `<p>Choose exactly what this message may use. The next step shows what the selected model will receive, item by item, before anything is sent.</p>${tab && tab.url !== "about:blank" ? group("Current tab", [check(`tab|${tab.id}`, `Readable snapshot of ${displayTitle(tab)}`)]) : ""}${group("Materials", records("materials").map((r) => check(`material|${r.id}`, r.title)))}${group("Context", records("context").map((r) => check(`context|${r.id}`, r.title)))}${group("Tasks", records("tasks").map((r) => check(`task|${r.id}`, r.title)))}${group("Captures (exact versions)", artifacts)}<fieldset><legend>Selected passage</legend>${field("Passage title", "passageTitle", "Selected passage")}${area("Paste the passage to attach", "passage")}</fieldset>`,
     action("close-dialog", "Cancel") + '<button id="attach-selected" class="primary">Attach selected</button>', true);
@@ -2249,6 +2372,39 @@ async function act(button) {
     case "view-artifact":
       await viewArtifact(id);
       break;
+    case "preview-archive":
+      await openPreview(id, button.dataset.version);
+      break;
+    case "close-preview":
+      await closePreview();
+      break;
+    case "compare-versions":
+      await compareDialog(id, button.dataset.version);
+      break;
+    case "redact-version":
+      await redactionEditor(id, button.dataset.version);
+      break;
+    case "restrict-version":
+    case "allow-version":
+      await execute("artifacts.setAccess", { id, versionId: button.dataset.version, access: a === "restrict-version" ? "restricted" : "standard" }, true);
+      toast(a === "restrict-version" ? "Original restricted: agents get a withheld stub; it is removed from search and default exports." : "Agents can read this version again.");
+      await viewArtifact(id, button.dataset.version);
+      break;
+    case "verify-artifact": {
+      const report = await execute("artifacts.verify", { id }, true);
+      toast(report.status === "verified" ? "Every stored component matches its SHA-256." : `${report.problems} stored components are damaged or missing; restore from a backup.`);
+      break;
+    }
+    case "purge-version": {
+      const versionId = button.dataset.version;
+      formDialog("Purge this version’s content?",
+        "<p>This permanently deletes the stored text, screenshot and archived resources of this version from this profile. Its metadata and hashes stay, and sanitized versions are kept. Existing backups and exports still contain the content; delete them separately if needed. Weft cannot guarantee physical erasure from the storage device.</p>",
+        async () => {
+          const purged = await execute("artifacts.purgeContent", { id, versionId }, true);
+          toast(`Content purged: ${purged.componentsDeleted} stored files deleted${purged.componentsKept ? `, ${purged.componentsKept} still used elsewhere` : ""}.`);
+        }, { save: "Purge content" });
+      break;
+    }
     case "close-dialog":
       closeDialog();
       break;
