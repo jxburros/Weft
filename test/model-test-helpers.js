@@ -39,7 +39,8 @@ export const json = (res, value) => { res.writeHead(200, { 'content-type': 'appl
 export const openaiDelta = content => ({ choices: [{ index: 0, delta: { content } }] });
 export const openaiFinish = reason => ({ choices: [{ index: 0, delta: {}, finish_reason: reason }] });
 export const tick = (ms = 10) => new Promise(resolve => setTimeout(resolve, ms));
-export async function until(predicate, ms = 3000) {
+// Generous by default: conditions such as "the first streamed frame arrived" include synced writes, which take seconds on Windows CI runners.
+export async function until(predicate, ms = 10000) {
   const end = Date.now() + ms;
   while (!(await predicate())) { if (Date.now() > end) throw new Error('Timed out waiting for condition'); await tick(5); }
 }
