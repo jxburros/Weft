@@ -19,8 +19,9 @@ autonomy or retention.
 Order of evaluation:
 
 1. Emergency-stop latch (`src/admission.js`).
-2. Hard floor: human-only commands (action class `administration`, kept equal to
-   the catalog's human-only set by a test) are denied to every non-human.
+2. Hard floor: human-only commands (the catalog's human-only set and every
+   `administration`-class command; a test requires administration commands to be
+   marked human-only) are denied to every non-human.
 3. Client grant (`src/clients.js`): live/unexpired, every touched workspace in
    the grant (a tab's source workspace counts; more than one workspace requires an
    explicit `crossWorkspace` grant; creating workspaces is refused), resource

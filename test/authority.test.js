@@ -43,10 +43,10 @@ test('pure autonomy gate keeps hard floors under every level and evidence combin
   assert.equal(effectiveLevel('assist', 'autonomous'), 'assist');
 });
 
-test('every catalog command is classified with generic metadata; administration is exactly the human-only set', () => {
+test('every catalog command is classified with generic metadata; administration commands are human-only', () => {
   for (const [name, spec] of Object.entries(commands)) {
     assert.notEqual(spec.actionClass, 'unclassified', name);
-    assert.equal(spec.actionClass === 'administration', spec.humanOnly, `${name}: human-only and administration must agree`);
+    if (spec.actionClass === 'administration') assert.equal(spec.humanOnly, true, `${name}: administration commands are human-only`);
     assert.ok(['none', 'local', 'irreversible', 'external'].includes(spec.effect), name);
     assert.ok(['tabs', 'models', 'browser', 'records'].includes(spec.resource), name);
     assert.ok(Array.isArray(spec.dataClasses) && Array.isArray(spec.sensitiveCategories), name);
