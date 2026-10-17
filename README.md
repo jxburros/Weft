@@ -179,15 +179,20 @@ Requests require `Authorization: Bearer <token>`:
 - `GET /v1/turns/{turnId}/events` follows or resumes one model turn; send
   `Accept: text/event-stream` to `POST /v1/execute` to stream a turn you start.
   See [agent integration](docs/AGENT-INTEGRATION.md).
-- `POST /v1/execute` accepts `{ "command": "...", "args": {} }` and returns
-  a versioned outcome with `schemaVersion`, `command`, `execution`, `validation`,
-  `review`, `workspaceId`, `tabId`, `normalized`, `result` and `error`.
+- `POST /v1/execute` accepts `{ "command": "...", "args": {} }` (optionally a
+  `deadlineMs` field or `Weft-Deadline-Ms` header) and returns a versioned outcome
+  with `schemaVersion`, `command`, `status`, `execution`, `validation`, `review`,
+  `workspaceId`, `tabId`, `normalized`, `request`, `result` and `error`.
   See [the command contract](docs/COMMANDS.md) for status and error meanings.
+- `GET /v1/capabilities` reports the API version, catalog hash, outcome table,
+  limits and features; `GET /v1/download` streams stored bytes.
 
 Discovery is the authoritative list of available commands and arguments. Unknown
 fields are rejected. API request bodies are capped at 1 MiB, so large projects
 move as package folders (`workspaces.exportPackage`/`workspaces.importPackage`,
-human-only) or through the GUI. REST rejects browser-origin requests and does not enable CORS.
+human-only) or through the GUI, and single large files move through verified
+chunked uploads (`transfers.begin`, `transfers.append`, `transfers.commit`). Large
+collections accept `page: {limit, cursor}`. REST rejects browser-origin requests and does not enable CORS.
 
 Mutating record commands accept an optional `requestId`: retrying the same command
 and arguments returns the original result (`idempotency.replayed: true`) instead of

@@ -1,7 +1,7 @@
 # ADR 011: transactional storage, local search and recovery
 
 Status: accepted and implemented for issues #25, #67, #39 and #27. Last reviewed:
-2026-10-17. Embeddings/hybrid retrieval are deferred (see below).
+2026-10-17. Embeddings/hybrid retrieval were deferred here and are decided in ADR 018.
 
 ## Context
 
@@ -138,14 +138,16 @@ Integrated after ADRs 004–010 (numbered 011 for that reason):
   restore can neither rewind evidence nor revive authority; the restore itself
   is appended to the activity chain (see `docs/STORAGE-SAFETY.md`).
 
-## Deferred: embeddings and hybrid retrieval
+## Embeddings and hybrid retrieval (decided in ADR 018)
 
-Not implemented. No local embedding model ships with Weft and none may be
-downloaded silently. A future opt-in design must: pin models (size and
-SHA-256), download only on explicit human action, store vectors in this
-protected database, never include them in exports, respect `localOnly` and
-workspace scope in SQL, and fuse with BM25 (e.g. reciprocal-rank fusion) with
-golden-query evaluation. Until then search is lexical only.
+Originally deferred here. [ADR 018](018-integration-contracts-and-hybrid-retrieval.md)
+implements them without any model download: a person enables embeddings per
+workspace using an embedding model already available at an existing model
+connection (on-device by default; other endpoints need an explicit egress
+acknowledgement and never receive local-only records). Vectors live in this
+database (never exported), are scoped by workspace in SQL, and are fused with
+BM25 by reciprocal rank (k=60) with golden-query evaluation. Without that
+opt-in, search remains lexical only.
 
 ## Consequences and limits
 

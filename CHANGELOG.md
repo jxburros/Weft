@@ -7,6 +7,36 @@ alone is not a shipped capability.
 
 ### Changed
 
+- Completed integration contracts (#14, ADR 018): every outcome carries a stable
+  `status` (succeeded, partial, blocked, approval_required, stale_state, conflict,
+  unsupported, invalid, cancelled, timed_out, failed) and the authenticated
+  `request` linkage, contract-tested for every error code across GUI IPC, REST,
+  CLI and MCP; caller deadlines (`Weft-Deadline-Ms`/`deadlineMs`, CLI
+  `--deadline-ms`, MCP `deadlineMs`) return `deadline_exceeded` stating whether the
+  command started and whether it rolled back, stopped or is uncertain (new
+  `execution: "uncertain"`); `expectedRevision` on deletions, task transitions and
+  artifact annotations; additive `page: {limit, cursor}` pagination returning
+  `{items, nextCursor, total}` for every large collection plus new
+  `conversations.messages` and `artifacts.versions`; task, artifact, navigation,
+  policy, workspace and approval events with `events.list` replay for CLI/MCP;
+  `weft.capabilities` and `GET /v1/capabilities`; MCP resources for guidance,
+  the command reference and scoped workspace records; verified chunked uploads
+  (`transfers.*`) and streamed downloads (`transfers.read`, `GET /v1/download`)
+  beyond the 1 MiB request cap, including staging package folders whose import
+  stays human-only.
+- Added optional hybrid retrieval (#67, ADR 018): a person enables embeddings per
+  workspace (Settings > Semantic search, human-only `search.configureEmbeddings`)
+  with an embedding model already available at an existing connection (Ollama
+  `/api/embed` or OpenAI-compatible `/embeddings`; nothing is downloaded; non-device
+  endpoints need an egress acknowledgement and never receive local-only records).
+  Vectors are float32 BLOBs with exact cosine search (up to 20,000 per workspace),
+  indexed incrementally and re-embedded on model change; `search.query` fuses BM25
+  and vector results by reciprocal rank (k=60) with citations, `mode`, coverage and
+  a verified-absence signal; `search.status` and `search.reindex`; retrieved
+  context sent to models (read tool and new `search` attachment) is capped at 0.4
+  of the window after the reserved reply. Evaluated with a deterministic fake
+  local embedding endpoint only.
+
 - Hardened JSON storage with ownership locks, verified writes, migrations,
   secret guards, export residue review and sync-conflict warnings.
 - Unified outcomes/errors and compact MCP tools; added scoped client credentials,
