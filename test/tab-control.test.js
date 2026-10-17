@@ -265,4 +265,11 @@ test('the authority gate runs before version and inspection checks; approval the
   const uninspected = await f.as(agent, 'page.click', click);
   assert.deepEqual([uninspected.error.code, uninspected.error.details.reason], ['stale_state', 'inspection_required'], 'approval does not replace inspection');
   assert.equal(f.page.clicks.length, 0);
+  // The refused retry did not spend the one-time approval: after inspecting, the identical click runs without a new request.
+  assert.equal(f.dispatch.authority.approvals.items.find(item => item.id === pending.error.details.authority.approvalId).status, 'approved');
+  assert.equal((await f.as(agent, 'page.inspect', {})).execution, 'succeeded');
+  const retried = await f.as(agent, 'page.click', click);
+  assert.equal(retried.execution, 'succeeded', JSON.stringify(retried.error));
+  assert.equal(f.page.clicks.length, 1);
+  assert.equal(f.dispatch.authority.approvals.items.find(item => item.id === pending.error.details.authority.approvalId).status, 'consumed');
 });
