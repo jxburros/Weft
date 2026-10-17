@@ -386,3 +386,36 @@ test('concurrent sends cannot race during asynchronous preflight', async t => {
   await assert.rejects(send(), /already has a running/);
   await first;
 });
+
+test('only normalized loopback allowlist endpoints bypass cloud disclosure', { timeout: 10000 }, async t => {
+  const { providers, model } = await fixture(t, () => { throw new Error('Preview must not make a request'); });
+  const cases = [
+    ['http://localhost:11434/v1', false],
+    ['http://LOCALHOST:11434/v1', false],
+    ['http://127.0.0.1:11434/v1', false],
+    ['http://[::1]:11434/v1', false],
+    ['http://[0:0:0:0:0:0:0:1]:11434/v1', false],
+    ['http://127.1:11434/v1', false], // WHATWG URL canonicalizes this to 127.0.0.1.
+    ['http://localhost.:11434/v1', true],
+    ['http://127.0.0.2:11434/v1', true],
+    ['http://[::ffff:127.0.0.1]:11434/v1', true],
+    ['http://10.0.0.1:11434/v1', true],
+    ['http://192.168.1.1:11434/v1', true],
+    ['http://172.16.0.1:11434/v1', true],
+    ['http://[fc00::1]:11434/v1', true],
+    ['http://[fe80::1]:11434/v1', true],
+    ['http://model.local:11434/v1', true],
+    ['http://127.0.0.1.nip.io:11434/v1', true],
+    ['http://localhost.example:11434/v1', true],
+    ['http://10.attacker.example:11434/v1', true],
+    ['https://models.example/v1', true],
+    ['https://8.8.8.8/v1', true],
+    ['https://[2001:4860:4860::8888]/v1', true],
+  ];
+  for (const [endpoint, requiresAcknowledgement] of cases) {
+    await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint, model: model.model });
+    const { disclosure } = await providers.execute('chat.preview', { conversationId: 'conversation-1', modelId: model.id, text: 'Preview only' });
+    assert.equal(disclosure.requiresAcknowledgement, requiresAcknowledgement, endpoint);
+    assert.equal(disclosure.locality === 'on-device endpoint', !requiresAcknowledgement, endpoint);
+  }
+});
