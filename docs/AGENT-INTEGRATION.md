@@ -24,6 +24,38 @@ into tool descriptions.
 weft guide.get '{"topic":"tab-control"}'
 ```
 
+## Authority, approvals and activity
+
+Every non-human caller (bootstrap token, scoped client token, CLI, MCP, REST and
+the internal model read tools) passes one gate in the shared dispatcher; the
+authority model is recorded in
+[ADR-005](decisions/005-agent-authority-and-audit.md). Scoped client tokens carry
+a purpose, workspace list (more than one requires an explicit cross-workspace
+grant), read/record/tab scopes, optional extra action classes, data classes,
+allowed site patterns, an autonomy level, usage limits, an optional task binding
+and an expiry. A human can change or revoke them in the Weft window; the change
+applies to the next command.
+
+Refusals are typed: `error.code` is `permission_required` (or `human_required`)
+with `error.details.authority` naming the decision, reason and action class, and
+`execution` is `not_started`. When the gate needs a person, the outcome is
+`approval_required` (HTTP 403, CLI exit 5) with an `approvalId`. The request waits
+in the single approval queue shown in the Weft window; agents can watch their own
+requests with `approvals.list` and must retry the identical command after
+approval. No API, CLI, MCP or model identity can approve, and page or artifact
+text never changes grants.
+
+```sh
+weft autonomy.get '{"workspaceId":"ws_00000000-0000-4000-8000-000000000000"}'
+weft approvals.list '{"status":"pending"}'
+weft activity.list '{"workspaceId":"ws_00000000-0000-4000-8000-000000000000","limit":50}'
+```
+
+`activity.list` returns `{items, nextCursor}` newest first; pass `cursor` to read
+older entries. Entries label outcomes as attempted, completed, failed, denied,
+pending approval, partial or externally uncertain; history is not proof that an
+external site or provider completed an action.
+
 Documentation examples are schema-validated offline, not executed against your
 browser. Their placeholder IDs require discovery in a running session. Eval
 reference tasks exercise the MCP bridge and real workspace service with a

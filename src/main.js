@@ -4,13 +4,15 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser } from './browser.js';
-import { commands } from './commands.js';
+import { commands, CommandError } from './commands.js';
 import { createApiServer } from './server.js';
 import { WorkspaceService } from './workspace.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
 import { CommunityLists } from './community-lists.js';
 import { createDispatcher } from './dispatch.js';
+import { Authority } from './authority.js';
+import { ActivityLog } from './activity-log.js';
 import { Providers } from './providers.js';
 
 let browser;
@@ -40,15 +42,17 @@ app.whenReady().then(async () => {
   const token = process.env.WEFT_TOKEN || randomBytes(32).toString('hex');
   const directory = join(app.getPath('userData'), 'workspace-data');
   workspace = new WorkspaceService({ directory });
-  providers = new Providers({ directory, workspace, safeStorage, admission,
-    readPage: async ({ tabId, workspaceId }) => {
-      if (!browser || !Number.isSafeInteger(tabId) || browser.tab(tabId).workspaceId !== workspaceId) throw new Error('The selected tab is outside this conversation workspace');
-      return browser.execute('page.readable', { tabId, workspaceId }, { actor: 'model-reader', workspaceId });
-    },
-    searchWorkspace: ({ workspaceId, query }) => {
-      admission.assertAutomationAdmitted('model-reader', 'search.query');
-      return workspace.execute('search.query', { workspaceId, query, limit: 20 }, { actor: 'model-reader', workspaceId, assertAuthorized: () => admission.assertAutomationAdmitted('model-reader', 'search.query') });
-    },
+  const activity = new ActivityLog({ directory, onPrune: options => { workspace.pruneActivity(options).catch(error => console.warn(`Weft activity retention: ${error.message}`)); } });
+  // Internal model tools use the same dispatcher and gate as every other caller, as an observe-level identity scoped to one workspace.
+  const modelTool = async (name, args, workspaceId) => {
+    if (!dispatch) throw new Error('Model tools are not available yet');
+    const outcome = await dispatch(name, args, { actor: 'model-reader', source: 'model', workspaceIds: [workspaceId] });
+    if (outcome.error) throw new CommandError(outcome.error);
+    return outcome.result;
+  };
+  providers = new Providers({ directory, workspace, safeStorage, admission, audit: entry => activity.append(entry),
+    readPage: ({ tabId, workspaceId }) => modelTool('page.readable', { tabId, workspaceId }, workspaceId),
+    searchWorkspace: ({ workspaceId, query }) => modelTool('search.query', { workspaceId, query, limit: 20 }, workspaceId),
   });
   await providers.init();
   window = new BrowserWindow({
@@ -64,12 +68,14 @@ app.whenReady().then(async () => {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   browser = new Browser({ window, workspaceService: workspace, admission });
+  browser.onAudit = entry => activity.append(entry);
   workspace.attachBrowser(browser);
   const clients = new ClientGrants({ directory, masterToken: token, workspace });
   lists = new CommunityLists({ workspace });
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
-  dispatch = createDispatcher({ workspace, browser, providers, clients, lists, admission, onEvent: event => events.emit('event', event) });
+  const authority = new Authority({ directory, workspace, browser, clients, activity });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });

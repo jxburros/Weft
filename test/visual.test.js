@@ -78,6 +78,7 @@ if (process.argv.includes("--visual-child")) {
       if(name==="workspaces.export") { exportArgs=args;return {format:"weft",residueScan:{status:"found",found:["sha256"],unverifiable:["image"],scope:"Text only"}}; }
       if(name==="settings.update") { Object.assign(state.settings,args); return state.settings; }
       if(name==="clients.list") return grants;
+      if(name==="autonomy.get") return {bootstrapLevel:"autonomous",workspaceCeiling:null};
       if(name==="clients.create") { clientArgs=args; const grant={...args,clientId:"client-fixture",expiresAt:1893456000000,revoked:false};grants.push(grant);return {...grant,token:"weft1.fixture-secret-token"}; }
       if(name==="clients.revoke") { grants.find(g=>g.clientId===args.clientId).revoked=true;return {revoked:true}; }
       if(name==="tabs.activate") return tabs[0];
@@ -143,7 +144,7 @@ if (process.argv.includes("--visual-child")) {
     await run('document.querySelector("#client-form [name=name]").value="Research assistant";document.querySelectorAll("#client-form [name=scope]")[1].checked=true;document.getElementById("client-form").requestSubmit()');
     await until('document.getElementById("new-client-token") !== null');
     assert.equal(await run('document.getElementById("new-client-token").value'),"weft1.fixture-secret-token");
-    assert.deepEqual(clientArgs,{name:"Research assistant",scopes:["read","records.write"],workspaceIds:["fixture"],ttlSeconds:3600});
+    assert.deepEqual(clientArgs,{name:"Research assistant",purpose:"",scopes:["read","records.write"],actionClasses:[],autonomy:"scoped",dataAccess:["workspace_records","conversations","page_content","page_capture","browsing_history","activity"],destinations:["*"],maxCommands:null,workspaceIds:["fixture"],crossWorkspace:false,ttlSeconds:3600});
     assert.doesNotMatch(await run('document.getElementById("result").textContent'),/fixture-secret-token/);
     await click('[data-action="close-dialog"]');
     await until('document.getElementById("new-client-token") === null');

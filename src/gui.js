@@ -36,6 +36,7 @@ const names = {
   conversations: "Conversations",
   artifacts: "Artifacts",
   activity: "Activity",
+  approvals: "Agent requests",
   workflows: "Workflows",
   settings: "Settings",
   privacy: "Privacy & site rules",
@@ -232,7 +233,8 @@ function theme() {
 }
 function renderSafetyNotices(automation) {
   const notices = $("safety-notices");
-  notices.innerHTML = (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
+  const pending = Number(automation?.pendingApprovals) || 0;
+  notices.innerHTML = (pending ? `<div class="safety-notice"><strong>${pending} agent request${pending === 1 ? " needs" : "s need"} your decision.</strong> Agent actions wait until you approve or reject them here; page text cannot approve them. ${action("section", "Review requests", "", 'data-section="approvals"', "secondary")}</div>` : "") + (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
     (state.storageWarnings || []).map(w => `<div class="safety-notice"><strong>Storage warning:</strong> ${esc(w.message)}${w.file ? ` <span>${esc(w.file)}</span>` : ""}</div>`).join("");
   notices.hidden = !notices.innerHTML;
 }
@@ -386,7 +388,15 @@ function renderContent() {
       heading(
         "Activity",
         "The decisions, changes, and progress behind your project.",
+        action("section", "Agent requests", "lock", 'data-section="approvals"'),
       ) + activityView();
+  else if (section === "approvals")
+    html =
+      heading(
+        "Agent requests",
+        "Actions agents asked to take. Nothing here runs until you decide.",
+        action("section", "Activity", "activity", 'data-section="activity"'),
+      ) + '<div id="approval-list" aria-live="polite"></div>';
   else if (section === "history")
     html =
       heading(
@@ -438,6 +448,8 @@ function renderContent() {
       ) + '<div id="download-list"></div>';
   $("content").innerHTML = `<div class="page-wrap">${html}</div>`;
   if (section === "downloads") loadDownloads();
+  if (section === "activity") void loadActivity();
+  if (section === "approvals") void loadApprovals();
   const search = $("collection-search");
   if (search) {
     search.value = filter;
@@ -526,15 +538,51 @@ function tabTable() {
     )
     .join("")}</tbody></table>`;
 }
+const activityState = { types: "", outcome: "", items: [], cursor: null, loaded: 50 };
+const outcomeLabels = { attempted: "Attempted", completed: "Completed", failed: "Failed", denied: "Denied", pending_approval: "Waiting for approval", partial: "Partial", externally_uncertain: "Sent · external result not verified", cancelled: "Cancelled", recorded: "Recorded" };
 function activityView() {
-  const rows = records("activity").slice().reverse().slice(0, 100);
-  return rows.length
-    ? `<div class="activity-list">${rows.map((r) => `<div class="activity-row"><span class="activity-dot icon">${icon("check")}</span><div><strong>${esc(r.summary || r.action || r.type || "Workspace updated")}</strong><p>${esc(r.actor || "You")}${r.detail ? " · " + esc(typeof r.detail === "string" ? r.detail : JSON.stringify(r.detail)) : ""}</p></div><time>${ago(r.createdAt || r.timestamp)}</time></div>`).join("")}</div>`
-    : empty(
-        "Your project history starts here",
-        "Meaningful changes appear here with their source and time.",
-        "activity",
-      );
+  const typeOptions = [["", "All activity"], ["command", "Commands"], ["decision", "Permission decisions"], ["approval", "Approval requests"], ["grant", "Agent access"], ["policy", "Policy"], ["model", "Model destinations"], ["block", "Blocks"], ["override", "Overrides"], ["artifact", "Captures"], ["retention", "Retention"]];
+  const outcomeOptions = [["", "All outcomes"], ...Object.entries(outcomeLabels)];
+  return `<div class="section-toolbar"><select id="activity-type" aria-label="Filter activity type">${typeOptions.map(([v, l]) => `<option value="${v}" ${activityState.types === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><select id="activity-outcome" aria-label="Filter activity outcome">${outcomeOptions.map(([v, l]) => `<option value="${v}" ${activityState.outcome === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>${action("activity-settings", "Retention & integrity", "shield", "", "text-button")}</div><div id="activity-entries" aria-live="polite"></div>`;
+}
+function activityRow(r) {
+  const what = r.command || (r.reason || r.type || "").replaceAll("_", " ");
+  const who = r.actor === "human" ? "You" : r.actor === "automation" ? "Bootstrap token" : r.actor === "model-reader" ? "Model read tool" : r.actor?.startsWith("client:") ? "Agent connection" : r.actor || "Weft";
+  const detail = [outcomeLabels[r.outcome] || r.outcome, r.decision && r.decision !== "auto" ? `decision: ${r.decision}${r.reason ? " (" + r.reason.replaceAll("_", " ") + ")" : ""}` : "", r.actionClass ? r.actionClass.replaceAll("_", " ") : "", r.irreversible ? "cannot be undone" : ""].filter(Boolean).join(" · ");
+  const inspect = { type: r.type, actor: r.actor, workspaceId: r.workspaceId, tabId: r.tabId, taskId: r.taskId, targetId: r.targetId, version: r.version, approvalId: r.approvalId, summary: r.summary, detail: r.detail, seq: r.seq, hash: r.hash };
+  return `<details class="activity-row"><summary><span class="activity-dot icon">${icon(r.outcome === "denied" || r.type === "block" ? "lock" : r.outcome === "pending_approval" ? "clock" : "check")}</span><span><strong>${esc(what)}</strong><small>${esc(who)} · ${esc(detail)}</small></span><time>${ago(r.at)}</time></summary><pre>${esc(JSON.stringify(inspect, null, 2))}</pre></details>`;
+}
+async function loadActivity(more = false) {
+  const filters = { workspaceId: ws().id, ...(activityState.types && { types: [activityState.types] }), ...(activityState.outcome && { outcome: activityState.outcome }) };
+  const page = await execute("activity.list", { ...filters, limit: more ? 50 : Math.min(200, activityState.loaded), ...(more && activityState.cursor && { cursor: activityState.cursor }) }, true).catch(() => null);
+  if (!page || !$("activity-entries")) return;
+  activityState.items = more ? [...activityState.items, ...page.items] : page.items;
+  activityState.loaded = Math.max(50, activityState.items.length);
+  activityState.cursor = page.nextCursor;
+  $("activity-entries").innerHTML = activityState.items.length
+    ? `<div class="activity-list">${activityState.items.map(activityRow).join("")}</div>${page.nextCursor ? `<div class="inline-actions">${action("activity-more", "Show older activity", "clock")}</div>` : ""}<p class="muted">History records what Weft observed and decided. It is not proof that an external website or provider completed an action.</p>`
+    : empty("Your project history starts here", "Meaningful changes, agent decisions and approvals appear here with their source and time.", "activity");
+}
+async function activitySettings() {
+  const [integrity, page] = await Promise.all([execute("activity.verify", {}, true), execute("activity.list", { workspaceId: ws().id, limit: 1 }, true)]);
+  const retention = page.retention || {};
+  formDialog("Retention & integrity",
+    `<p>Ordinary activity is kept on this device and removed by age or count. Saved artifacts and records are never removed by activity retention. Secrets are excluded and web addresses are stored without query strings.</p><div class="notice" id="activity-integrity"><strong>Integrity: ${esc(integrity.status === "intact" ? "chain intact" : "chain broken")}</strong> · ${esc(String(integrity.entries))} entries${integrity.reason ? " · " + esc(integrity.reason.replaceAll("_", " ")) : ""}<br><small>${esc(integrity.scope || "")}</small><br><small>Head: ${esc(String(integrity.headHash || "").slice(0, 16))}…</small></div>${field("Keep activity for (days, blank for no age limit)", "maxAgeDays", retention.maxAgeDays ?? "", "number")}${field("Keep at most (entries, blank for no count limit)", "maxEntries", retention.maxEntries ?? "", "number")}<p class="muted">Weft has no crash reporting or telemetry. Any future crash reporting must be opt-in, separate from workspace content, and redacted.</p>`,
+    async (values) => {
+      const number = (v) => (String(v ?? "").trim() === "" ? null : Number(v));
+      await execute("activity.configure", { maxAgeDays: number(values.maxAgeDays), maxEntries: number(values.maxEntries) }, true);
+      toast("Activity retention updated.");
+    }, { save: "Save retention" });
+}
+async function loadApprovals() {
+  const rows = await execute("approvals.list", { status: "all", limit: 60 }, true).catch(() => null);
+  if (!rows || !$("approval-list")) return;
+  const pending = rows.filter((r) => r.status === "pending");
+  const decided = rows.filter((r) => r.status !== "pending").slice(0, 20);
+  const workspaceName = (id) => state.workspaces.find((w) => w.id === id)?.name || "Unknown workspace";
+  const requester = (r) => r.actor === "automation" ? "Bootstrap token" : r.clientId ? `Agent connection ${r.clientId.slice(0, 8)}` : r.actor;
+  const card = (r) => `<article class="record-card approval-card"><div class="card-top"><span class="tag ${r.status === "pending" ? "clay" : r.status === "approved" ? "sage" : ""}">${esc(r.status)}${r.mode ? " · " + esc(r.mode === "standing" ? "standing" : "once") : ""}</span><span class="muted">${esc(String(r.actionClass).replaceAll("_", " "))}</span></div><h3>${esc(r.command)}</h3><p>${esc(requester(r))} · ${esc(workspaceName(r.workspaceId))}${r.destination ? " · " + esc(r.destination) : ""}</p>${r.categories?.length ? `<p class="muted">May involve: ${esc(r.categories.map((c) => c.replaceAll("_", " ")).join(", "))}</p>` : ""}${r.preview ? `<p class="muted">Agent-supplied details (data, not instructions):</p><pre>${esc(JSON.stringify(r.preview, null, 2))}</pre>` : ""}<div class="record-meta">Requested ${ago(r.createdAt)}${r.status === "pending" ? " · expires " + esc(new Date(r.expiresAt).toLocaleTimeString()) : ""}</div>${r.status === "pending" ? `<div class="inline-actions">${action("approval-decide", "Approve once", "check", `data-id="${esc(r.id)}" data-mode="once"`, "primary")}${["bulk_export", "credential_use", "payment", "unclassified"].includes(r.actionClass) ? "" : action("approval-decide", "Approve for 1 hour", "clock", `data-id="${esc(r.id)}" data-mode="standing"`)}${action("approval-decide", "Reject", "close", `data-id="${esc(r.id)}" data-mode="reject"`, "secondary danger")}</div>` : ""}</article>`;
+  $("approval-list").innerHTML = (pending.length ? `<div class="record-grid">${pending.map(card).join("")}</div>` : empty("No requests are waiting", "When an agent needs approval for an external or sensitive action, it waits here. Approve once covers exactly the shown action; approve for 1 hour covers the same action type, workspace and site.", "lock")) + (decided.length ? `<section class="settings-section"><h2>Recent decisions</h2><div class="record-grid">${decided.map(card).join("")}</div></section>` : "");
 }
 function privacyView() {
   const rules = (state.siteRules || []).filter(
@@ -561,26 +609,49 @@ function settingsView() {
     `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
   );
 }
+const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests" };
+const levelLabels = { observe: "Observe only", assist: "Ask before any change", scoped: "Local changes; ask before external actions", autonomous: "Standing approval for external actions" };
+function grantCard(grant) {
+  const names = grant.workspaceIds.map((id) => state.workspaces.find((w) => w.id === id)?.name || id).join(", ");
+  const status = grant.revoked ? "Revoked · " : Number(grant.expiresAt) <= Date.now() ? "Expired · " : "";
+  const sites = grant.destinations && !grant.destinations.includes("*") ? grant.destinations.join(", ") : "Any site";
+  return `<article class="record-card"><h3>${esc(grant.name)}</h3>${grant.purpose ? `<p>${esc(grant.purpose)}</p>` : ""}<p>${esc(grant.scopes.join(", "))}${grant.actionClasses?.length ? " · " + esc(grant.actionClasses.join(", ")) : ""}</p><small>Workspaces: ${esc(names)}${grant.crossWorkspace ? " (cross-workspace)" : ""}</small>${grant.autonomy ? `<small>Autonomy: ${esc(levelLabels[grant.autonomy] || grant.autonomy)} · Sites: ${esc(sites)}</small>` : ""}${grant.dataAccess ? `<small>Data: ${esc(grant.dataAccess.map((d) => dataClassLabels[d] || d).join(", "))}</small>` : ""}${grant.usage ? `<small>Used ${esc(String(grant.usage.count))}${grant.maxCommands ? " of " + esc(String(grant.maxCommands)) : ""} times${grant.taskId ? " · bound to a task" : ""}</small>` : ""}<small>${status}Expiry: ${esc(new Date(grant.expiresAt).toLocaleString())}</small>${!grant.revoked ? `<div class="inline-actions">${action("edit-client", "Change access", "", `data-id="${esc(grant.clientId)}"`)}${action("revoke-client", "Revoke token", "", `data-id="${esc(grant.clientId)}"`, "secondary danger")}</div>` : ""}</article>`;
+}
 async function manageClients() {
-  const grants = await execute("clients.list", {}, true);
+  const [grants, autonomy] = await Promise.all([execute("clients.list", {}, true), execute("autonomy.get", { workspaceId: ws().id }, true)]);
   openDialog("Agent connections",
-    `<p>Create a separate, expiring token for each agent. Scope each token to the workspace and actions it needs. Revocation takes effect immediately.</p>${grants.length ? grants.map(grant => `<article class="record-card"><h3>${esc(grant.name)}</h3><p>${esc(grant.scopes.join(", "))}</p><small>Workspaces: ${esc(grant.workspaceIds.map(id => state.workspaces.find(w => w.id === id)?.name || id).join(", "))}</small><small>${grant.revoked ? "Revoked · " : Number(grant.expiresAt) <= Date.now() ? "Expired · " : ""}Expiry: ${esc(new Date(grant.expiresAt).toLocaleString())}</small>${!grant.revoked ? action("revoke-client", "Revoke token", "", `data-id="${esc(grant.clientId)}"`, "secondary danger") : ""}</article>`).join("") : '<p>No scoped agent connections have been created.</p>'}`,
+    `<p>Create a separate, expiring token for each agent. Scope each token to the workspace, sites, data and actions it needs. Changes and revocation apply to the agent’s next command.</p><div class="settings-row"><div><strong>Bootstrap token</strong><small>The token printed at startup.</small></div><select id="bootstrap-level" aria-label="Bootstrap token autonomy">${Object.entries(levelLabels).map(([v, l]) => `<option value="${v}" ${autonomy.bootstrapLevel === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div><div class="settings-row"><div><strong>Limit in this workspace</strong><small>Applies to every agent here.</small></div><select id="workspace-level" aria-label="Workspace autonomy limit"><option value="">No extra limit</option>${Object.entries(levelLabels).map(([v, l]) => `<option value="${v}" ${autonomy.workspaceCeiling === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>${grants.length ? grants.map(grantCard).join("") : "<p>No scoped agent connections have been created.</p>"}`,
     action("close-dialog", "Close") + action("new-client", "Create connection", "plus", "", "primary"), true);
+  $("bootstrap-level").onchange = (e) => void execute("autonomy.update", { bootstrapLevel: e.target.value }, true).then(() => toast("Bootstrap token autonomy updated.")).catch((error) => toast(errorMessage(error)));
+  $("workspace-level").onchange = (e) => void execute("autonomy.update", { workspaceId: ws().id, level: e.target.value || null }, true).then(() => toast("Workspace autonomy limit updated.")).catch((error) => toast(errorMessage(error)));
+}
+function grantFields(grant = {}) {
+  const others = state.workspaces.filter((w) => !w.archived && w.id !== ws().id);
+  const checked = (list, value, fallback) => ((list ?? fallback).includes(value) ? "checked" : "");
+  return `${field("Purpose", "purpose", grant.purpose || "")}<fieldset><legend>Allowed actions</legend><label><input type="checkbox" name="scope" value="read" ${checked(grant.scopes, "read", ["read"])}> Read workspace records and page evidence</label><label><input type="checkbox" name="scope" value="records.write" ${checked(grant.scopes, "records.write", [])}> Create, edit, and delete records</label><label><input type="checkbox" name="scope" value="tabs.control" ${checked(grant.scopes, "tabs.control", [])}> Control tabs, navigate, and interact with pages</label><label><input type="checkbox" name="actionClass" value="code_exec" ${checked(grant.actionClasses, "code_exec", [])}> Run page scripts (always an external action)</label><label><input type="checkbox" name="actionClass" value="cloud_spend" ${checked(grant.actionClasses, "cloud_spend", [])}> Send messages to model connections</label></fieldset>${choice("Autonomy", "autonomy", Object.entries(levelLabels), grant.autonomy || "scoped")}<fieldset><legend>Data this agent may read</legend>${Object.entries(dataClassLabels).map(([v, l]) => `<label><input type="checkbox" name="dataAccess" value="${v}" ${checked(grant.dataAccess, v, Object.keys(dataClassLabels))}> ${esc(l)}</label>`).join("")}</fieldset>${area("Allowed sites (one per line, e.g. https://docs.example.com or *.example.org; blank for any site)", "destinations", (grant.destinations || []).filter((d) => d !== "*").join("\n"))}${field("Command limit (blank for none)", "maxCommands", grant.maxCommands ?? "", "number")}${others.length ? `<fieldset><legend>Additional workspaces</legend>${others.map((w) => `<label><input type="checkbox" name="workspace" value="${esc(w.id)}" ${checked(grant.workspaceIds, w.id, [])}> ${esc(w.name)}</label>`).join("")}<label><input type="checkbox" name="crossWorkspace" value="yes" ${grant.crossWorkspace ? "checked" : ""}> I explicitly allow this agent to work across these workspaces</label></fieldset>` : ""}`;
+}
+function grantValues(form, current = ws().id) {
+  const destinations = String(form.get("destinations") || "").split(/\n+/).map((v) => v.trim()).filter(Boolean);
+  const workspaceIds = [current, ...form.getAll("workspace")];
+  const scopes = form.getAll("scope");
+  if (!scopes.length) throw new Error("Select at least one allowed action.");
+  const limit = String(form.get("maxCommands") || "").trim();
+  return { purpose: String(form.get("purpose") || "").trim(), scopes, actionClasses: form.getAll("actionClass"), autonomy: form.get("autonomy"), dataAccess: form.getAll("dataAccess"),
+    destinations: destinations.length ? destinations : ["*"], maxCommands: limit ? Number(limit) : null,
+    workspaceIds, crossWorkspace: workspaceIds.length > 1 && form.get("crossWorkspace") === "yes" };
 }
 function createClient() {
   openDialog("Create agent connection",
-    `<p>This token grants access only to <strong>${esc(ws().name)}</strong>. Choose the least access this agent needs.</p><form id="client-form">${field("Agent name", "name", "", "text", true)}<fieldset><legend>Allowed actions</legend><label><input type="checkbox" name="scope" value="read" checked> Read workspace records and page evidence</label><label><input type="checkbox" name="scope" value="records.write"> Create, edit, and delete records</label><label><input type="checkbox" name="scope" value="tabs.control"> Control tabs, navigate, and interact with pages</label></fieldset>${choice("Expires after", "ttlSeconds", [["3600", "1 hour"], ["86400", "1 day"], ["604800", "7 days"], ["2592000", "30 days"]], "3600")}<button type="submit" hidden></button></form>`,
-    action("close-dialog", "Cancel") + '<button type="submit" form="client-form" class="primary">Create token</button>');
+    `<p>This token grants access to <strong>${esc(ws().name)}</strong> unless you explicitly add workspaces. Choose the least access this agent needs. External actions wait for your approval unless you grant standing approval.</p><form id="client-form">${field("Agent name", "name", "", "text", true)}${grantFields()}${choice("Expires after", "ttlSeconds", [["3600", "1 hour"], ["86400", "1 day"], ["604800", "7 days"], ["2592000", "30 days"]], "3600")}<button type="submit" hidden></button></form>`,
+    action("close-dialog", "Cancel") + '<button type="submit" form="client-form" class="primary">Create token</button>', true);
   $("client-form").onsubmit = async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const button = $("dialog-content").querySelector('button[form="client-form"]');
     button.disabled = true;
     try {
-      const scopes = form.getAll("scope");
-      if (!scopes.length) throw new Error("Select at least one allowed action.");
       // Quiet execution avoids retaining this one-time token in the command desk.
-      const grant = await execute("clients.create", { name: form.get("name"), scopes, workspaceIds: [ws().id], ttlSeconds: Number(form.get("ttlSeconds")) }, true);
+      const grant = await execute("clients.create", { name: form.get("name"), ...grantValues(form), ttlSeconds: Number(form.get("ttlSeconds")) }, true);
       openDialog("Save your agent token",
         `<p>Copy this token now. It will not be shown again after closing this dialog. If it is lost or exposed, revoke it and create a replacement.</p><p>Connection: ${esc(grant.name)}. Expires: ${esc(new Date(grant.expiresAt).toLocaleString())}.</p><label>Agent token<textarea id="new-client-token" readonly autocomplete="off" spellcheck="false"></textarea></label>`,
         action("close-dialog", "Done"));
@@ -592,6 +663,17 @@ function createClient() {
       if ($("form-error")) $("form-error").textContent = errorMessage(error);
     } finally { button.disabled = false; }
   };
+}
+async function editClient(id) {
+  const grant = (await execute("clients.list", {}, true)).find((g) => g.clientId === id);
+  if (!grant) return toast("Agent connection not found.");
+  const home = grant.workspaceIds.includes(ws().id) ? ws().id : grant.workspaceIds[0];
+  formDialog(`Change access: ${grant.name}`, grantFields(grant), async () => {
+    const changes = grantValues(new FormData($("edit-form")), home);
+    await execute("clients.update", { clientId: id, changes }, true);
+    toast("Access updated. It applies to the agent’s next command.");
+    setTimeout(() => void manageClients().catch(() => {}), 0);
+  }, { save: "Save access", wide: true });
 }
 async function loadDownloads() {
   try {
@@ -1413,6 +1495,24 @@ async function act(button) {
       await execute("clients.revoke", { clientId: id }, true);
       await manageClients();
       break;
+    case "edit-client":
+      await editClient(id);
+      break;
+    case "approval-decide": {
+      const mode = button.dataset.mode;
+      if (mode === "reject") await execute("approvals.reject", { id }, true);
+      else await execute("approvals.approve", { id, mode, standingMinutes: 60 }, true);
+      toast(mode === "reject" ? "Request rejected. The agent will see the refusal." : mode === "once" ? "Approved once. The agent can now retry exactly this action." : "Approved for 1 hour for this action type, workspace and site.");
+      await refresh(true);
+      await loadApprovals();
+      break;
+    }
+    case "activity-more":
+      await loadActivity(true);
+      break;
+    case "activity-settings":
+      await activitySettings();
+      break;
     case "blocked-back":
       await execute("page.back");
       break;
@@ -1705,6 +1805,11 @@ document.addEventListener("click", (event) => {
   if (button) void act(button).catch((e) => toast(errorMessage(e)));
 });
 document.addEventListener("change", (event) => {
+  if (["activity-type", "activity-outcome"].includes(event.target.id)) {
+    activityState[event.target.id === "activity-type" ? "types" : "outcome"] = event.target.value;
+    activityState.loaded = 50;
+    void loadActivity();
+  }
   if (event.target.id === "theme-select")
     void execute("settings.update", { theme: event.target.value }).catch(
       () => {},

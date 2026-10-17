@@ -162,13 +162,22 @@ fields are rejected. API request bodies are capped at 1 MiB, so large file impor
 should use the GUI. REST rejects browser-origin requests and does not enable CORS.
 
 Human-only policy, configuration, storage-administration, override, and takeover
-commands appear in discovery but reject automation callers. The bootstrap token
-retains broad access. In Settings → Agent connections, issue a separate token for
-each client with workspace restrictions, read/record-write/tab-control scopes and
-a finite lifetime. Revocation takes effect on every subsequent command and event;
-idle event streams close at their next heartbeat. Tokens are displayed once and
-never stored in the project. Scoped clients cannot execute arbitrary JavaScript,
-configure providers, change site policy, or mint other tokens. This remains a
+commands appear in discovery but reject automation callers. Every other agent
+command passes one authority gate (ADR-005): reads run, local work runs at the
+default level, and external actions such as clicks, form fills, scripts and model
+sends wait in the Agent requests queue until you approve them once or for a
+period, unless you granted standing autonomy. The bootstrap token defaults to
+standing autonomy; lower it in Settings → Agent connections. There, issue a
+separate token for each client with a purpose, workspace restrictions (several
+workspaces need an explicit cross-workspace grant), read/record-write/tab-control
+scopes, allowed sites, readable data classes, an autonomy level, an optional
+command limit and a finite lifetime. Changes and revocation take effect on every
+subsequent command and event; idle event streams close at their next heartbeat.
+Tokens are displayed once and never stored in the project. Scoped clients cannot
+execute page scripts or send to models unless granted, configure providers,
+change site policy, approve requests, or mint other tokens. Activity records
+decisions, approvals and outcomes with hash-chain tamper evidence and
+configurable retention; it is not proof that an external action succeeded. This remains a
 local single-user application, not a remote multi-user service. Takeovers revoke leases and state versions, but cannot undo
 an external action or arbitrary page script that already executed.
 
