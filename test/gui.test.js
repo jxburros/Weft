@@ -116,6 +116,17 @@ if (process.argv.includes("--gui-workflows")) {
     await until(
       '(async()=> (await window.weft.execute("tasks.list"))[0].status==="completed")()',
     );
+    // Structured handoffs are listed with the tasks and can be accepted from the GUI.
+    await run(
+      'window.weft.execute("handoffs.create", {objective: "Check the saved reference", nextStep: "Review the evidence", to: "human"})',
+    );
+    await until(
+      'document.querySelector("#handoffs")?.textContent.includes("Check the saved reference")',
+    );
+    await click('#handoffs [data-action="handoff-accept"]');
+    await until(
+      '(async()=> (await window.weft.execute("handoffs.list"))[0].status==="accepted")()',
+    );
     await click('[data-section="context"]');
     await click('[data-action="new-record"]');
     await fill("title", "Working principle");
@@ -128,6 +139,15 @@ if (process.argv.includes("--gui-workflows")) {
     );
     await until(
       '(async()=> (await window.weft.execute("tabs.list")).find(t=>t.active).title==="Reference fixture")()',
+    );
+    // Tab control is framed as an explicit mode in the toolbar.
+    await until('document.getElementById("ownership").textContent.startsWith("Available to agents")');
+    await run(
+      '(async()=> { const tab = (await window.weft.execute("tabs.list")).find(t=>t.active); await window.weft.execute("tabs.setControlMode", {tabId: tab.id, mode: "assist"}); })()',
+    );
+    await until('document.getElementById("ownership").textContent.startsWith("Assist")');
+    await run(
+      '(async()=> { const tab = (await window.weft.execute("tabs.list")).find(t=>t.active); await window.weft.execute("tabs.release", {tabId: tab.id}); })()',
     );
     await click("#save-page");
     await until('document.getElementById("dialog").open && document.getElementById("dialog-title").textContent === "Save page to workspace"');

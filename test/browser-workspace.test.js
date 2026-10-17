@@ -70,6 +70,9 @@ if (smoke) {
       assert.equal(await browser.execute('page.evaluate', { expression: 'localStorage.getItem("project")' }), 'first');
       assert.equal((await browser.execute('page.readable')).text, 'Saved evidence');
       assert.doesNotMatch(await browser.execute('page.content'), /password-secret|card-secret|otp-secret/);
+      await assert.rejects(browser.execute('page.evaluate', { tabId: firstTab, expectedVersion: browser.tab(firstTab).version, expression: '42' }, { actor: 'automation' }),
+        error => error.code === 'stale_state' && error.details.reason === 'inspection_required', 'a guessed current version is not an inspection after navigation');
+      await browser.execute('page.inspect', { tabId: firstTab }, { actor: 'automation' });
       const currentVersion = browser.tab(firstTab).version;
       await assert.rejects(browser.execute('page.evaluate', { tabId: firstTab, expression: '42' }, { actor: 'automation' }), /expectedVersion/);
       const pending = browser.execute('page.evaluate', { tabId: firstTab, expectedVersion: currentVersion, expression: 'new Promise(resolve => setTimeout(() => resolve(42), 150))' }, { actor: 'automation' });

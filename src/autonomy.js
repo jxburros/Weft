@@ -27,10 +27,17 @@ export function classify(actionClass, names) {
 }
 const add = classify;
 add('local_read', `guide.get browser.info tabs.list page.inspect storage.info downloads.list history.list bookmarks.list workspace.snapshot workspaces.list workspaces.get settings.get activity.list activity.verify search.query artifacts.list artifacts.get models.list chat.preview approvals.list autonomy.get`);
-add('external_read', `page.readable page.title page.content page.screenshot page.pdf`);
+add('external_read', `page.readable page.snapshot page.title page.content page.screenshot page.pdf`);
 add('local_write', `tabs.activate tabs.close tabs.pin tabs.claim tabs.release page.find page.zoom page.stop downloads.cancel bookmarks.create bookmarks.delete workspaces.create workspaces.update workspaces.archive workspaces.restore workspaces.duplicate conversations.message tasks.transition artifacts.capture artifacts.create artifacts.annotate artifacts.delete chat.cancel browser.close`);
-add('external_write', `tabs.new tabs.duplicate tabs.move page.navigate page.back page.forward page.reload page.click page.fill`);
+add('external_write', `tabs.new tabs.duplicate tabs.move page.navigate page.back page.forward page.reload page.click page.fill page.clickAt page.press`);
+// Observation, raw input, control modes and handoffs (#9, #15, #41).
+add('local_read', 'handoffs.list handoffs.get');
+add('local_write', 'handoffs.create handoffs.accept handoffs.complete');
+add('administration', 'tabs.setControlMode');
 add('code_exec', 'page.evaluate');
+add('local_read', 'handoffs.list handoffs.get');
+add('local_write', 'handoffs.create handoffs.accept handoffs.complete');
+add('administration', 'tabs.setControlMode');
 add('cloud_spend', 'chat.send');
 add('administration', `clients.create clients.list clients.update clients.revoke lists.install lists.status lists.rollback lists.subscribe lists.preview lists.update lists.configure lists.exception lists.unsubscribe lists.check lists.matches approvals.approve approvals.reject autonomy.update activity.configure
   browser.emergencyStop browser.resumeAutomation downloads.approve tabs.takeover page.allowOnce cookies.list cookies.set cookies.clear storage.clear history.clear
@@ -70,6 +77,7 @@ export function actionClassForCommand(name) { return classifications.get(name) ?
 /** Sensitive outbound categories that a command may produce. Unknown external effects are treated as all three external-change categories. */
 const categories = {
   'page.click': ['form_submission', 'message', 'account_change'], 'page.fill': ['form_submission', 'account_change'],
+  'page.clickAt': ['form_submission', 'message', 'account_change'], 'page.press': ['form_submission', 'message', 'account_change'],
   'page.evaluate': ['form_submission', 'message', 'account_change', 'sensitive_outbound_data'], 'chat.send': ['sensitive_outbound_data'],
   'workspaces.export': ['bulk_export'],
 };

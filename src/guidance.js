@@ -7,8 +7,8 @@ export const GUIDANCE = Object.freeze({
   },
   'tab-control': {
     title: 'Human and agent handoff',
-    commands: ['tabs.claim', 'page.inspect', 'page.navigate', 'tabs.release', 'tabs.takeover', 'browser.emergencyStop'],
-    text: 'Claim input before changing a tab. Supply expectedVersion from the latest inspection or mutation while holding a lease. On stale state, inspect with page.inspect, reconsider the intended action and retry only if still authorized. Human takeover revokes prior versions: stop and request a handoff rather than reclaiming or retrying blindly. tabs.takeover and browser.emergencyStop are human-only. Release only your own lease.',
+    commands: ['tabs.claim', 'page.inspect', 'page.snapshot', 'page.click', 'page.navigate', 'handoffs.create', 'handoffs.accept', 'tabs.release', 'tabs.takeover', 'browser.emergencyStop'],
+    text: 'Claim input before changing a tab. Input requires that you inspected the current version yourself (page.inspect, page.snapshot or a result describing the tab); a guessed expectedVersion is refused. Prefer page.snapshot refs over selectors: refs are valid only from your latest snapshot at the current version, and any input, navigation, takeover or human interaction invalidates them. On stale state, inspect again, reconsider the intended action and retry only if still authorized. A blocked or interrupted action did not complete. Human takeover revokes your lease; do not reclaim or retry blindly. Hand work over with handoffs.create (objective, completed actions, exact evidence, blocker, next step); after handoffs.accept, inspect before any input. Coordinate and keyboard input needs a person to let you drive with raw input. tabs.takeover, tabs.setControlMode and browser.emergencyStop are human-only. Release only your own lease.',
   },
   captures: {
     title: 'Evidence and offline references',

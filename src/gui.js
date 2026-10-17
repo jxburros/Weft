@@ -115,6 +115,16 @@ const host = (url) => {
     return url || "Local note";
   }
 };
+// Explicit control modes: the person drives, an agent assists (observe and propose), or an agent drives.
+const controlLabel = (t) => {
+  const mode = t?.controlMode || (t?.controller === "human" ? "you-drive" : !t?.controller || t.controller === "available" ? "available" : "agent-drives");
+  return mode === "you-drive" ? "You drive"
+    : mode === "assist" ? `Assist · ${t.assistant === "any-agent" || !t.assistant ? "an agent" : t.assistant} observes`
+    : mode === "agent-drives" ? `Agent drives: ${t.controller}${t.rawInput ? " (raw input)" : ""}`
+    : "Available to agents";
+};
+const controlStatus = (t) =>
+  `${controlLabel(t)}${t?.version ? " · v" + t.version : ""}${t?.activity ? ` · running ${t.activity.command}` : ""}${t?.queued?.length ? ` · ${t.queued.length} queued` : ""}`;
 const action = (name, label, ico = "", attrs = "", cls = "secondary") =>
   `<button class="${cls}" data-action="${name}" ${attrs}>${ico ? icon(ico) : ""}${esc(label)}</button>`;
 // Polling replaces controls. Keep keyboard focus on the equivalent new control.
@@ -270,7 +280,7 @@ function renderShell() {
   $("toggle-sidebar").setAttribute("aria-expanded", String(!$("app").classList.contains("sidebar-collapsed")));
   $("ownership").textContent =
     section === "browse"
-      ? `Control: ${active()?.controller || "available"}${active()?.version ? " · v" + active().version : ""}`
+      ? controlStatus(active())
       : "You are in control";
   if (section === "browse" && active()?.warning)
     $("status").textContent = "Site warning: " + active().warning;
@@ -497,6 +507,7 @@ function collectionView(kind) {
         "primary",
       ),
     ) +
+    (kind === "tasks" ? handoffPanel() : "") +
     `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting">Waiting for you</option><option value="paused">Paused</option><option value="completed">Completed</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
   );
 }
@@ -536,9 +547,19 @@ function tabTable() {
   return `<table class="tabs-table"><thead><tr><th>PAGE</th><th>CONTROL</th><th>ACTIONS</th></tr></thead><tbody>${visibleTabs()
     .map(
       (t) =>
-        `<tr><td>${esc(displayTitle(t))}<small>${esc(short(t.url, 70))}</small></td><td>${esc(t.controller || "available")}<small>Version ${t.version || 1}</small></td><td><div class="inline-actions">${action("activate-tab", "Open", "", 'data-id="' + t.id + '"')}${action("pin-tab", t.pinned ? "Unpin" : "Pin", "pin", `data-id="${t.id}"`)}${action("takeover", "Take control", "", 'data-id="' + t.id + '"')}</div></td></tr>`,
+        `<tr><td>${esc(displayTitle(t))}<small>${esc(short(t.url, 70))}</small></td><td>${esc(controlLabel(t))}<small>Version ${t.version || 1}${t.activity ? " · running " + esc(t.activity.command) + " for " + esc(t.activity.actor) : ""}${t.queued?.length ? " · " + t.queued.length + " queued" : ""}${t.lastBoundary?.interrupted?.length ? " · could not cancel " + esc(t.lastBoundary.interrupted.map((a) => a.command).join(", ")) : ""}</small></td><td><div class="inline-actions">${action("activate-tab", "Open", "", 'data-id="' + t.id + '"')}${action("pin-tab", t.pinned ? "Unpin" : "Pin", "pin", `data-id="${t.id}"`)}${t.controlMode !== "you-drive" ? action("takeover", "You drive", "", 'data-id="' + t.id + '"') : ""}${t.controlMode !== "assist" ? action("control-mode", "Assist", "", `data-id="${t.id}" data-mode="assist"`) : ""}${!["agent-drives", "available"].includes(t.controlMode) ? action("control-mode", "Let an agent drive", "", `data-id="${t.id}" data-mode="agent-drives"`) : ""}</div></td></tr>`,
     )
-    .join("")}</tbody></table>`;
+    .join("")}</tbody></table>${handoffPanel()}`;
+}
+function handoffPanel() {
+  const list = records("handoffs").filter((h) => ["open", "accepted"].includes(h.status)).slice().reverse();
+  if (!list.length) return "";
+  return `<section class="settings-section" id="handoffs" aria-label="Handoffs"><h2>Handoffs</h2><div class="record-grid">${list
+    .map(
+      (h) =>
+        `<article class="record-card handoff-card"><div class="card-top"><span class="tag ${h.status === "accepted" ? "sage" : "clay"}">${h.kind === "takeover" ? "Takeover" : "Handoff"} · ${esc(h.status)}</span></div><h3>${esc(short(h.objective || h.blocker || "Control boundary", 120))}</h3><p>${esc(h.from)} → ${esc(h.to)}${h.nextStep ? "\nNext: " + esc(short(h.nextStep, 160)) : ""}${h.blocker && h.objective ? "\nBlocked: " + esc(short(h.blocker, 120)) : ""}</p>${(h.interrupted || []).length ? `<div class="notice">Could not be cancelled: ${esc(h.interrupted.map((a) => a.command + " by " + a.actor).join(", "))}. Inspect the page before relying on the result.</div>` : ""}<div class="record-meta">${(h.tabs || []).map((t) => esc(host(t.url)) + " · v" + t.navigationVersion).join("; ")}${h.evidence?.length ? " · " + h.evidence.length + " evidence" : ""} · ${date(h.createdAt)}</div><div class="inline-actions">${h.status === "open" ? action("handoff-accept", "Accept", "check", `data-id="${esc(h.id)}"`) : ""}${action("handoff-complete", "Complete", "check", `data-id="${esc(h.id)}" data-state="completed"`)}${h.status === "open" ? action("handoff-complete", "Decline", "", `data-id="${esc(h.id)}" data-state="declined"`) : ""}</div></article>`,
+    )
+    .join("")}</div></section>`;
 }
 const activityState = { types: "", outcome: "", items: [], cursor: null, loaded: 50 };
 const outcomeLabels = { attempted: "Attempted", completed: "Completed", failed: "Failed", denied: "Denied", pending_approval: "Waiting for approval", partial: "Partial", externally_uncertain: "Sent · external result not verified", cancelled: "Cancelled", recorded: "Recorded" };
@@ -1814,6 +1835,15 @@ async function act(button) {
       break;
     case "takeover":
       await execute("tabs.takeover", { tabId: Number(id) });
+      break;
+    case "control-mode":
+      await execute("tabs.setControlMode", { tabId: Number(id), mode: button.dataset.mode });
+      break;
+    case "handoff-accept":
+      await execute("handoffs.accept", { id });
+      break;
+    case "handoff-complete":
+      await execute("handoffs.complete", { id, status: button.dataset.state });
       break;
     case "new-material":
       editRecord("materials");

@@ -100,6 +100,30 @@ alone is not a shipped capability.
   before enablement; workspace export can produce Markdown through the plugin.
 - The `unsupported` error code (HTTP 422, CLI exit 1) reports a requested
   format, extractor or extension engine feature that is not available.
+- Added `page.snapshot` semantic snapshots with frame-scoped stable element
+  refs, coverage reporting (cross-origin frames, redacted fields, lazy, busy,
+  virtualized, opaque and truncated content) and an isolated-world observer;
+  `page.click`/`page.fill` accept refs bound to the actor's latest snapshot and
+  an element fingerprint (#15, #41).
+- `page.screenshot` adds element/region capture, crop and resolution limits,
+  capture geometry metadata and sensitive-field masking; added permission-gated
+  `page.clickAt`/`page.press` with viewport geometry validation (#15, #41).
+- Automation input now requires a current-state inspection by the same actor;
+  per-tab input is serialized with a configurable queue and optional exclusive
+  mode; newly blocked navigations fail as `site_blocked` (#9, #41).
+- Added explicit tab control modes (`tabs.setControlMode`: you drive, assist,
+  agent drives), takeover boundaries that report uncancellable in-flight
+  actions, and persisted structured handoffs (`handoffs.*`) shown in the GUI (#9).
+- Readable/HTML extraction runs in an isolated world and strips `srcdoc`;
+  page-sourced titles drop control and bidi-override characters (#41).
+- Observation, raw input, control-mode and handoff commands are classified for
+  the shared authority gate (`page.snapshot` external read with page content;
+  `page.clickAt`/`page.press` external writes with form/message/account
+  categories; `handoffs.*` local records; `tabs.setControlMode` human-only
+  administration). The gate decides first; version, inspection and queue checks
+  follow, so an approval never substitutes for fresh inspection. Takeover
+  boundaries are recorded in durable activity and published as `handoff`
+  events; handoff record changes also publish `handoff` events.
 
 ### Not completed
 

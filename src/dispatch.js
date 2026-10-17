@@ -87,6 +87,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       if (['models.save', 'models.delete', 'models.probe'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });
       return providers.execute(command, args, context);
     }
+    if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);
     if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
     if (command === 'browser.emergencyStop' && context.actor === 'human') {
       admission.stop();
@@ -126,6 +127,11 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       status: outcome.execution === 'succeeded' ? 'success' : outcome.error?.code === 'approval_required' || outcome.error?.details?.authority ? 'blocked' : 'failure',
       workspaceId: outcome.workspaceId, tabId: outcome.tabId, createdAt: new Date().toISOString() };
     onEvent(event);
+    // Handoff lifecycle changes are also published as metadata-only handoff events.
+    if (outcome.execution === 'succeeded' && /^handoffs\.(create|accept|complete)$/.test(outcome.command) && outcome.result?.id) {
+      onEvent({ type: 'handoff', command: outcome.command, actor: context.actor, status: outcome.result.status, workspaceId: outcome.workspaceId ?? outcome.result.workspaceId, handoffId: outcome.result.id,
+        revision: outcome.result.revision, createdAt: event.createdAt });
+    }
     // Observers get sanitized metadata after the outcome is final; they cannot change or delay it.
     if (Object.hasOwn(commands, outcome.command) && (!admission.status.stopped || ['human', 'admin'].includes(context.actor))) {
       void plugins.notify('after-command', { command: outcome.command, actor: String(context.actor).slice(0, 64), status: event.status === 'success' ? 'success' : 'failure',

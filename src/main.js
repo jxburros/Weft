@@ -83,6 +83,7 @@ app.whenReady().then(async () => {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   browser = new Browser({ window, workspaceService: workspace, admission });
   browser.onAudit = entry => activity.append(entry);
+  browser.onEvent = event => events.emit('event', event);
   workspace.attachBrowser(browser);
   // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
   plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
