@@ -38,6 +38,7 @@ const names = {
   activity: "Activity",
   workflows: "Workflows",
   settings: "Settings",
+  updates: "Updates",
   privacy: "Privacy & site rules",
   downloads: "Downloads",
   history: "History",
@@ -426,6 +427,13 @@ function renderContent() {
       }</div>`;
   else if (section === "privacy") html = privacyView();
   else if (section === "settings") html = settingsView();
+  else if (section === "updates")
+    html =
+      heading(
+        "Updates",
+        "Stable releases from one fixed source, verified before they are kept and installed only when you choose.",
+        action("section", "Back to settings", "back", 'data-section="settings"'),
+      ) + '<div id="update-center" aria-live="polite"></div>';
   else if (section === "downloads")
     html =
       heading(
@@ -434,6 +442,7 @@ function renderContent() {
       ) + '<div id="download-list"></div>';
   $("content").innerHTML = `<div class="page-wrap">${html}</div>`;
   if (section === "downloads") loadDownloads();
+  if (section === "updates") loadUpdates();
   const search = $("collection-search");
   if (search) {
     search.value = filter;
@@ -554,7 +563,7 @@ function privacyView() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 async function manageClients() {
@@ -588,6 +597,69 @@ function createClient() {
       if ($("form-error")) $("form-error").textContent = errorMessage(error);
     } finally { button.disabled = false; }
   };
+}
+const updateKinds = {
+  source: "Running from source",
+  nsis: "Windows installer",
+  dmg: "macOS disk image",
+  appimage: "Linux AppImage",
+  deb: "Debian package",
+  unmanaged: "Unmanaged Linux copy",
+  unsupported: "Unsupported platform",
+};
+const signatureText = {
+  verified: "Signed by the same publisher as this installation",
+  signed: "Validly signed; this installation is unsigned, so the publisher cannot be pinned",
+  not_verified: "Not signature-checked (unsigned build); verified by size and SHA-512 only",
+};
+const when = (value) => (value ? new Date(value).toLocaleString() : "Never");
+const row = (title, detail, control = "") =>
+  `<div class="settings-row"><div><strong>${esc(title)}</strong>${[].concat(detail).filter(Boolean).map((d) => `<small>${esc(d)}</small>`).join("")}</div>${control}</div>`;
+function updateCenter(s) {
+  const blocked = s.killSwitch.active
+    ? "Updates are turned off by WEFT_DISABLE_UPDATES. Weft sends no update traffic and will not install updates."
+    : !s.install.supported
+      ? s.install.reason
+      : "";
+  const staged = s.staged;
+  const health = s.activation.health;
+  const pending = s.activation.pending;
+  const rollback = s.activation.rollback;
+  const healthText = !health
+    ? "No update has been activated on this computer."
+    : health.status === "healthy"
+      ? `Weft ${health.version} passed its health check (${when(health.at)}).`
+      : health.status === "probation"
+        ? `Weft ${health.version} is being checked after updating (launch ${pending?.launches || 1} of 2).`
+        : `Weft ${health.version} failed its health check: ${health.reason || "unknown reason"}`;
+  return (
+    `<section class="settings-section"><h2>This installation</h2>` +
+    row(`Weft ${s.currentVersion}`, [`Stable channel · ${s.repository} releases`, updateKinds[s.install.kind] || s.install.kind]) +
+    row("Update traffic", s.killSwitch.active ? "Off: kill switch WEFT_DISABLE_UPDATES is set" : `Contacts the release server ${s.egress.contactsNetwork}`) +
+    (blocked ? `<div class="notice" role="status">${esc(blocked)}</div>` : "") +
+    (s.warning ? `<div class="notice" role="status">${esc(s.warning)}</div>` : "") +
+    `</section><section class="settings-section"><div class="section-heading"><h2>Check for updates</h2>${action("check-updates", "Check now", "reload", blocked ? "disabled" : "", "primary")}</div>` +
+    row("Last check", s.lastCheck ? [`${when(s.lastCheck.at)}${s.lastCheck.automatic ? " · automatic" : ""}`, s.lastCheck.message] : "Weft has not checked for updates.") +
+    `<div class="settings-row"><label><input id="auto-updates" type="checkbox" ${s.automaticChecks.enabled ? "checked" : ""} ${blocked ? "disabled" : ""}> Check once a day and download verified updates in the background</label><small>${s.automaticChecks.nextCheckAt ? "Next check after " + esc(when(s.automaticChecks.nextCheckAt)) : "Off"}</small></div>` +
+    `<div class="notice">Checking contacts ${s.egress.hosts.map(esc).join(", ")}. They receive ${esc(s.egress.sends)} Background checks only download and verify; nothing installs until you choose Install. Local work never depends on this check.</div></section>` +
+    `<section class="settings-section"><h2>Ready to install</h2>` +
+    (staged
+      ? row(`Weft ${staged.version}`, [`${staged.file} · ${(staged.size / 1048576).toFixed(1)} MB · downloaded ${when(staged.verifiedAt)}`, `Size and SHA-512 match the release manifest${staged.verification.onDisk === "present" ? "; checked again before installing" : " but the file is " + staged.verification.onDisk}`, `SHA-512 ${staged.sha512.slice(0, 24)}…`, signatureText[staged.signature.status] || staged.signature.reason || staged.signature.status], `<div class="inline-actions">${action("open-url", "Release notes", "external", `data-url="${esc(staged.releaseUrl)}"`)}${action("install-update", `Install ${staged.version} and restart`, "download", `data-version="${esc(staged.version)}" ${blocked ? "disabled" : ""}`, "primary")}</div>`)
+      : `<p>No update is waiting. Verified downloads appear here before anything is installed.</p>`) +
+    `</section><section class="settings-section"><h2>Health and recovery</h2>` +
+    row("After updating", healthText) +
+    row("Previous version", rollback.available ? `Weft ${rollback.version} is kept and verified for rollback${rollback.automatic ? "; it is restored automatically if an update fails twice" : ""}.` : rollback.guidance, rollback.available ? action("rollback-update", `Restore ${rollback.version}`, "back", "", "secondary danger") : "") +
+    (s.activation.history.length ? `<div class="activity-list">${s.activation.history.slice().reverse().map((h) => `<div class="activity-row"><span class="activity-dot icon">${icon(h.outcome === "healthy" ? "check" : "clock")}</span><div><strong>Weft ${esc(h.version)} · ${esc(h.outcome.replaceAll("_", " "))}</strong><p>${esc(h.detail)} · ${esc(when(h.at))}</p></div></div>`).join("")}</div>` : "") +
+    `</section>`
+  );
+}
+async function loadUpdates() {
+  try {
+    const status = await execute("update.status", {}, true);
+    if ($("update-center")) $("update-center").innerHTML = updateCenter(status);
+  } catch (e) {
+    if ($("update-center")) $("update-center").innerHTML = `<div class="notice" role="status">${esc(errorMessage(e))}</div>`;
+  }
 }
 async function loadDownloads() {
   try {
@@ -1623,6 +1695,28 @@ async function act(button) {
       await execute("browser.resumeAutomation", {});
       toast("Automation resumed. Tab control remains with you until released.");
       break;
+    case "check-updates": {
+      button.disabled = true;
+      try {
+        const result = await execute("update.check", {}, true);
+        toast(result.message);
+      } finally {
+        await loadUpdates();
+      }
+      break;
+    }
+    case "install-update": {
+      const result = await execute("update.install", { version: button.dataset.version }, true);
+      toast(result.message);
+      await loadUpdates();
+      break;
+    }
+    case "rollback-update": {
+      const result = await execute("update.rollback", {}, true);
+      toast(result.message);
+      await loadUpdates();
+      break;
+    }
     case "emergency-stop":
       await execute("browser.emergencyStop", {});
       toast(
@@ -1701,6 +1795,10 @@ document.addEventListener("click", (event) => {
   if (button) void act(button).catch((e) => toast(errorMessage(e)));
 });
 document.addEventListener("change", (event) => {
+  if (event.target.id === "auto-updates")
+    void execute("update.configure", { automaticChecks: event.target.checked }, true)
+      .then(loadUpdates)
+      .catch((e) => toast(errorMessage(e)));
   if (event.target.id === "theme-select")
     void execute("settings.update", { theme: event.target.value }).catch(
       () => {},

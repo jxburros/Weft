@@ -228,6 +228,21 @@ if (process.argv.includes("--gui-workflows")) {
       'document.getElementById("palette-results").textContent.includes("Research notes")',
     );
     await click('[data-action="close-dialog"]');
+    // A source run reports its real update state and offers no network check.
+    await click("#settings-button");
+    await click('[data-section="updates"]');
+    await until(
+      'document.getElementById("update-center")?.textContent.includes("Running from source")',
+    );
+    assert.equal(
+      await run('document.querySelector("[data-action=check-updates]").disabled'),
+      true,
+    );
+    const updateCheck = await run(
+      'window.weft.executeOutcome("update.check", {})',
+    );
+    assert.equal(updateCheck.error.code, "unavailable");
+    assert.match(updateCheck.error.message, /source/);
     window.setSize(1000, 700);
     await click("#agent-toggle");
     await new Promise((resolve) => setTimeout(resolve, 180));

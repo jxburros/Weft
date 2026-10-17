@@ -5,6 +5,7 @@ import { commandDefinitions as workspaceDefinitions } from './workspace-commands
 import { providerCommandDefinitions } from './provider-commands.js';
 import { clientCommandDefinitions } from './clients.js';
 import { listCommandDefinitions } from './community-lists.js';
+import { updateCommandDefinitions } from './updater.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -72,6 +73,7 @@ const definitions = {
   ...providerCommandDefinitions,
   ...clientCommandDefinitions,
   ...listCommandDefinitions,
+  ...updateCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -79,9 +81,10 @@ for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith
 const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'page.allowOnce',
   'cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear', 'history.clear', 'settings.update',
   'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete',
-  'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback']);
+  'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback',
+  'update.check', 'update.install', 'update.rollback', 'update.configure']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.title', 'page.content',
-  'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export']);
+  'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'update.status']);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',

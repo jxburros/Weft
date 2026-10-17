@@ -125,3 +125,8 @@ Human-only describes an unconditional administration gate; other commands may st
 | lists.install | Human installs or updates a disabled, commit/hash-pinned community site list from supplied offline JSON bytes | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.status | Human inspects installed list pins, rule status and rollback availability without downloading | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.rollback | Human restores the previous pinned list version with rules disabled for review | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.status | Read installed version, stable channel, last check, staged update, verification, health and kill-switch state without network access | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| update.check | Human checks the fixed stable release channel now; a newer verified build is downloaded and staged but never installed | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.install | Human installs the verified staged update now; Weft hands off to the platform installer and restarts | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.rollback | Human restores the retained previous verified version where the platform allows | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.configure | Human turns disclosed background checks on or off (at most daily; they only download and stage) | administration | Human only | GUI IPC, CLI, REST, MCP |

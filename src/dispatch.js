@@ -4,7 +4,7 @@ import { resolveCommandTargets } from './admission.js';
 import { getGuidance } from './guidance.js';
 
 /** One command boundary for GUI, HTTP, CLI/MCP and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, admission, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, updates, admission, onEvent = () => {} }) {
   return async (name, input = {}, caller = {}) => {
     const context = { actor: 'automation', ...caller };
     let target = { workspaceId: null, tabId: null };
@@ -18,7 +18,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       const args = resolved.args;
       target = resolved.target;
       if (context.clientId) {
-        if (!target.workspaceId && !['guide.get', 'browser.info', 'workspaces.list'].includes(command)) {
+        if (!target.workspaceId && !['guide.get', 'browser.info', 'workspaces.list', 'update.status'].includes(command)) {
           if (context.workspaceIds.length !== 1) throw Object.assign(new Error('Specify a workspace target for this client command'), { code: 'ambiguous_target' });
           target.workspaceId = context.workspaceIds[0];
         }
@@ -31,6 +31,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         clients?.assertAllowed(command, context, target);
       };
       if (command === 'guide.get') return getGuidance(args.topic);
+      if (command.startsWith('update.')) {
+        if (!updates) throw Object.assign(new Error('Updates are not available in this process'), { code: 'unavailable' });
+        return updates.execute(command, args, context);
+      }
       if (command.startsWith('lists.')) return lists.execute(command, args, context);
       if (command.startsWith('clients.')) return clients.execute(command, args, context);
       if (command.startsWith('models.') || command.startsWith('chat.')) {
