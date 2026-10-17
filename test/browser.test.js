@@ -53,7 +53,7 @@ async function runSmoke() {
       return;
     }
     response.setHeader('Content-Type', 'text/html');
-    response.end(`<!doctype html><title>${request.url === '/second' ? 'Second page' : 'Weft smoke'}</title><input id="field"><button id="button" onclick="document.title=document.querySelector('input').value">Set</button><div style="height:2000px">Long page</div>`);
+    response.end(`<!doctype html><title>${request.url === '/second' ? 'Second page' : 'Weft smoke'}</title><input id="field"><button id="button" onclick="document.title=document.querySelector('input').value">Set</button><a id="download" href="/download" download>Download</a><a id="slow-download" href="/slow-download" download>Slow download</a><div style="height:2000px">Long page</div>`);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -98,15 +98,15 @@ async function runSmoke() {
     assert.equal((await browser.execute('cookies.list')).length, 0);
     assert.equal(await browser.execute('page.evaluate', { expression: 'localStorage.getItem("keep")' }), 'yes');
     const downloadDone = new Promise(resolve => browser.session.once('will-download', (_event, item) => item.once('done', (_event, state) => resolve(state))));
-    const startDownload = path => browser.execute('page.evaluate', { expression: `(() => {const a = document.createElement('a'); a.href = ${JSON.stringify(path)}; a.click();})()` });
-    await startDownload('/download');
+    const startDownload = selector => browser.execute('page.click', { selector });
+    await startDownload('#download');
     assert.equal(await downloadDone, 'completed');
     const downloads = await browser.execute('downloads.list');
     assert.equal(downloads[0].state, 'completed');
     assert.equal(downloads[0].filename, 'fixture.txt');
     assert.equal(readdirSync(`${directory}/downloads/Weft`).length, 1);
     const pendingDownload = new Promise(resolve => browser.session.once('will-download', (_event, item) => resolve(item)));
-    await startDownload('/slow-download');
+    await startDownload('#slow-download');
     const item = await pendingDownload;
     const cancelled = new Promise(resolve => item.once('done', (_event, state) => resolve(state)));
     await browser.execute('downloads.cancel', { downloadId: 2 });
