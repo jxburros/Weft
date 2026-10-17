@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Weft</title>
+  <link rel="stylesheet" href="./gui.css">
+  <script type="module" src="./gui.js"></script>
+</head>
+<body>
+  <header>
+    <div class="tabbar"><strong>WEFT</strong><div id="tabs" aria-label="Browser tabs"></div><button id="new-tab" title="New tab">＋</button></div>
+    <form id="navigation">
+      <button type="button" id="back" title="Back">←</button>
+      <button type="button" id="forward" title="Forward">→</button>
+      <button type="button" id="reload" title="Reload">↻</button>
+      <button type="button" id="stop" title="Stop loading">■</button>
+      <input id="address" aria-label="Website URL" placeholder="https://example.com" autocomplete="off">
+      <button type="submit">Go</button>
+    </form>
+  </header>
+  <main><p>Open a tab to start browsing.</p></main>
+  <aside>
+    <h1>Command desk</h1>
+    <p class="muted">The same browser. Every command. Human or agent.</p>
+    <label for="command">Command</label>
+    <select id="command"></select>
+    <p id="description"></p>
+    <details><summary>Input schema</summary><pre id="schema"></pre></details>
+    <label for="arguments">Arguments (JSON)</label>
+    <textarea id="arguments" spellcheck="false" rows="8">{}</textarea>
+    <button id="run">Run command</button>
+    <p id="status" role="status">Ready</p>
+    <h2>Result</h2>
+    <div id="artifact"></div>
+    <pre id="result" tabindex="0"></pre>
+  </aside>
+</body>
+</html>
