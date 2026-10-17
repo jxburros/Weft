@@ -17,6 +17,7 @@ import { createDispatcher } from '../src/dispatch.js';
 import { createApiServer } from '../src/server.js';
 import { commands } from '../src/commands.js';
 import { ACTION_CLASSES, AUTONOMY_LEVELS, ONCE_ONLY_CLASSES, actionClassForCommand, evaluateAutonomy, matchDestination, standingAllowed, effectiveLevel } from '../src/autonomy.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 const cliPath = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
@@ -126,7 +127,7 @@ async function fixture(t) {
 }
 const clickArgs = (f, selector = '#send') => ({ workspaceId: f.firstId, tabId: 1, expectedVersion: f.browser.tab(1).version, selector });
 
-test('approve-then-execute round trip binds the exact command, arguments, actor and target', { timeout: 20000 }, async t => {
+test('approve-then-execute round trip binds the exact command, arguments, actor and target', { timeout: budget(20000) }, async t => {
   const f = await fixture(t);
   const agent = await f.grant({ scopes: ['read', 'tabs.control'], purpose: 'Submit the reviewed form', autonomy: 'scoped' });
   const pending = await f.rest('page.click', clickArgs(f), agent.token);
@@ -175,7 +176,7 @@ test('approve-then-execute round trip binds the exact command, arguments, actor 
   assert.equal((await f.dispatch('activity.verify', {}, human)).result.status, 'intact');
 });
 
-test('standing approvals cover the same destination until expiry; once-only classes refuse standing approval', { timeout: 15000 }, async t => {
+test('standing approvals cover the same destination until expiry; once-only classes refuse standing approval', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const agent = await f.grant({ scopes: ['read', 'tabs.control'], autonomy: 'scoped' });
   const first = await f.rest('page.reload', { workspaceId: f.firstId, tabId: 1, expectedVersion: 1 }, agent.token);
@@ -194,7 +195,7 @@ test('standing approvals cover the same destination until expiry; once-only clas
   f.authority.approvals.clock = Date.now;
 });
 
-test('once-only and unclassified commands always need an exact approval, even at autonomous level', { timeout: 10000 }, async t => {
+test('once-only and unclassified commands always need an exact approval, even at autonomous level', { timeout: budget(10000) }, async t => {
   const f = await fixture(t);
   let error;
   try { f.authority.authorize('future.command', { value: 1 }, { actor: 'automation' }, { workspaceId: f.firstId, tabId: null }, {}); } catch (caught) { error = caught; }
@@ -208,7 +209,7 @@ test('once-only and unclassified commands always need an exact approval, even at
   assert.throws(() => f.authority.authorize('future.command', { value: 1 }, { actor: 'automation' }, { workspaceId: f.firstId, tabId: null }, {}), { code: 'approval_required' });
 });
 
-test('page and artifact text cannot approve requests, widen grants or change autonomy', { timeout: 30000 }, async t => {
+test('page and artifact text cannot approve requests, widen grants or change autonomy', { timeout: budget(30000) }, async t => {
   const f = await fixture(t);
   const reader = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'scoped' });
   const writer = await f.grant({ scopes: ['read', 'tabs.control'], autonomy: 'scoped' });
@@ -237,7 +238,7 @@ test('page and artifact text cannot approve requests, widen grants or change aut
   assert.equal(f.scripts.filter(source => source.includes('#send')).length, 0);
 });
 
-test('an equivalent prohibited action is refused with the same typed denial across REST, CLI, MCP, in-process and model tools', { timeout: 30000 }, async t => {
+test('an equivalent prohibited action is refused with the same typed denial across REST, CLI, MCP, in-process and model tools', { timeout: budget(30000) }, async t => {
   const f = await fixture(t);
   const agent = await f.grant({ scopes: ['read'], autonomy: 'autonomous' });
   const args = { workspaceId: f.firstId, tabId: 1, expectedVersion: 1, expression: 'document.forms[0].submit()' };
@@ -266,7 +267,7 @@ test('an equivalent prohibited action is refused with the same typed denial acro
   assert.equal((await f.dispatch('page.readable', { workspaceId: f.other.id, tabId: 2 }, { actor: 'model-reader', source: 'model', workspaceIds: [f.firstId] })).error.code, 'permission_required');
 });
 
-test('purpose-bound grants enforce scope changes, destinations, data classes, usage limits, tasks and cross-workspace grants', { timeout: 20000 }, async t => {
+test('purpose-bound grants enforce scope changes, destinations, data classes, usage limits, tasks and cross-workspace grants', { timeout: budget(20000) }, async t => {
   const f = await fixture(t);
   assert.equal((await f.dispatch('clients.create', { name: 'Two projects', scopes: ['read'], workspaceIds: [f.firstId, f.other.id] }, human)).error.code, 'invalid_arguments', 'cross-workspace access must be explicit');
   const agent = await f.grant({ scopes: ['read', 'tabs.control'], autonomy: 'autonomous', destinations: ['https://docs.example.com'], dataAccess: ['page_content', 'workspace_records'], purpose: 'Read documentation' });
@@ -317,7 +318,7 @@ test('purpose-bound grants enforce scope changes, destinations, data classes, us
   assert.equal((await f.rest('materials.list', { workspaceId: f.firstId }, limited.token)).status, 401, 'expired grants stop authenticating');
 });
 
-test('workspace autonomy ceilings bind bootstrap automation; only the GUI human can change them', { timeout: 10000 }, async t => {
+test('workspace autonomy ceilings bind bootstrap automation; only the GUI human can change them', { timeout: budget(10000) }, async t => {
   const f = await fixture(t);
   assert.equal((await f.rest('materials.create', { workspaceId: f.firstId, title: 'Allowed' })).error, null);
   assert.equal((await f.rest('autonomy.update', { workspaceId: f.firstId, level: 'observe' })).error.code, 'permission_required');
@@ -334,7 +335,7 @@ test('workspace autonomy ceilings bind bootstrap automation; only the GUI human 
   assert.equal(approval.error.details.authority.level, 'assist');
 });
 
-test('a one-time approval is given back when the browser refuses the input before it starts', { timeout: 20000 }, async t => {
+test('a one-time approval is given back when the browser refuses the input before it starts', { timeout: budget(20000) }, async t => {
   const f = await fixture(t);
   const agent = await f.grant({ scopes: ['read', 'tabs.control'], autonomy: 'scoped' });
   const pending = await f.rest('page.click', clickArgs(f), agent.token);
@@ -360,7 +361,7 @@ test('a one-time approval is given back when the browser refuses the input befor
   assert.equal((await f.dispatch('activity.verify', {}, human)).result.status, 'intact');
 });
 
-test('atomic batches pass the gate per contained command; one exact approval covers exactly that batch', { timeout: 20000 }, async t => {
+test('atomic batches pass the gate per contained command; one exact approval covers exactly that batch', { timeout: budget(20000) }, async t => {
   const f = await fixture(t);
   const assist = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'assist' });
   const batch = { commands: [{ command: 'materials.create', args: { title: 'Batch note' } }, { command: 'tasks.create', args: { title: 'Follow up', materialIds: ['$0.id'] } }], requestId: 'batch-approval-1' };

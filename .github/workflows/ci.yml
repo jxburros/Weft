@@ -17,7 +17,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
+    timeout-minutes: 20
+    env:
+      # Synced disk writes are several times slower on Windows runners; per-test hang guards scale with this (test/time-budget.js).
+      WEFT_TEST_TIME_SCALE: ${{ matrix.os == 'windows-latest' && '4' || '1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -7,6 +7,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { ClientGrants } from '../src/clients.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 function fixture(t) {
@@ -31,7 +32,7 @@ const invalidate = {
   stop: f => f.admission.stop(),
 };
 for (const [reason, block] of Object.entries(invalidate)) {
-  test(`${reason} prevents an admitted workspace write from executing after its queue wait`, { timeout: 5000 }, async t => {
+  test(`${reason} prevents an admitted workspace write from executing after its queue wait`, { timeout: budget(5000) }, async t => {
     const f = fixture(t);
     let release;
     f.workspace.queue = new Promise(resolve => { release = resolve; });
@@ -42,7 +43,7 @@ for (const [reason, block] of Object.entries(invalidate)) {
     assert.equal(outcome.error?.code, reason === 'stop' ? 'emergency_stop' : 'permission_required');
     assert.equal(f.workspace.snapshot().materials.length, 0);
   });
-  test(`${reason} rolls back a capture when authority changes while awaiting browser evidence`, { timeout: 5000 }, async t => {
+  test(`${reason} rolls back a capture when authority changes while awaiting browser evidence`, { timeout: budget(5000) }, async t => {
     const f = fixture(t);
     let started; let release;
     const capturing = new Promise(resolve => { started = resolve; });
@@ -60,7 +61,7 @@ for (const [reason, block] of Object.entries(invalidate)) {
   });
 }
 
-test('revocation also prevents an admitted queued read from returning private records', { timeout: 5000 }, async t => {
+test('revocation also prevents an admitted queued read from returning private records', { timeout: budget(5000) }, async t => {
   const f = fixture(t);
   await f.workspace.execute('materials.create', { title: 'Private title' }, human);
   let release;

@@ -13,6 +13,7 @@ import { CredentialService } from '../src/credentials.js';
 import { commands, errorOutcome, resultExitCode } from '../src/commands.js';
 import { parseAmount, toMinor, formatMinor, detectRecurrence, classifyCharges, termsFingerprint, boundTerms } from '../src/payment-terms.js';
 import { IssuerApiProvider, cardPlan } from '../src/virtual-cards.js';
+import { budget } from './time-budget.js';
 
 const agent = { actor: 'automation' };
 const human = { actor: 'human', source: 'gui' };
@@ -443,7 +444,7 @@ test('task runtime: a payment step waits for approval, an interrupted click beco
   assert.equal(f.page.clicks, 1, 'reconciliation never repeats the click');
 });
 
-test('process interruption: a payment killed mid-click is uncertain after restart and reconciled from the virtual card', { timeout: 40000 }, async t => {
+test('process interruption: a payment killed mid-click is uncertain after restart and reconciled from the virtual card', { timeout: budget(40000) }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-payment-crash-'));
   const issuer = await fakeIssuer();
   const keyHex = randomBytes(32).toString('hex');

@@ -10,6 +10,7 @@ import { createKeyProtector } from '../src/encryption.js';
 import { executeOutcome } from '../src/commands.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
 import { closeAfter, closeQuietly, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 /*
  * Deferred search indexing (#30): a search-index rebuild (FTS version change, or an encrypted
@@ -39,7 +40,7 @@ function staleIndex(directory) {
   try { db.prepare("UPDATE store_info SET value = '1' WHERE key = 'searchIndexVersion'").run(); } finally { db.close(); }
 }
 
-test('a search-index version change rebuilds in the background: open is fast, searches are partial with coverage, commands proceed', { timeout: 120000 }, async t => {
+test('a search-index version change rebuilds in the background: open is fast, searches are partial with coverage, commands proceed', { timeout: budget(120000) }, async t => {
   const directory = profile(t);
   let service = new WorkspaceService({ directory, onWarning() {} });
   await seed(service);
@@ -121,7 +122,7 @@ test('a search-index version change rebuilds in the background: open is fast, se
   assert.ok(events.every(event => event.type === 'indexing' && Number.isSafeInteger(event.processed) && Number.isSafeInteger(event.total)));
 });
 
-test('an interrupted plaintext rebuild resumes from its saved position after a restart', { timeout: 60000 }, async t => {
+test('an interrupted plaintext rebuild resumes from its saved position after a restart', { timeout: budget(60000) }, async t => {
   const directory = profile(t);
   let service = new WorkspaceService({ directory, onWarning() {} });
   await seed(service, 6000);
@@ -142,7 +143,7 @@ test('an interrupted plaintext rebuild resumes from its saved position after a r
   assert.equal((await service.execute('search.query', { query: 'needle', page: { limit: 1 } }, human)).total, 6000);
 });
 
-test('an encrypted profile rebuilds its in-memory index in the background after unlock', { timeout: 120000 }, async t => {
+test('an encrypted profile rebuilds its in-memory index in the background after unlock', { timeout: budget(120000) }, async t => {
   const directory = profile(t);
   const keyProtector = createKeyProtector({ safeStorage: fakeSafeStorage(), platform: 'linux' });
   let service = new WorkspaceService({ directory, onWarning() {}, keyProtector, encryption: { kdf: kdfParams } });
@@ -165,7 +166,7 @@ test('an encrypted profile rebuilds its in-memory index in the background after 
   assert.equal(service.storage, null);
 });
 
-test('dropping a stale index at open keeps deleted text off disk and restores secure_delete', { timeout: 60000 }, async t => {
+test('dropping a stale index at open keeps deleted text off disk and restores secure_delete', { timeout: budget(60000) }, async t => {
   const directory = profile(t);
   let service = new WorkspaceService({ directory, onWarning() {} });
   closeAfter(t, { close: () => closeQuietly(service) }); // closes whichever instance is current

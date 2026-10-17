@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { electronEnv } from '../scripts/electron-env.js';
+import { budget } from './time-budget.js';
 
 const PASSPHRASE = 'gui encryption passphrase';
 const TOKEN = 'encryption-gui-token';
@@ -121,7 +122,7 @@ if (phase) {
     try { return { code: await new Promise((resolve, reject) => { child.on('exit', resolve); child.on('error', reject); }), output }; }
     finally { clearTimeout(timer); }
   };
-  test('Settings turns on encryption with the real OS key-store backend reported; lock and restart require a person to unlock', { timeout: 150000, skip }, async t => {
+  test('Settings turns on encryption with the real OS key-store backend reported; lock and restart require a person to unlock', { timeout: budget(150000), skip }, async t => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-encryption-gui-'));
     t.after(() => rmSync(profile, { recursive: true, force: true }));
     const first = await launch(profile, 'enable');

@@ -13,6 +13,7 @@ import { fakeEndpoint, sse, openaiDelta, openaiFinish } from './model-test-helpe
 import { Providers } from '../src/providers.js';
 import { TurnRelay } from '../src/turn-relay.js';
 import { beforeRemoval, closeAfter, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 function setup(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-tasks-'));
@@ -204,7 +205,7 @@ test('no blind retries: uncertain external work needs a determination or an expl
   assert.equal(audit.length, 1);
 });
 
-test('process interruption: killed mid-step, restart pauses local work and marks external work uncertain', { timeout: 30000 }, async t => {
+test('process interruption: killed mid-step, restart pauses local work and marks external work uncertain', { timeout: budget(30000) }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-crash-'));
   let f;
   removeAfter(t, directory); beforeRemoval(t, () => { f?.close(); });
@@ -271,7 +272,7 @@ test('redirect replaces only steps that have not started; staleness marks result
   assert.equal(task.timeline.at(-1).type, 'redirect');
 });
 
-test('provider switch mid-task: later model steps use the newly selected connection in the same conversation', { timeout: 20000 }, async t => {
+test('provider switch mid-task: later model steps use the newly selected connection in the same conversation', { timeout: budget(20000) }, async t => {
   const reply = text => (req, res) => sse(res, [openaiDelta(text), openaiFinish('stop'), '[DONE]']);
   const first = await fakeEndpoint(t, reply('Answer from A'));
   const second = await fakeEndpoint(t, reply('Answer from B'));

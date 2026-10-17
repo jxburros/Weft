@@ -12,6 +12,7 @@ import { commands, validateCommand, executeOutcome, resultExitCode } from '../sr
 import { createApiServer } from '../src/server.js';
 import { createClient } from '../src/client.js';
 import { createMcpServer, mcpTools } from '../src/mcp.js';
+import { budget } from './time-budget.js';
 
 async function fixture(t, options = {}) {
   const calls = [];
@@ -187,7 +188,7 @@ test('generated OpenAPI describes every canonical command and requires authoriza
   assert.ok(document.paths['/v1/events'].get.responses[200].content['text/event-stream']);
 });
 
-test('SSE authenticates, strips content and secrets, and unsubscribes disconnected clients', { timeout: 5000 }, async t => {
+test('SSE authenticates, strips content and secrets, and unsubscribes disconnected clients', { timeout: budget(5000) }, async t => {
   const events = new EventEmitter();
   const { url, headers, server } = await fixture(t, { subscribe: listener => {
     events.on('event', listener);
@@ -219,7 +220,7 @@ test('SSE authenticates, strips content and secrets, and unsubscribes disconnect
   assert.equal(events.listenerCount('event'), 0);
 });
 
-test('standalone API events report successful and failed commands without result payloads', { timeout: 5000 }, async t => {
+test('standalone API events report successful and failed commands without result payloads', { timeout: budget(5000) }, async t => {
   const { url, headers, client } = await fixture(t);
   const response = await fetch(`${url}/v1/events`, { headers });
   const reader = response.body.getReader();
@@ -340,7 +341,7 @@ test('in-process, REST, CLI and MCP return identical outcomes', async t => {
   assert.deepEqual(reference.structuredContent.result.inputSchema, commands['tabs.new'].inputSchema);
 });
 
-test('per-client authentication reaches dispatch and scopes/revokes SSE', { timeout: 5000 }, async t => {
+test('per-client authentication reaches dispatch and scopes/revokes SSE', { timeout: budget(5000) }, async t => {
   const events = new EventEmitter();
   const workspaceId = 'ws_12345678-1234-1234-1234-123456789abc';
   let enabled = true; let received;

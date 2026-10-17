@@ -9,6 +9,7 @@ import { ClientGrants } from '../src/clients.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { createApiServer } from '../src/server.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 
@@ -63,7 +64,7 @@ test('origin is derived from the authenticated caller; automation cannot claim h
   assert.equal(originFor({ actor: 'human' }, { authoring: 'pasted' }).authoring, 'pasted', 'a person may record pasted content');
 });
 
-test('every transport stores the authenticated origin and refuses spoofed human provenance', { timeout: 20000 }, async t => {
+test('every transport stores the authenticated origin and refuses spoofed human provenance', { timeout: budget(20000) }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-provenance-'));
   const workspace = new WorkspaceService({ directory });
   const browser = { tabs: new Map(), activeId: null, tab: () => null, downloads: new Map() };

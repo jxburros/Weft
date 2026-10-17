@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { restoreBackup, verifyBackup, listBackups } from '../src/backups.js';
 import { closeAfter, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 const PNG = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('image body')]).toString('base64');
 function profile(t) {
@@ -111,7 +112,7 @@ for (const step of ['preserved', 'staged', 'swapped']) {
   });
 }
 
-test('a damaged live database can be restored offline with the store CLI', { timeout: 15000 }, async t => {
+test('a damaged live database can be restored offline with the store CLI', { timeout: budget(15000) }, async t => {
   const { directory, service, note, backup } = await seeded(t);
   service.close();
   writeFileSync(join(directory, 'workspace.sqlite'), 'damaged beyond repair');

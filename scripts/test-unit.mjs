@@ -21,5 +21,5 @@ if (unclassified.length) {
 const files = all.filter(name => !browserTests.has(name)).map(name => `test/${name}`);
 // Per-file cap: above the largest per-test budget (120 s, e.g. indexing on slow macOS disks) while still catching hangs.
 // --test-force-exit ends a file once its tests finish, so a server or child left open by a failed test cannot hang the job.
-const result = spawnSync(process.execPath, ['--test', '--test-timeout=180000', '--test-force-exit', ...files], { stdio: 'inherit' });
+const result = spawnSync(process.execPath, ['--test', `--test-timeout=${180000 * Math.max(1, Number(process.env.WEFT_TEST_TIME_SCALE) || 1)}`, '--test-force-exit', ...files], { stdio: 'inherit' });
 process.exit(result.status === 0 ? 0 : (result.status || 1));

@@ -11,6 +11,7 @@ import { AutomationAdmission } from '../src/admission.js';
 import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { commands } from '../src/commands.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 
@@ -64,7 +65,7 @@ async function fixture(t) {
   return { workspace, workspaceId, browser, dispatch, agents, as, page, directory, clients };
 }
 
-test('two scoped clients compete for one tab: leases, inspection, FIFO queue and visible status', { timeout: 15000 }, async t => {
+test('two scoped clients compete for one tab: leases, inspection, FIFO queue and visible status', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const [first, second] = f.agents;
   const claim = await f.as(first, 'tabs.claim');
@@ -106,7 +107,7 @@ test('two scoped clients compete for one tab: leases, inspection, FIFO queue and
   assert.equal((await f.as(second, 'page.click', { expectedVersion: lease.result.version, selector: '#3' })).result.submitted, true);
 });
 
-test('takeover during an in-flight action reports what could not be cancelled and persists a handoff record', { timeout: 15000 }, async t => {
+test('takeover during an in-flight action reports what could not be cancelled and persists a handoff record', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const [first, second] = f.agents;
   const audits = [];
@@ -150,7 +151,7 @@ test('takeover during an in-flight action reports what could not be cancelled an
   assert.equal((await f.as(second, 'tabs.claim')).error.code, 'lease_conflict');
 });
 
-test('structured handoff: exact evidence, no secrets, addressed acceptance and mandatory re-inspection', { timeout: 15000 }, async t => {
+test('structured handoff: exact evidence, no secrets, addressed acceptance and mandatory re-inspection', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const [first, second] = f.agents;
   const claim = await f.as(first, 'tabs.claim');
@@ -192,7 +193,7 @@ test('structured handoff: exact evidence, no secrets, addressed acceptance and m
   assert.ok((await f.as(first, 'handoffs.complete', { id: handoff.id })).error, 'closed handoffs cannot be reopened or closed twice');
 });
 
-test('element refs are grounded in the actor\'s latest snapshot and invalidated by every mutation', { timeout: 15000 }, async t => {
+test('element refs are grounded in the actor\'s latest snapshot and invalidated by every mutation', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const [first, second] = f.agents;
   const claim = await f.as(first, 'tabs.claim');
@@ -217,7 +218,7 @@ test('element refs are grounded in the actor\'s latest snapshot and invalidated 
   assert.equal((await f.as(first, 'page.click', { expectedVersion: after.version, ref: 'f0e1', snapshotId: newer.snapshotId })).error.details.reason, 'human_input');
 });
 
-test('coordinate and keyboard input require explicit human permission; control modes are explicit', { timeout: 15000 }, async t => {
+test('coordinate and keyboard input require explicit human permission; control modes are explicit', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const [first] = f.agents;
   const claim = await f.as(first, 'tabs.claim');
@@ -240,7 +241,7 @@ test('coordinate and keyboard input require explicit human permission; control m
   assert.equal(takeover.result.rawInput, false, 'takeover revokes raw input permission');
 });
 
-test('protected operations deny every automation observation route but not the person', { timeout: 15000 }, async t => {
+test('protected operations deny every automation observation route but not the person', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const [first] = f.agents;
   f.browser.setProtectedOperation(1, 'credential entry');

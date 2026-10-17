@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { DatabaseSync } from '../src/sqlite.js';
 import { tempDirectory, beforeRemoval } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 /*
  * A search-index version change drops the old index while opening with secure_delete=FAST, so opening stays fast.
@@ -45,7 +46,7 @@ async function until(predicate, what, timeoutMs = 60000) {
 
 for (const restart of [false, true]) {
   for (const action of ['setAccess', 'purgeContent']) {
-    test(`index reset then ${action} removes old index bytes${restart ? ' after another restart' : ''}`, { timeout: 120000 }, async t => {
+    test(`index reset then ${action} removes old index bytes${restart ? ' after another restart' : ''}`, { timeout: budget(120000) }, async t => {
       const directory = tempDirectory(t, 'weft-reset-privacy-');
       let service;
       beforeRemoval(t, () => service?.close());
@@ -72,7 +73,7 @@ for (const restart of [false, true]) {
   }
 }
 
-test('index reset then an ordinary delete leaves no text once the background rebuild and scrub finish', { timeout: 120000 }, async t => {
+test('index reset then an ordinary delete leaves no text once the background rebuild and scrub finish', { timeout: budget(120000) }, async t => {
   const directory = tempDirectory(t, 'weft-reset-privacy-');
   let service;
   beforeRemoval(t, () => service?.close());
@@ -88,7 +89,7 @@ test('index reset then an ordinary delete leaves no text once the background reb
   assertGoneFromDisk(directory, 'deleted');
 });
 
-test('the scrub marker is durable: an interrupted session scrubs at the next open, never during open', { timeout: 120000 }, async t => {
+test('the scrub marker is durable: an interrupted session scrubs at the next open, never during open', { timeout: budget(120000) }, async t => {
   const directory = tempDirectory(t, 'weft-reset-privacy-');
   let service;
   beforeRemoval(t, () => service?.close());

@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntimeFixture, human } from './fixtures/task-runtime-fixture.mjs';
+import { budget } from './time-budget.js';
 
 /**
  * The task runtime (ADR 016) merged with restricted originals (ADR 012), shared context and trusted
@@ -55,7 +56,7 @@ test('a task cannot promote context without the human approval path, nor read an
   assert.equal(JSON.stringify(task).includes('Private note'), false);
 });
 
-test('locking an encrypted profile pauses runtime tasks; only a person continues after unlock, and in-flight work is swept', { timeout: 60000 }, async t => {
+test('locking an encrypted profile pauses runtime tasks; only a person continues after unlock, and in-flight work is swept', { timeout: budget(60000) }, async t => {
   const f = setup(t);
   const enc = (name, args = {}) => f.workspace.executeEncryption(name, args, human);
   await enc('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'manual', passphrase: 'correct horse battery staple' });

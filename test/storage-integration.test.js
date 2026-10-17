@@ -11,6 +11,7 @@ import { AutomationAdmission } from '../src/admission.js';
 import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { beforeRemoval, closeAfter, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 function profile(t) {
@@ -104,7 +105,7 @@ test('handoff records are searchable in their own workspace only', async t => {
   assert.deepEqual(await service.execute('search.query', { query: 'zeppelin', workspaceId: other.id }, human), []);
 });
 
-test('restoring a backup appends to the activity hash chain and never rewinds authority state', { timeout: 20000 }, async t => {
+test('restoring a backup appends to the activity hash chain and never rewinds authority state', { timeout: budget(20000) }, async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-storage-integration-'));
   const workspace = new WorkspaceService({ directory, onWarning() {} });
   const session = new EventEmitter();

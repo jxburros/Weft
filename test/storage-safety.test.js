@@ -12,6 +12,7 @@ import { migrateSchema, CURRENT_SCHEMA_VERSION } from '../src/migrations.js';
 import { DatabaseSync } from '../src/sqlite.js';
 import { ComponentStore } from '../src/components.js';
 import { closeAfter, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 function fixture(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-storage-'));
@@ -29,7 +30,7 @@ function externalWrite(path) {
 const externalTheme = path => { const db = new DatabaseSync(path, { readOnly: true }); try { return JSON.parse(db.prepare("SELECT value FROM state_meta WHERE key = 'settings'").get().value).theme; } finally { db.close(); } };
 const count = (path, collection) => { const db = new DatabaseSync(path, { readOnly: true }); try { return db.prepare('SELECT count(*) AS count FROM records WHERE collection = ?').get(collection).count; } finally { db.close(); } };
 
-test('another process cannot open a profile; explicit close releases its lock', { timeout: 10000 }, t => {
+test('another process cannot open a profile; explicit close releases its lock', { timeout: budget(10000) }, t => {
   const { directory, service } = fixture(t);
   const code = `import { WorkspaceService } from ${JSON.stringify(new URL('../src/workspace.js', import.meta.url).href)}; const s = new WorkspaceService({directory:process.argv[1]}); s.close();`;
   const second = spawnSync(process.execPath, ['--input-type=module', '-e', code, directory], { encoding: 'utf8', timeout: 5000 });

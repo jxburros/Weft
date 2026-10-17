@@ -611,6 +611,11 @@ alone is not a shipped capability.
   restrict, purge or delete afterwards, then check the database and WAL bytes
   (`test/index-reset-privacy.test.js`); the prior `secure_delete` value is
   restored on every path.
+- Test hang guards scale with `WEFT_TEST_TIME_SCALE` (`test/time-budget.js`; the
+  unit runner's per-file cap too). CI sets 4 on Windows, where synced writes are
+  several times slower, instead of loosening the guards everywhere. Model
+  deadline tests use timers that still fire mid-stream on slow runners, and a
+  dialog's close event restores keyboard focus to its opener on every close path.
 - The offline archive preview no longer fails and closes when the archived
   document has been shown but an embedded resource (for example an `<object>`)
   never finishes loading; after 15 seconds loading stops and the preview stays

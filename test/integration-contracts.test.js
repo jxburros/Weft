@@ -20,6 +20,7 @@ import { commands, OUTCOME_STATUSES, ERROR_STATUS, ERROR_HTTP_STATUS, exitCodes,
 import { PAGEABLE } from '../src/pagination.js';
 import { Transfers, CHUNK_BYTES } from '../src/transfers.js';
 import { png, fakeEndpoint, modelFixture, sse, openaiDelta } from './model-test-helpers.js';
+import { budget } from './time-budget.js';
 
 const cli = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
 const human = { actor: 'human', source: 'gui' };
@@ -80,7 +81,7 @@ test('every error code maps to one stable outcome status, HTTP status and exit c
   for (const code of Object.keys(exitCodes)) assert.ok(Object.hasOwn(ERROR_STATUS, code), `exit code for unknown error ${code}`);
 });
 
-test('outcome taxonomy is identical across GUI IPC, REST, CLI and MCP for every code', { timeout: 120000 }, async t => {
+test('outcome taxonomy is identical across GUI IPC, REST, CLI and MCP for every code', { timeout: budget(120000) }, async t => {
   const f = await stack(t);
   const cases = [...Object.keys(ERROR_STATUS).map(code => ({ code })), { result: { ok: true } }, { result: { status: 'partial', text: 'cut off' } }];
   for (const item of cases) {
@@ -169,7 +170,7 @@ test('collections page with stable opaque cursors; unpaged results are unchanged
   assert.deepEqual((await f.rest('workspaces.list', { page: { limit: 5 } }, { bearer: reader.token })).outcome.result.items.map(item => item.id), [f.firstId]);
 });
 
-test('deadlines propagate from REST, CLI and MCP and report whether execution started', { timeout: 30000 }, async t => {
+test('deadlines propagate from REST, CLI and MCP and report whether execution started', { timeout: budget(30000) }, async t => {
   const f = await stack(t);
   // Started and still running after the grace period: effect uncertain.
   f.browser.behavior = async name => { if (name === 'page.stop') await sleep(2500); return { ok: true }; };
@@ -213,7 +214,7 @@ test('deadlines propagate from REST, CLI and MCP and report whether execution st
   assert.ok(!(await f.dispatch('artifacts.list', { workspaceId: f.firstId }, human)).result.some(item => item.title === 'Rolled back'));
 });
 
-test('task, navigation, handoff, policy, artifact, workspace and approval events replay by cursor without secrets', { timeout: 20000 }, async t => {
+test('task, navigation, handoff, policy, artifact, workspace and approval events replay by cursor without secrets', { timeout: budget(20000) }, async t => {
   const f = await stack(t);
   const start = (await f.dispatch('events.list', { limit: 1 })).result;
   assert.equal(start.gap, null);
@@ -302,7 +303,7 @@ test('capability discovery and scoped MCP resources', async t => {
   await assert.rejects(scoped.readResource({ uri: `weft://workspaces/${f.other.id}/tasks/${task.id}` }), /permission_required|not found/);
 });
 
-test('chunked uploads and streamed downloads move content beyond the 1 MiB request cap', { timeout: 30000 }, async t => {
+test('chunked uploads and streamed downloads move content beyond the 1 MiB request cap', { timeout: budget(30000) }, async t => {
   const f = await stack(t);
   const image = Buffer.concat([png(64, 64), Buffer.alloc(CHUNK_BYTES * 2 + 1234, 7)]);
   const begin = (await f.rest('transfers.begin', { workspaceId: f.firstId, purpose: 'artifact', mimeType: 'image/png', size: image.length, sha256: sha(image), filename: 'large.png' })).outcome;
@@ -342,7 +343,7 @@ test('chunked uploads and streamed downloads move content beyond the 1 MiB reque
   assert.equal((await f.rest('transfers.read', { source: { kind: 'artifact', id: artifact.id, versionId: artifact.versions[0].id, part: 'image' } }, { bearer: agent.token })).outcome.status, 'blocked');
 });
 
-test('package files stage through transfers and remain human-only to import or read', { timeout: 30000 }, async t => {
+test('package files stage through transfers and remain human-only to import or read', { timeout: budget(30000) }, async t => {
   const f = await stack(t);
   await f.dispatch('materials.create', { workspaceId: f.firstId, title: 'Packaged note', content: 'kept' });
   await f.dispatch('artifacts.create', { workspaceId: f.firstId, title: 'Packaged capture', text: 'capture body' });
@@ -374,7 +375,7 @@ test('package files stage through transfers and remain human-only to import or r
   assert.equal(imported.status, 'succeeded', JSON.stringify(imported.error));
 });
 
-test('a deadline stops a running model turn and keeps its partial reply', { timeout: 20000 }, async t => {
+test('a deadline stops a running model turn and keeps its partial reply', { timeout: budget(20000) }, async t => {
   const endpoint = await fakeEndpoint(t, async (_req, res) => { sse(res, [openaiDelta('Partial answer')], { end: false }); await sleep(3000); res.end(); });
   const f = await modelFixture(t);
   const model = await f.save({ endpoint: `${endpoint.base}/v1` });
@@ -390,7 +391,7 @@ test('a deadline stops a running model turn and keeps its partial reply', { time
   assert.equal(f.manifests().at(-1).deadline, 'request');
 });
 
-test('restricted originals stay withheld through MCP resources, transfers.read, downloads and events', { timeout: 30000 }, async t => {
+test('restricted originals stay withheld through MCP resources, transfers.read, downloads and events', { timeout: budget(30000) }, async t => {
   const f = await stack(t);
   const SECRET = 'zebracodeword';
   const created = (await f.dispatch('artifacts.create', { workspaceId: f.firstId, title: 'Receipt', text: `Card note ${SECRET} kept.` }, human)).result;

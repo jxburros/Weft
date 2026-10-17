@@ -13,6 +13,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { CommunityLists } from '../src/community-lists.js';
 import { executeOutcome } from '../src/commands.js';
 import { electronEnv } from '../scripts/electron-env.js';
+import { budget } from './time-budget.js';
 
 const mode = ['--security-smoke', '--security-crash', '--security-recover'].find(flag => process.argv.includes(flag));
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -460,7 +461,7 @@ if (mode) {
     const timeout = setTimeout(() => child.kill('SIGKILL'), 80000);
     return new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => { clearTimeout(timeout); resolve({ code, signal, output }); }); });
   };
-  test('real Chromium site storage modes, engine-path rule coverage, popups, launches, threat intelligence and downloads', { timeout: 90000, skip }, async t => {
+  test('real Chromium site storage modes, engine-path rule coverage, popups, launches, threat intelligence and downloads', { timeout: budget(90000), skip }, async t => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-security-'));
     t.after(() => rmSync(profile, { recursive: true, force: true }));
     const { code, output } = await launch('--security-smoke', profile);
@@ -469,7 +470,7 @@ if (mode) {
     const report = output.match(/WEFT_SECURITY_REPORT (.*)/)?.[1];
     if (report) t.diagnostic(`Observed engine behavior: ${report}`);
   });
-  test('temporary site data is erased at the next startup after a crash; remembered data is kept', { timeout: 90000, skip }, async t => {
+  test('temporary site data is erased at the next startup after a crash; remembered data is kept', { timeout: budget(90000), skip }, async t => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-crash-'));
     t.after(() => rmSync(profile, { recursive: true, force: true }));
     // Storage is keyed by origin (including port), so both runs share one fixture port.

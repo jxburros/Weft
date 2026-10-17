@@ -16,6 +16,7 @@ import { createApiServer } from '../src/server.js';
 import { commands } from '../src/commands.js';
 import { REQUEST_RETENTION } from '../src/store.js';
 import { beforeRemoval, closeAfter, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 const cliPath = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
@@ -65,7 +66,7 @@ test('catalog exposes requestId on mutations and dryRun on destructive record co
   assert.equal(commands['batch.execute'].actionClass, 'local_write');
 });
 
-test('identical retries replay the committed result over REST and CLI; changed payloads conflict', { timeout: 20000 }, async t => {
+test('identical retries replay the committed result over REST and CLI; changed payloads conflict', { timeout: budget(20000) }, async t => {
   const f = await api(t);
   const args = { workspaceId: f.firstId, title: 'Retry-safe task', requestId: 'agent-run-1:task-1' };
   const first = await f.request('tasks.create', args);
@@ -158,7 +159,7 @@ test('batches reject irreversible or nested commands and keep authority checks p
   assert.equal(workspace.storage.contentDigest(), before);
 });
 
-test('dispatcher batches enforce client grants and catalog validation for every command', { timeout: 15000 }, async t => {
+test('dispatcher batches enforce client grants and catalog validation for every command', { timeout: budget(15000) }, async t => {
   const f = await api(t);
   const granted = await f.dispatch('clients.create', { name: 'Batch client', scopes: ['records.write', 'read'], workspaceIds: [f.firstId] }, human);
   const token = granted.result.token;

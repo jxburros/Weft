@@ -7,6 +7,7 @@ import { executeOutcome } from '../src/commands.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { TURN_FRAME_TYPES, TurnRelay, turnFrameSchema } from '../src/turn-relay.js';
 import { fakeEndpoint, modelFixture, sse, ndjson, json, openaiDelta, openaiFinish, tick, until } from './model-test-helpers.js';
+import { budget } from './time-budget.js';
 
 const outcomeOf = (fixture, args, caller) => executeOutcome((name, input) => fixture.providers.execute(name, input, caller), 'chat.send', { conversationId: fixture.conversation.id, text: 'Hello', ...args });
 
@@ -142,7 +143,7 @@ test('first-token, idle and total deadlines stop silent streams; partials are co
     else { const timer = setInterval(() => sse(res, [openaiDelta('.')], { end: false }), 5); res.on('close', () => clearInterval(timer)); }
   });
   // Deadlines are wide enough that a slow CI runner's synced writes before the request cannot pass for a silent stream.
-  const fixture = await modelFixture(t, { providers: { timeoutMs: 2500, deadlines: { firstTokenMs: 1000, idleMs: 1000 } } });
+  const fixture = await modelFixture(t, { providers: { timeoutMs: 10000, deadlines: { firstTokenMs: 4000, idleMs: 4000 } } });
   const model = await fixture.save({ endpoint: `${endpoint.base}/v1` });
   mode = 'first';
   let outcome = await outcomeOf(fixture, { modelId: model.id });
@@ -194,7 +195,7 @@ test('emergency stop and the admission latch abort running streams and persist p
   assert.equal(endpoint.requests.length, before);
 });
 
-test('REST streaming: originating disconnect stops the turn; followers replay with Last-Event-ID and may leave freely', { timeout: 10000 }, async t => {
+test('REST streaming: originating disconnect stops the turn; followers replay with Last-Event-ID and may leave freely', { timeout: budget(60000) }, async t => {
   let release;
   const endpoint = await fakeEndpoint(t, async (_req, res) => {
     sse(res, [openaiDelta('one '), openaiDelta('two ')], { end: false });
@@ -266,7 +267,7 @@ test('REST streaming: originating disconnect stops the turn; followers replay wi
   assert.equal(fixture.manifests().at(-1).status, 'cancelled');
 });
 
-test('/v1/events assigns ids, replays retained events after Last-Event-ID, reports gaps and keeps workspace scope', { timeout: 10000 }, async t => {
+test('/v1/events assigns ids, replays retained events after Last-Event-ID, reports gaps and keeps workspace scope', { timeout: budget(10000) }, async t => {
   const events = new EventEmitter();
   const workspaceA = 'ws_12345678-1234-1234-1234-123456789abc';
   const workspaceB = 'ws_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -387,7 +388,7 @@ test('usage absent from the provider is reported as unavailable and no cost is i
   assert.equal(listed.requiresDisclosure, false);
 });
 
-test('turn streams require the read scope and the turn workspace; others cannot tell the turn exists', { timeout: 5000 }, async t => {
+test('turn streams require the read scope and the turn workspace; others cannot tell the turn exists', { timeout: budget(5000) }, async t => {
   const relay = new TurnRelay();
   const workspaceId = 'ws_12345678-1234-1234-1234-123456789abc';
   const turnId = 'turn_12345678-1234-1234-1234-123456789abc';

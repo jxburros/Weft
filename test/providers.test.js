@@ -6,6 +6,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Providers } from '../src/providers.js';
+import { budget } from './time-budget.js';
 
 async function fixture(t, handler, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'weft-providers-'));
@@ -434,7 +435,7 @@ test('concurrent sends cannot race during asynchronous preflight', async t => {
   await first;
 });
 
-test('only normalized loopback allowlist endpoints bypass cloud disclosure', { timeout: 10000 }, async t => {
+test('only normalized loopback allowlist endpoints bypass cloud disclosure', { timeout: budget(10000) }, async t => {
   const { providers, model } = await fixture(t, () => { throw new Error('Preview must not make a request'); });
   const cases = [
     ['http://localhost:11434/v1', false],

@@ -11,6 +11,7 @@ import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { Knowledge } from '../src/knowledge.js';
 import { electronEnv } from '../scripts/electron-env.js';
+import { budget } from './time-budget.js';
 
 const smoke = process.argv.includes('--workspace-smoke');
 async function until(check) {
@@ -197,7 +198,7 @@ if (smoke) {
     }
   })().catch(error => { console.error(error); app.exit(1); });
 } else {
-  test('real Chromium workspace isolation, persistence, control leases, site rules, and native layout', { timeout: 45000 }, async () => {
+  test('real Chromium workspace isolation, persistence, control leases, site rules, and native layout', { timeout: budget(45000) }, async () => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-workspace-integration-'));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', ...(!process.env.DISPLAY && process.platform === 'linux' ? ['--ozone-platform=headless'] : []), fileURLToPath(import.meta.url), '--workspace-smoke'], {
       env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],

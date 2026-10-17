@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { electronEnv } from "../scripts/electron-env.js";
+import { budget } from './time-budget.js';
 const root = fileURLToPath(new URL("../", import.meta.url));
 const goldenDir = join(root, "test/visual/golden");
 const failureDir = join(root, "test/visual/_failures");
@@ -238,7 +239,7 @@ if (process.argv.includes("--visual-child")) {
     console.log("WEFT_VISUAL_OK"); app.quit();
   })().catch(error=>{console.error(error);app.exit(1);});
 } else {
-  test("Linux GUI goldens and keyboard accessibility",{timeout:90000,skip:process.env.WEFT_VISUAL!=="1"?"Set WEFT_VISUAL=1 under xvfb-run":process.platform!=="linux"?"Goldens target Linux":false},async()=>{
+  test("Linux GUI goldens and keyboard accessibility",{timeout: budget(90000),skip:process.env.WEFT_VISUAL!=="1"?"Set WEFT_VISUAL=1 under xvfb-run":process.platform!=="linux"?"Goldens target Linux":false},async()=>{
     const profile=mkdtempSync(join(tmpdir(),"weft-visual-"));
     // Glyph rasterisation follows fontconfig even for the bundled web fonts. Pin the stock Ubuntu
     // rendering (slight hinting, greyscale antialiasing, DejaVu Sans as the sans-serif fallback) so a

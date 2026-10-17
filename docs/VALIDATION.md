@@ -2,7 +2,9 @@
 
 `npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
 once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
-`npm run test:unit` runs non-GUI tests with a three-minute per-file cap and
+`npm run test:unit` runs non-GUI tests with a three-minute per-file cap (multiplied, like
+every explicit per-test timeout, by `WEFT_TEST_TIME_SCALE`; CI sets 4 on Windows, whose synced
+disk writes are several times slower) and
 `--test-force-exit`, so a server or child left open by a failing test cannot hang
 the job. GitHub CI runs these on Node 22/24 and Linux/macOS/Windows; a successful
 matrix is evidence for that commit, not a claim about every operating-system
