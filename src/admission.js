@@ -22,11 +22,12 @@ export function resolveCommandTargets(name, input, context, { workspace, browser
   const args = { ...input };
   const state = workspace.snapshot();
   const candidates = state.workspaces.filter(value => !value.archived).map(value => value.id);
+  const visible = id => !context.workspaceIds || context.workspaceIds.includes(id);
   const human = ['human', 'admin'].includes(context.actor);
   const fields = commands[name]?.inputSchema?.properties ?? {};
   const pageTarget = name.startsWith('page.') || name === 'artifacts.capture';
   const fail = message => { throw Object.assign(new Error(message), { code: 'ambiguous_target', details: {
-    workspaceIds: candidates, tabs: [...browser.tabs.values()].map(tab => ({ tabId: tab.id, workspaceId: tab.workspaceId })),
+    workspaceIds: candidates.filter(visible), tabs: [...browser.tabs.values()].filter(tab => visible(tab.workspaceId)).map(tab => ({ tabId: tab.id, workspaceId: tab.workspaceId })),
   } }); };
   if (!human && candidates.length > 1) {
     if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null) fail('Specify workspaceId when several workspaces exist');

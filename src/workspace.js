@@ -234,6 +234,7 @@ export class WorkspaceService {
       snapshot.workspaces = snapshot.workspaces.filter(item => item.id === workspaceId);
       for (const key of [...collections, 'activity', 'history']) snapshot[key] = snapshot[key].filter(item => item.workspaceId === workspaceId);
       snapshot.browserSession.tabs = snapshot.browserSession.tabs.filter(item => item.workspaceId === workspaceId);
+      if (!snapshot.browserSession.tabs.some(tab => tab.id === snapshot.browserSession.activeId)) snapshot.browserSession.activeId = null;
       snapshot.activeWorkspaceId = workspaceId;
       return snapshot;
     }

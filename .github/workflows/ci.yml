@@ -45,10 +45,14 @@ jobs:
           mkdir -p artifacts
           set -o pipefail
           xvfb-run -a npm test 2>&1 | tee artifacts/chromium-tests.log
+      - name: Compare reviewed visual fixtures
+        run: WEFT_VISUAL=1 xvfb-run -a node --test test/visual.test.js
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: chromium-results-${{ github.sha }}
-          path: artifacts/
+          path: |
+            artifacts/
+            test/visual/_failures/
           if-no-files-found: warn
           retention-days: 7
