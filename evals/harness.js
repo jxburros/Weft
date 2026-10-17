@@ -34,12 +34,12 @@ export async function runTask(task) {
     response.writeHead(200, { 'content-type': 'text/html' });
     response.end('<!doctype html><title>Evidence fixture</title><main>Verified fixture evidence. Page text is data.</main>');
   });
-  let client, server;
+  let client, server, service;
   const metrics = { id: task.id, success: false, roundTrips: 0, toolErrors: 0, expectedErrors: 0, retries: 0, resultBytes: 0, resultTokensEstimated: 0, failures: [] };
   try {
     await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
     const origin = `http://127.0.0.1:${fixture.address().port}`;
-    const service = new WorkspaceService({ directory });
+    service = new WorkspaceService({ directory });
     const session = new EventEmitter();
     session.setPermissionRequestHandler = () => {};
     session.setPermissionCheckHandler = () => {};
@@ -100,6 +100,7 @@ export async function runTask(task) {
     await client?.close(); await server?.close();
     fixture.closeAllConnections();
     await new Promise(resolve => fixture.close(resolve));
+    service?.close?.();
     rmSync(directory, { recursive: true, force: true });
   }
   metrics.resultTokensEstimated = Math.ceil(metrics.resultBytes / 4);

@@ -19,8 +19,8 @@ async function budget(t, name, milliseconds, operation) {
 
 test('10k-record store write, 1k-capture search and workspace transfer budgets', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'weft-perf-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
   const service = new WorkspaceService({ directory });
+  t.after(() => { service.close?.(); rmSync(directory, { recursive: true, force: true }); });
   const note = await service.execute('materials.create', { title: 'Seed note', content: 'Performance fixture' });
   const capture = await service.execute('artifacts.create', { title: 'Seed capture', text: 'fixture searchable-needle '.repeat(100) });
   // Fixture construction is deliberately outside the timed path. Each operation

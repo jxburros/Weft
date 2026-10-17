@@ -27,6 +27,6 @@ alone is not a shipped capability.
 ### Notes
 
 Validation: offline MCP reference scenarios passed (3/3); performance budgets
-passed for 10k materials and 1k captures. Documentation validation and shared
-interface integration are checked by the final integrated test run; these
-checks do not establish cross-platform hardware/account support.
+passed for 10k materials and 1k captures. Integrated documentation, grouped MCP eval and performance checks passed
+(6 tests, no skips; 11 documented command examples). These checks do not
+establish cross-platform hardware/account support.
