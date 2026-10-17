@@ -22,6 +22,8 @@ import { RRF_K, documentKey, reciprocalRankFusion } from './retrieval.js';
 import { createKeyProtector, lockedError } from './encryption.js';
 import { ProfileEncryption } from './profile-encryption.js';
 import { encryptionSchemas } from './encryption-commands.js';
+// Same registered symbol as commands.js PARTIAL_COVERAGE (not imported here to avoid an import cycle).
+const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
 import { applyTransition, appendTimeline, isHumanContext, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
@@ -38,7 +40,7 @@ const REPLAYED = Symbol.for('weft.replayed');
 const WORKFLOW_EXECUTABLE = ['steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
-const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview']);
 // activity.list is served by the durable activity log (src/activity-log.js) through the dispatcher.
 const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'workspaces.list', 'workspaces.get', 'workspaces.export', 'artifacts.versions', 'conversations.messages',
@@ -277,6 +279,71 @@ export class WorkspaceService {
       this.data = data;
       if (legacyTasks.length) this.save();
     } catch (error) { storage.close(); throw error; }
+    this.startIndexing();
+  }
+
+  // ---- Background search indexing (#30) ----------------------------------------------
+  /**
+   * A new or changed full-text index (FTS version change, or an encrypted profile's in-memory index after
+   * unlock) is rebuilt in bounded batches (at most ~10 ms or 500 records each) between commands, never while
+   * opening the workspace or handling a command. One short batch runs now so small stores are complete at once.
+   * Searches meanwhile return partial results with coverage; search.status reports progress and a person can
+   * pause and resume it (search.indexing).
+   */
+  startIndexing() {
+    const storage = this.storage;
+    if (!storage?.indexing) return;
+    if (this.indexingPaused) storage.indexing.paused = true;
+    else {
+      try { storage.indexStep({ maxRecords: 2000, budgetMs: 30 }); } catch (error) { this.indexingFailed(storage, error); return; }
+      if (!storage.indexing) return;
+    }
+    this.emitIndexing(storage.indexing.paused ? 'paused' : 'started', storage);
+    this.scheduleIndexing();
+  }
+  scheduleIndexing() {
+    const storage = this.storage;
+    if (this.indexTimer || this.closed || this.locked || !storage?.indexing || storage.indexing.paused || storage.indexing.error) return;
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = null;
+      if (this.storage !== storage || !storage.db || this.locked || !storage.indexing || storage.indexing.paused) return;
+      let step;
+      try { step = storage.indexStep(); } catch (error) { this.indexingFailed(storage, error); return; }
+      if (step.complete) { this.emitIndexing('completed', storage, { processed: step.total, total: step.total }); return; }
+      const percent = Math.floor((step.done / Math.max(1, step.total)) * 10);
+      if (percent > (storage.indexing.reported ?? 0)) { storage.indexing.reported = percent; this.emitIndexing('progress', storage); }
+      this.scheduleIndexing();
+    }, 0);
+    this.indexTimer.unref?.();
+  }
+  indexingFailed(storage, error) {
+    if (!storage.indexing) return;
+    storage.indexing.error = String(error.message).slice(0, 300);
+    this.onWarning({ code: 'SEARCH_INDEX_FAILED', message: `Search indexing stopped: ${error.message}. Searches stay partial; restart Weft to retry.` });
+    this.emitIndexing('failed', storage);
+  }
+  emitIndexing(status, storage, counts = null) {
+    const state = storage.indexing;
+    try { this.onIndexingEvent?.({ type: 'indexing', status, processed: counts?.processed ?? state?.done ?? 0, total: counts?.total ?? state?.total ?? 0, createdAt: new Date(this.clock()).toISOString() }); } catch { /* events are best effort */ }
+  }
+  /** Pause or resume the background rebuild (human administration). A paused plaintext rebuild resumes at the next start. */
+  indexingControl(action) {
+    this.indexingPaused = action === 'pause';
+    const storage = this.storage;
+    if (storage?.indexing) {
+      const changed = storage.indexing.paused !== this.indexingPaused;
+      storage.indexing.paused = this.indexingPaused;
+      if (changed) this.emitIndexing(this.indexingPaused ? 'paused' : 'resumed', storage);
+      if (!this.indexingPaused) { storage.indexing.error = null; this.scheduleIndexing(); }
+    }
+    return { action, paused: this.indexingPaused, indexing: this.storage.indexingStatus(),
+      notice: this.indexingPaused ? 'Search index rebuilding is paused. Searches return partial results until it is resumed (or Weft restarts).' : 'Search index rebuilding runs in the background between commands.' };
+  }
+  /** Resolves when the background rebuild has finished (or is paused or failed); for tools and tests. */
+  async indexingIdle({ timeoutMs = 60000 } = {}) {
+    const until = Date.now() + timeoutMs;
+    while (this.storage?.indexing && !this.storage.indexing.paused && !this.storage.indexing.error && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5));
+    return this.storage?.indexingStatus?.() ?? null;
   }
   /** Lossless one-time move from the JSON store; the original bytes are preserved under recovery/. */
   migrateLegacy(legacy, assertOwned) {
@@ -316,6 +383,7 @@ export class WorkspaceService {
   close() {
     this.closed = true;
     clearInterval(this.backupTimer);
+    clearTimeout(this.indexTimer);
     this.storage?.close();
     this.encryption.forget();
     this.lock.release();
@@ -716,6 +784,8 @@ export class WorkspaceService {
     const args = workspaceSchemas[name].parse(input);
     const { workspaceId } = this.authorize(name, args, context);
     if (name === 'search.query') return this.searchQuery(args, workspaceId, context);
+    if (name === 'search.indexing') return this.indexingControl(args.action);
+    if (name === 'search.status' && !this.retrieval) return { workspaceId, lexical: this.storage.lexicalCoverage(workspaceId), vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
     if (!this.retrieval) throw Object.assign(new Error('Embeddings are unavailable in this process'), { code: 'unavailable' });
     return this.retrieval.execute(name, args, { ...context, workspaceId });
   }
@@ -759,17 +829,24 @@ export class WorkspaceService {
         score: Number((fused ?? -row.score).toFixed(6)), match: lexicalRank ? row.match : 'semantic', citation,
         ...(row.shared && { shared: row.shared }), ...(vector.used && { ranking: { method: 'rrf', k: RRF_K, lexicalRank: lexicalRank ?? null, vectorRank: vectorRank ?? null, similarity: similarity === undefined ? null : Number(similarity.toFixed(6)) } }) };
     });
-    if (!args.page) return results;
+    if (!args.page) {
+      // Unpaged results stay a list; while the index is rebuilt the outcome is partial and carries the lexical coverage.
+      const lexical = this.storage.indexing ? this.storage.lexicalCoverage(workspaceId) : null;
+      if (lexical && !lexical.complete) Object.defineProperty(results, PARTIAL_COVERAGE, { value: { lexical } });
+      return results;
+    }
     const next = offset + results.length;
-    const coverage = this.retrieval ? this.retrieval.status(workspaceId, { listLimit: 20 }) : { workspaceId, lexical: { documents: this.storage.documentCount(workspaceId), complete: true }, vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
+    const coverage = this.retrieval ? this.retrieval.status(workspaceId, { listLimit: 20 }) : { workspaceId, lexical: this.storage.lexicalCoverage(workspaceId), vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
     const searched = ['lexical', ...(vector.used ? ['vector'] : [])];
+    const lexicalComplete = coverage.lexical.complete !== false;
     const vectorComplete = !coverage.vector.enabled || (vector.used && coverage.vector.unembeddedCount === 0);
-    const absence = offset === 0 && !results.length ? { verified: vectorComplete, searched,
-      reason: vectorComplete ? 'No indexed document in this workspace matched; every indexed document was searched.' : !vector.used && coverage.vector.enabled ? `Vector search was not used (${vector.reason}); only lexical matching was checked.` : `${coverage.vector.unembeddedCount} document(s) have no embedding yet; they were checked lexically only.` } : null;
+    const absence = offset === 0 && !results.length ? { verified: lexicalComplete && vectorComplete, searched,
+      reason: !lexicalComplete ? `The search index is still being rebuilt (${coverage.lexical.unindexedRecords} record(s) in this workspace not indexed yet); the absence is not verified.`
+        : vectorComplete ? 'No indexed document in this workspace matched; every indexed document was searched.' : !vector.used && coverage.vector.enabled ? `Vector search was not used (${vector.reason}); only lexical matching was checked.` : `${coverage.vector.unembeddedCount} document(s) have no embedding yet; they were checked lexically only.` } : null;
     return { items: results, nextCursor: next < ordered.length && results.length ? encodeCursor('search.query', scope, next) : null,
       total: vector.used ? ordered.length : this.storage.searchCount({ workspaceId, query: args.query }) + sharedRows.length, mode: vector.used ? 'hybrid' : 'lexical',
       vector: { used: vector.used, reason: vector.used ? null : vector.reason, ...(vector.error ? { error: vector.error } : {}) },
-      ...(mode !== 'lexical' && coverage.vector.enabled && !vector.used ? { partial: true } : {}),
+      ...((mode !== 'lexical' && coverage.vector.enabled && !vector.used) || !lexicalComplete ? { partial: true } : {}),
       coverage: { lexical: coverage.lexical, vector: coverage.vector }, absence };
   }
   /** Lexical rows of records shared into a workspace (active collection membership only), tagged with their collection. */
@@ -1826,6 +1903,8 @@ export class WorkspaceService {
       try { this.openStorage(); this.storage.sweepOrphans(); }
       catch (error) { this.storage?.close(); this.storage = null; this._data = null; this.encryption.forget(); throw error; }
       this.locked = false;
+      // The store opened while still marked locked: start its background index rebuild now.
+      this.scheduleIndexing();
       this.sealedStoreStep('afterUnlock');
       try { this.log('encryption.unlock', this.activeWorkspaceId, null, 'human', `Unlocked with ${method === 'os' ? 'the OS key' : method === 'passphrase' ? 'the passphrase' : 'the recovery key'}`); this.save(); } catch { /* unlocked regardless */ }
       return { unlocked: true, method };

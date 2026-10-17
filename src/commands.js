@@ -169,7 +169,7 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
   'collections.create', 'collections.update', 'collections.delete', 'collections.grant', 'collections.revoke', 'collections.addItem', 'collections.removeItem',
   'sources.link', 'sources.relink', 'services.create', 'services.update', 'services.setCredential', 'services.revoke', 'services.refresh', 'freshness.configure', ...CREDENTIAL_ADMIN_COMMANDS, ...PAYMENT_ADMIN_COMMANDS,
-  'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview', 'search.configureEmbeddings',
+  'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview', 'search.configureEmbeddings', 'search.indexing',
   ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status'),
   'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop',
   'display.hide', ...Object.keys(browsingCommandDefinitions)]);
@@ -252,9 +252,11 @@ export const ERROR_STATUS = Object.freeze({
   timeout: 'timed_out', deadline_exceeded: 'timed_out',
   not_found: 'failed', command_failed: 'failed', component_integrity: 'failed', transport_error: 'failed', unavailable: 'failed',
 });
+/** A list result may carry its incompleteness out of band (for example search.query while the search index is rebuilt). */
+export const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
 /** A completed command whose result explicitly reports incompleteness is partial, never plain success. */
-export const isPartialResult = result => Boolean(result) && typeof result === 'object' && !Array.isArray(result)
-  && (result.status === 'partial' || result.partial === true || result.complete === false);
+export const isPartialResult = result => Boolean(result) && typeof result === 'object' && (Array.isArray(result) ? Boolean(result[PARTIAL_COVERAGE])
+  : (result.status === 'partial' || result.partial === true || result.complete === false));
 export const outcomeStatus = outcome => outcome.error ? (ERROR_STATUS[outcome.error.code] ?? 'failed') : isPartialResult(outcome.result) ? 'partial' : 'succeeded';
 export const API_VERSION = 1;
 const schemaHint = name => `weft_reference({command:${JSON.stringify(name)}}); GET /v1/commands`;
@@ -415,6 +417,7 @@ export async function executeOutcome(execute, name, input = {}, { returnsOutcome
     }
     return { schemaVersion: 1, command: prepared.command, status: isPartialResult(result) ? 'partial' : 'succeeded', execution: 'succeeded', validation: 'passed', review: 'not_required',
       workspaceId: args.workspaceId ?? (prepared.command !== 'page.evaluate' ? result?.workspaceId : null) ?? null, tabId: args.tabId ?? (prepared.command.startsWith('tabs.') ? result?.id : result?.tabId) ?? null,
-      normalized: prepared.normalized, ...(typeof args.requestId === 'string' && { idempotency: { requestId: args.requestId, replayed: result?.[REPLAYED] === true } }), result: result ?? null, error: null };
+      normalized: prepared.normalized, ...(typeof args.requestId === 'string' && { idempotency: { requestId: args.requestId, replayed: result?.[REPLAYED] === true } }),
+      ...(Array.isArray(result) && result[PARTIAL_COVERAGE] && { coverage: result[PARTIAL_COVERAGE] }), result: result ?? null, error: null };
   } catch (error) { return errorOutcome(error, prepared.command, args, prepared.normalized); }
 }

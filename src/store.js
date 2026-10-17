@@ -209,48 +209,106 @@ export class MetadataStore {
         CREATE VIRTUAL TABLE ${schema}.search_fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
         INSERT INTO ${schema}.search_fts(search_fts, rank) VALUES('secure-delete', 1);`;
   }
+  /**
+   * Prepare the full-text index without rebuilding it here: a new or changed index (FTS version change, or an
+   * encrypted profile's in-memory index after unlock) starts empty and is filled by `indexStep`, a bounded batch the
+   * workspace runs in the background (#30). Writes index incrementally from the start; until the rebuild finishes,
+   * search results are partial and coverage says so. A plaintext rebuild persists its cursor and resumes after a restart.
+   */
   ensureSearchIndex() {
+    this.searchReady = true;
     if (this.keys) {
-      // Encrypted profiles: the FTS index lives only in an attached in-memory database, built on the first search after unlock.
+      // Encrypted profiles: the FTS index lives only in an attached in-memory database, rebuilt after every unlock.
       this.db.exec("DROP TABLE IF EXISTS main.search_fts; DROP TABLE IF EXISTS main.search_docs; ATTACH DATABASE ':memory:' AS mem;");
       this.db.exec(MetadataStore.searchSchema('mem'));
-      this.searchReady = false;
+      this.beginIndexing('unlock', null);
       return;
     }
     const exists = this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('search_docs', 'search_fts')").get().count === 2;
-    this.searchReady = true;
     // FTS5 secure-delete removes deleted tokens from the index immediately instead of leaving tombstoned segments (redaction, restriction, purge).
     if (exists && this.info('searchIndexVersion') === String(SEARCH_INDEX_VERSION)) {
       // Enabled once for indexes created before this option; opening never writes otherwise (other readers would see a change).
       if (this.db.prepare("SELECT v FROM search_fts_config WHERE k = 'secure-delete'").get()?.v !== 1) this.db.exec("INSERT INTO search_fts(search_fts, rank) VALUES('secure-delete', 1)");
+      this.indexing = null;
       return;
     }
+    let pending = null;
+    try { pending = JSON.parse(this.info('searchIndexRebuild') || 'null'); } catch { pending = null; }
+    if (exists && pending?.version === SEARCH_INDEX_VERSION) { this.beginIndexing(pending.reason ?? 'version_change', Array.isArray(pending.cursor) ? pending.cursor : null); return; }
+    const reason = exists || this.info('searchIndexVersion') ? 'version_change' : 'new_index';
     this.transaction(() => {
       this.db.exec('DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs;');
       this.db.exec(MetadataStore.searchSchema('main'));
-      for (const row of this.db.prepare('SELECT collection, doc FROM records').iterate()) {
-        const record = JSON.parse(row.doc);
-        if (row.doc.includes('"$component"')) this.hydrate(row.collection, record, false);
-        this.indexRecord(row.collection, record);
-      }
-      this.setInfo('searchIndexVersion', String(SEARCH_INDEX_VERSION));
+      this.db.prepare("DELETE FROM store_info WHERE key = 'searchIndexVersion'").run();
+      this.setInfo('searchIndexRebuild', JSON.stringify({ version: SEARCH_INDEX_VERSION, reason, cursor: null }));
     });
+    this.beginIndexing(reason, null);
   }
-  /** Encrypted profiles: build the in-memory index from the decrypted documents already held for diffing. */
-  buildMemoryIndex() {
+  beginIndexing(reason, cursor) {
+    const total = this.db.prepare('SELECT count(*) AS count FROM records').get().count;
+    // Nothing to rebuild (a new store): later commits index incrementally.
+    if (!total) {
+      this.indexing = null;
+      if (!this.keys) { this.setInfo('searchIndexVersion', String(SEARCH_INDEX_VERSION)); this.db.prepare("DELETE FROM store_info WHERE key = 'searchIndexRebuild'").run(); }
+      return;
+    }
+    const done = cursor ? this.db.prepare('SELECT count(*) AS count FROM records WHERE (collection, id) <= (?, ?)').get(cursor[0], cursor[1]).count : 0;
+    this.indexing = { reason, cursor, total, done, startedAt: new Date(this.clock()).toISOString(), paused: false, error: null, resumed: Boolean(cursor) };
+  }
+  /**
+   * One bounded rebuild batch: index records after the cursor in (collection, id) order until `maxRecords` or
+   * `budgetMs` is reached, in one transaction. Idempotent with concurrent incremental indexing (indexRecord
+   * replaces a record's documents), so commits may interleave freely between batches.
+   */
+  indexStep({ maxRecords = 500, budgetMs = 10 } = {}) {
+    this.assertOpen();
+    const state = this.indexing;
+    if (!state) return { complete: true, processed: 0 };
+    const started = performance.now();
+    let processed = 0;
+    let exhausted = false;
     this.transaction(() => {
-      this.db.exec('DELETE FROM mem.search_fts; DELETE FROM mem.search_docs;');
-      this.searchReady = true;
-      try {
-        for (const [collection, docs] of this.docs) {
-          for (const { doc } of docs.values()) {
-            const record = JSON.parse(doc);
-            if (doc.includes('"$component"')) this.hydrate(collection, record, false);
-            this.indexRecord(collection, record);
-          }
+      const after = this.db.prepare('SELECT collection, id, doc FROM records WHERE (collection, id) > (?, ?) ORDER BY collection, id LIMIT ?');
+      const first = this.db.prepare('SELECT collection, id, doc FROM records ORDER BY collection, id LIMIT ?');
+      while (processed < maxRecords && performance.now() - started < budgetMs) {
+        const batch = Math.min(64, maxRecords - processed);
+        const rows = state.cursor ? after.all(state.cursor[0], state.cursor[1], batch) : first.all(batch);
+        for (const row of rows) {
+          // Encrypted profiles reuse the decrypted document already held for diffing.
+          const doc = this.keys ? this.docs.get(row.collection)?.get(row.id)?.doc ?? this.keys.openDoc(row.collection, row.id, row.doc) : row.doc;
+          const record = JSON.parse(doc);
+          if (doc.includes('"$component"')) this.hydrate(row.collection, record, false);
+          this.indexRecord(row.collection, record);
+          state.cursor = [row.collection, row.id];
+          processed++;
         }
-      } catch (error) { this.searchReady = false; throw error; }
+        if (rows.length < batch) { exhausted = true; break; }
+      }
+      if (exhausted) {
+        if (!this.keys) { this.setInfo('searchIndexVersion', String(SEARCH_INDEX_VERSION)); this.db.prepare("DELETE FROM store_info WHERE key = 'searchIndexRebuild'").run(); }
+      } else if (!this.keys) this.setInfo('searchIndexRebuild', JSON.stringify({ version: SEARCH_INDEX_VERSION, reason: state.reason, cursor: state.cursor }));
     });
+    state.done = Math.min(state.total, state.done + processed);
+    if (exhausted) { this.indexing = null; this.lastIndexing = { reason: state.reason, total: state.total, startedAt: state.startedAt, finishedAt: new Date(this.clock()).toISOString() }; }
+    return { complete: exhausted, processed, done: state.done, total: state.total };
+  }
+  /** Finish any pending rebuild synchronously (tests, tools and benchmarks). */
+  finishIndexing() { while (this.indexing) this.indexStep({ maxRecords: 5000, budgetMs: Infinity }); }
+  /** Lexical coverage of one workspace: complete, or how many of its records the background rebuild has not reached. */
+  lexicalCoverage(workspaceId) {
+    const documents = this.documentCount(workspaceId);
+    const state = this.indexing;
+    if (!state) return { documents, complete: true };
+    const remaining = state.cursor
+      ? this.db.prepare('SELECT count(*) AS count FROM records WHERE workspace_id = ? AND (collection, id) > (?, ?)').get(workspaceId, state.cursor[0], state.cursor[1]).count
+      : this.db.prepare('SELECT count(*) AS count FROM records WHERE workspace_id = ?').get(workspaceId).count;
+    return { documents, complete: remaining === 0, ...(remaining ? { unindexedRecords: remaining } : {}), indexing: this.indexingStatus() };
+  }
+  indexingStatus() {
+    const state = this.indexing;
+    if (!state) return { state: 'idle', ...(this.lastIndexing ? { last: this.lastIndexing } : {}) };
+    return { state: state.error ? 'failed' : state.paused ? 'paused' : 'running', reason: state.reason, processedRecords: state.done, totalRecords: state.total,
+      percent: state.total ? Math.floor((state.done / state.total) * 100) : 100, startedAt: state.startedAt, ...(state.resumed ? { resumed: true } : {}), ...(state.error ? { error: state.error } : {}) };
   }
 
   // ---- Loading and lazy components -------------------------------------------------
@@ -799,7 +857,6 @@ export class MetadataStore {
     this.assertOpen();
     const compiled = compileQuery(query);
     if (!compiled || typeof workspaceId !== 'string') return [];
-    if (!this.searchReady && this.keys) this.buildMemoryIndex();
     // Rank first; build excerpts only for the returned rows.
     const statement = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, bm25(search_fts, 6.0, 1.0) AS score
       FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid

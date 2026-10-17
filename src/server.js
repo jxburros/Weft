@@ -33,7 +33,7 @@ function readJson(req) {
  * Event types any Weft component may publish on the authenticated event stream. Other components
  * register new metadata-only types here; payloads still pass the field allowlist below.
  */
-export const EVENT_TYPES = new Set(['command', 'navigation', 'workspace', 'activity', 'task', 'handoff', 'policy', 'artifact', 'turn', 'approval', 'collection', 'conflict', 'credential', 'capture', 'tab', 'display', 'payment']);
+export const EVENT_TYPES = new Set(['command', 'navigation', 'workspace', 'activity', 'task', 'handoff', 'policy', 'artifact', 'turn', 'approval', 'collection', 'conflict', 'credential', 'capture', 'tab', 'display', 'payment', 'indexing']);
 export function registerEventType(type) {
   if (typeof type !== 'string' || !/^[a-z][a-z_]{1,31}$/.test(type)) throw new Error('Event types are short lowercase identifiers');
   EVENT_TYPES.add(type);
@@ -54,7 +54,8 @@ export function sanitizeEvent(event) {
     const value = event[key];
     if (typeof value === 'string' && RECORD_ID.test(value)) result[key] = value;
   }
-  for (const key of ['tabId', 'version', 'revision']) if (Number.isSafeInteger(event[key]) && event[key] >= 0) result[key] = event[key];
+  // processed/total: counts of a background job (search index rebuild), never content.
+  for (const key of ['tabId', 'version', 'revision', 'processed', 'total']) if (Number.isSafeInteger(event[key]) && event[key] >= 0) result[key] = event[key];
   if (Number.isSafeInteger(event.targetId) && event.targetId > 0) result.targetId = event.targetId;
   return result;
 }

@@ -39,6 +39,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     authority.taskGrant ??= (...input) => credentials.taskGrant(...input);
     authority.approvalPreview ??= (...input) => credentials.approvalPreview(...input);
   }
+  // Background search-index rebuild progress (#30) is published as metadata-only indexing events.
+  if (workspace) workspace.onIndexingEvent = event => onEvent(event);
   // Durable task runtime (ADR 016): task steps re-enter this dispatcher as the task's bound identity.
   tasks ??= new TaskRuntime({ workspace, browser, admission, clients, providers, credentials, onEvent });
   const runtimeCommands = new Set(RUNTIME_COMMANDS);
