@@ -15,6 +15,15 @@ for (const collection of ['materials', 'context', 'tasks', 'conversations', 'wor
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, ['siteRules', 'workflows'].includes(collection) ? 'administration' : 'local_write');
 }
+add('local_read', 'plugins.list plugins.invoke artifacts.render activity.report workspaces.exportAs');
+add('external_read', 'page.extract');
+add('administration', 'plugins.enable plugins.disable extensions.list extensions.audit extensions.install extensions.enable extensions.disable extensions.remove');
+/** Built-in plugin commands are classified from validated manifests by the plugin registry, never by name guessing. */
+export function registerPluginActionClass(name, actionClass) {
+  if (!/^plugin\.[a-z][a-z0-9-]{1,39}\.[a-z][a-zA-Z0-9]{0,39}$/.test(name) || !ACTION_CLASSES.includes(actionClass)) throw new Error(`Invalid plugin command classification: ${name}`);
+  if (classifications.has(name) && classifications.get(name) !== actionClass) throw new Error(`Conflicting classification for ${name}`);
+  classifications.set(name, actionClass);
+}
 export function actionClassForCommand(name) { return classifications.get(name) ?? 'restricted'; }
 export function evaluateAutonomy({ actor, actionClass, level = 'scoped', approved = false } = {}) {
   if (['human', 'admin'].includes(actor)) return { decision: 'auto', reason: 'trusted_human' };

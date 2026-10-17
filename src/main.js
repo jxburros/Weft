@@ -12,6 +12,8 @@ import { ClientGrants } from './clients.js';
 import { CommunityLists } from './community-lists.js';
 import { createDispatcher } from './dispatch.js';
 import { Providers } from './providers.js';
+import { WorkspaceExtensions } from './extensions.js';
+import { PluginRegistry } from './plugins/registry.js';
 
 let browser;
 let workspace;
@@ -19,6 +21,7 @@ let providers;
 let server;
 let window;
 let dispatch;
+let plugins;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const guiUrl = new URL('./gui.html', import.meta.url).href;
@@ -63,8 +66,12 @@ app.whenReady().then(async () => {
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   browser = new Browser({ window, workspaceService: workspace, admission });
   workspace.attachBrowser(browser);
+  // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
+  plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
+  const extensions = new WorkspaceExtensions({ directory, workspace, browser });
+  await extensions.restore();
   const clients = new ClientGrants({ directory, masterToken: token, workspace });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, lists: new CommunityLists({ workspace }), admission, onEvent: event => events.emit('event', event) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, lists: new CommunityLists({ workspace }), extensions, plugins, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
@@ -91,6 +98,7 @@ app.on('window-all-closed', () => app.quit());
 app.on('before-quit', () => {
   server?.close();
   providers?.close();
+  plugins?.close();
   browser?.close();
   browser = null;
   workspace?.close();

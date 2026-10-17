@@ -554,7 +554,7 @@ function privacyView() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section>`
   );
 }
 async function manageClients() {
@@ -562,6 +562,45 @@ async function manageClients() {
   openDialog("Agent connections",
     `<p>Create a separate, expiring token for each agent. Scope each token to the workspace and actions it needs. Revocation takes effect immediately.</p>${grants.length ? grants.map(grant => `<article class="record-card"><h3>${esc(grant.name)}</h3><p>${esc(grant.scopes.join(", "))}</p><small>Workspaces: ${esc(grant.workspaceIds.map(id => state.workspaces.find(w => w.id === id)?.name || id).join(", "))}</small><small>${grant.revoked ? "Revoked · " : Number(grant.expiresAt) <= Date.now() ? "Expired · " : ""}Expiry: ${esc(new Date(grant.expiresAt).toLocaleString())}</small>${!grant.revoked ? action("revoke-client", "Revoke token", "", `data-id="${esc(grant.clientId)}"`, "secondary danger") : ""}</article>`).join("") : '<p>No scoped agent connections have been created.</p>'}`,
     action("close-dialog", "Close") + action("new-client", "Create connection", "plus", "", "primary"), true);
+}
+async function managePlugins() {
+  const plugins = await execute("plugins.list", {}, true);
+  openDialog("Plugins",
+    `<p>Built-in plugins ship with Weft. Third-party plugins are read from the <code>plugins</code> folder of your Weft profile; listing them never runs their code. Enabling one binds your grant to the exact files shown, and changing those files disables it until you review it again.</p>${plugins.map(p => `<article class="record-card"><span class="tag">${p.builtin ? "Built-in" : "Third-party"} · ${esc(p.status)}${p.allowAutomation ? " · agents allowed" : ""}</span><h3>${esc(p.name)}${p.version ? " " + esc(p.version) : ""}</h3><p>${esc(p.description || "")}</p>${p.scope.length ? `<ul>${p.scope.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : ""}${(p.problems || []).length ? `<div class="notice">Refused: ${esc(p.problems.join("; "))}</div>` : ""}${p.builtin ? "" : p.codeSha256 ? `<small>Code sha256 ${esc(p.codeSha256)}</small>` : ""}<div class="inline-actions">${p.status === "enabled" ? action("disable-plugin", "Disable", "", `data-name="${esc(p.name)}"`, "secondary danger") : p.status !== "invalid" ? action("enable-plugin", "Enable", "", `data-name="${esc(p.name)}" data-manifest="${esc(p.manifestSha256 || "")}" data-code="${esc(p.codeSha256 || "")}"`) + (p.builtin ? "" : action("enable-plugin", "Enable and allow agents", "", `data-name="${esc(p.name)}" data-manifest="${esc(p.manifestSha256 || "")}" data-code="${esc(p.codeSha256 || "")}" data-automation="1"`, "secondary")) : ""}</div></article>`).join("")}`,
+    action("close-dialog", "Close"), true);
+}
+async function manageExtensions() {
+  const rows = await execute("extensions.list", { workspaceId: ws().id }, true);
+  openDialog(`Extensions in ${ws().name}`,
+    `<p>Unpacked Manifest V3 extensions load only into this workspace’s browser session. Weft refuses native messaging, debugging, request interception, cookie access and hosts you have not granted. An enabled extension still runs code inside matching pages and can read what they show.</p>${rows.length ? rows.map(e => `<article class="record-card"><span class="tag">${e.enabled ? "Enabled" : "Disabled"}${e.loaded ? " · loaded" : ""}</span><h3>${esc(e.name)} ${esc(e.version)}</h3><p>Hosts: ${esc(e.hostGrants.join(", ") || "none")}<br>Permissions: ${esc(e.permissions.join(", ") || "none")}</p>${e.lastError ? `<div class="notice">${esc(e.lastError)}</div>` : ""}<small>sha256 ${esc(e.sha256)}</small><div class="inline-actions">${e.enabled ? action("disable-extension", "Disable", "", `data-id="${esc(e.id)}"`, "secondary danger") : action("enable-extension", "Enable", "", `data-id="${esc(e.id)}"`)}${action("remove-extension", "Remove", "", `data-id="${esc(e.id)}"`, "secondary danger")}</div></article>`).join("") : "<p>No extensions are installed in this workspace.</p>"}`,
+    action("close-dialog", "Close") + action("install-extension", "Install unpacked extension", "plus", "", "primary"), true);
+}
+function installExtension() {
+  openDialog("Install unpacked extension",
+    `<p>Enter the folder that contains <code>manifest.json</code>. Weft reviews it first; nothing is installed or run until you confirm.</p><form id="extension-form">${field("Extension folder (absolute path)", "path", "", "text", true)}<button class="primary" type="submit">Review extension</button></form><div id="extension-review" aria-live="polite"></div>`,
+    action("close-dialog", "Cancel"), true);
+  $("extension-form").onsubmit = async event => {
+    event.preventDefault();
+    const path = new FormData(event.currentTarget).get("path");
+    try {
+      const probe = await execute("extensions.audit", { path, workspaceId: ws().id }, true);
+      const hosts = probe.scope?.requestedHostGrants || [];
+      const report = hosts.length ? await execute("extensions.audit", { path, workspaceId: ws().id, hostGrants: hosts }, true) : probe;
+      const blocking = report.refusals.filter(item => item.kind !== "ungranted");
+      $("extension-review").innerHTML = `<h3>${esc(report.name || "Unnamed extension")} ${esc(report.version || "")}</h3>${blocking.length ? `<div class="notice">Weft will not install this extension:<ul>${blocking.map(item => `<li>${esc(item.key)} — ${esc(item.kind)}: ${esc(item.reason)}</li>`).join("")}</ul></div>` : `<form id="extension-grant"><fieldset><legend>Grant site access (all requested sites are required)</legend>${hosts.map(host => `<label><input type="checkbox" name="host" value="${esc(host)}"> ${esc(host)}${report.scope.hosts.find(item => item.pattern === host)?.broad ? " — every site or a whole domain" : ""}</label>`).join("") || "<p>No site access requested.</p>"}</fieldset><ul>${report.scope.permissions.map(item => `<li>${esc(item.name)}: ${esc(item.meaning)}</li>`).join("")}${report.ignored.map(item => `<li>Not available: ${esc(item.key)} — ${esc(item.reason)}</li>`).join("")}</ul><div class="notice">${report.scope.residualRisks.map(esc).join(" ")}</div><small>Package sha256 ${esc(report.sha256)} · ${Number(report.files)} files</small><button class="primary" type="submit">Install disabled</button></form>`}`;
+      if (!$("extension-grant")) return;
+      $("extension-grant").onsubmit = async grantEvent => {
+        grantEvent.preventDefault();
+        const granted = new FormData(grantEvent.currentTarget).getAll("host");
+        try {
+          if (granted.length !== hosts.length) throw new Error("Grant every requested site, or cancel the installation.");
+          await execute("extensions.install", { path, workspaceId: ws().id, hostGrants: granted, sha256: report.sha256 }, true);
+          await manageExtensions();
+          toast("Extension installed disabled. Enable it when ready.");
+        } catch (error) { $("form-error").textContent = errorMessage(error); }
+      };
+    } catch (error) { $("form-error").textContent = errorMessage(error); }
+  };
 }
 function createClient() {
   openDialog("Create agent connection",
@@ -1057,21 +1096,31 @@ function downloadJson(name, value) {
   a.download = name;
   a.click();
 }
+function downloadText(name, text, type) {
+  const a = document.createElement("a");
+  a.href = `data:${type};charset=utf-8,` + encodeURIComponent(text);
+  a.download = name;
+  a.click();
+}
 function exportWorkspace() {
   openDialog("Review workspace export",
-    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
+    `<p>Exports may contain private notes, messages, captures, and files. Model credentials and browser sessions are excluded.</p><form id="export-form">${choice("Format", "format", [["json", "Weft JSON (can be imported again)"], ["markdown", "Markdown (readable; produced by the markdown plugin)"]], "json")}${area("Optional sensitive terms to check (one per line)", "sensitiveTerms")}<p>Terms are checked locally. Images and unsupported binary files cannot be verified by a text scan.</p><button class="primary" type="submit">Prepare export</button></form><div id="export-review" aria-live="polite"></div>`,
     action("close-dialog", "Cancel"));
   $("export-form").onsubmit = async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector("button");
     button.disabled = true;
     try {
-      const sensitiveTerms = new FormData(event.currentTarget).get("sensitiveTerms").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
-      const bundle = await execute("workspaces.export", { id: ws().id, ...(sensitiveTerms.length ? { sensitiveTerms } : {}) }, true);
+      const form = new FormData(event.currentTarget);
+      const sensitiveTerms = form.get("sensitiveTerms").split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      const format = form.get("format") || "json";
+      const bundle = await execute(format === "json" ? "workspaces.export" : "workspaces.exportAs", { id: ws().id, ...(format === "json" ? {} : { format }), ...(sensitiveTerms.length ? { sensitiveTerms } : {}) }, true);
       const scan = bundle.residueScan;
-      $("export-review").innerHTML = `<div class="notice">${scan ? `Sensitive-term scan: <strong>${esc(scan.status)}</strong>. ${scan.found?.length || 0} term matches; ${scan.unverifiable?.length || 0} items could not be verified. ${esc(scan.scope || "")}` : "No sensitive-term scan requested."} Review this result before saving; a clean text scan does not establish that the export is free of private information.</div><button id="save-export" class="primary">Save reviewed export</button>`;
+      $("export-review").innerHTML = `<div class="notice">${scan ? `Sensitive-term scan: <strong>${esc(scan.status)}</strong>. ${scan.found?.length || 0} term matches; ${scan.unverifiable?.length || 0} items could not be verified. ${esc(scan.scope || "")}` : "No sensitive-term scan requested."} Review this result before saving; a clean text scan does not establish that the export is free of private information.</div>${bundle.exclusions ? `<p>This ${esc(bundle.format)} export omits:</p><ul>${bundle.exclusions.map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}<button id="save-export" class="primary">Save reviewed export</button>`;
       $("save-export").onclick = () => {
-        downloadJson(`${ws().name.replace(/[^a-z\d -]/gi, "") || "workspace"}.weft.json`, bundle);
+        const base = ws().name.replace(/[^a-z\d -]/gi, "") || "workspace";
+        if (bundle.format === "weft-workspace") downloadJson(`${base}.weft.json`, bundle);
+        else downloadText(`${base}.${bundle.extension}`, bundle.content, bundle.mimeType);
         closeDialog();
         toast("Workspace export prepared.");
       };
@@ -1401,6 +1450,29 @@ async function act(button) {
   switch (a) {
     case "manage-clients":
       await manageClients();
+      break;
+    case "manage-plugins":
+      await managePlugins();
+      break;
+    case "enable-plugin":
+      await execute("plugins.enable", { name: button.dataset.name, ...(button.dataset.code ? { manifestSha256: button.dataset.manifest, codeSha256: button.dataset.code } : {}), ...(button.dataset.automation ? { allowAutomation: true } : {}) }, true);
+      await managePlugins();
+      break;
+    case "disable-plugin":
+      await execute("plugins.disable", { name: button.dataset.name }, true);
+      await managePlugins();
+      break;
+    case "manage-extensions":
+      await manageExtensions();
+      break;
+    case "install-extension":
+      installExtension();
+      break;
+    case "enable-extension":
+    case "disable-extension":
+    case "remove-extension":
+      await execute(`extensions.${a.split("-")[0]}`, { id }, true);
+      await manageExtensions();
       break;
     case "new-client":
       createClient();

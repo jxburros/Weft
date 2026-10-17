@@ -35,6 +35,8 @@ export class Browser {
     this.activeId = null;
     this.viewport = null;
     this.attachedViews = new Set();
+    // Set by WorkspaceExtensions; without it, extension-originated requests are cancelled.
+    this.extensionRequestAllowed = null;
     this.session = session ?? this.sessionFor(this.workspaceId);
     if (session) this.configureSession(session, this.workspaceId);
     this.onResize = () => this.layout();
@@ -59,6 +61,14 @@ export class Browser {
     // ordinary background requests. It is not a firewall for external tools.
     session.webRequest?.onBeforeRequest((details, callback) => {
       const rule = this.workspaceService?.matchSiteRule(details.url, workspaceId);
+      // Extension service-worker/page requests: any block rule applies (not only
+      // navigation rules) and the destination must be a host granted to that extension.
+      if (typeof details.initiatorOrigin === 'string' && details.initiatorOrigin.startsWith('chrome-extension://') && /^https?:/i.test(details.url)) {
+        let allowed = false;
+        try { allowed = this.extensionRequestAllowed?.(workspaceId, details) === true; } catch { allowed = false; }
+        callback({ cancel: !allowed || (!!rule && rule.behavior === 'block') });
+        return;
+      }
       const navigation = ['mainFrame', 'subFrame'].includes(details.resourceType);
       const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents.id === details.webContentsId);
       const overridden = tab && tab.allowUrl === this.overrideKey(details.url);

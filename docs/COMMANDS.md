@@ -125,3 +125,19 @@ Human-only describes an unconditional administration gate; other commands may st
 | lists.install | Human installs or updates a disabled, commit/hash-pinned community site list from supplied offline JSON bytes | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.status | Human inspects installed list pins, rule status and rollback availability without downloading | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.rollback | Human restores the previous pinned list version with rules disabled for review | administration | Human only | GUI IPC, CLI, REST, MCP |
+| plugins.list | List built-in and discovered third-party plugins with permissions, hooks, scope and status; never runs plugin code | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| plugins.enable | Human enables a plugin; third-party grants bind the reviewed manifest and code digests | administration | Human only | GUI IPC, CLI, REST, MCP |
+| plugins.disable | Human disables a plugin or revokes a third-party grant; running plugin processes are terminated | administration | Human only | GUI IPC, CLI, REST, MCP |
+| plugins.invoke | Run a read-only command of an enabled third-party plugin in its sandbox; result is untrusted data | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| workspaces.exportAs | Human exports workspace records through an export-format plugin (formats in plugins.list) | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| artifacts.render | Render one immutable capture version through a capture-format plugin as untrusted derived text | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| activity.report | Render attributable workspace activity through an activity-report plugin | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.extract | Extract untrusted items with exact text offsets from a readable page snapshot through a page-extract plugin | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| extensions.list | Human lists unpacked Chromium extensions installed per workspace with their granted scope | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.audit | Human audits an unpacked Manifest V3 extension directory against Weft policy without installing it | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.install | Human installs a disabled, hash-pinned copy of an audited unpacked extension into one workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.enable | Human loads an installed extension into its workspace session after re-verifying files and scope | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.disable | Human revokes an extension: it is unloaded from its workspace session immediately | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.remove | Human unloads and deletes an installed extension copy | administration | Human only | GUI IPC, CLI, REST, MCP |
+| plugin.markdown.digest | Render workspace context records as a Markdown digest that keeps categories and sources (built-in plugin markdown 1.0.0) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| plugin.session-stats.summary | Summarize command outcomes observed for a workspace since Weft started (built-in plugin session-stats 1.0.0) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |

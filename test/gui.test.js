@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -205,6 +205,33 @@ if (process.argv.includes("--gui-workflows")) {
       (await run('window.weft.execute("artifacts.list")')).length,
       1,
     );
+    // Plugins and browser extensions are managed only through reviewed-scope dialogs.
+    await click("#settings-button");
+    await until('document.querySelector("[data-action=manage-plugins]")!==null');
+    await click('[data-action="manage-plugins"]');
+    await until('document.getElementById("dialog-content").textContent.includes("Hook export-format: markdown")');
+    await click('[data-action="close-dialog"]');
+    const probeSource = join(process.env.WEFT_TEST_PROFILE, "probe-source");
+    mkdirSync(probeSource, { recursive: true });
+    const probeFiles = JSON.parse(readFileSync(new URL("./fixtures/extensions.json", import.meta.url), "utf8")).extensions.probe;
+    for (const [file, contents] of Object.entries(probeFiles)) writeFileSync(join(probeSource, file), contents);
+    await click('[data-action="manage-extensions"]');
+    await until('document.querySelector("[data-action=install-extension]")!==null');
+    await click('[data-action="install-extension"]');
+    await run(`document.querySelector('#extension-form [name="path"]').value=${JSON.stringify(probeSource)};document.getElementById("extension-form").requestSubmit()`);
+    await until('document.getElementById("extension-grant")!==null');
+    await run('document.getElementById("extension-grant").requestSubmit()');
+    await until('document.getElementById("form-error").textContent.includes("Grant every requested site")');
+    await run('document.querySelector("#extension-grant [name=host]").checked=true;document.getElementById("extension-grant").requestSubmit()');
+    await until('document.querySelector("[data-action=enable-extension]")!==null');
+    await click('[data-action="enable-extension"]');
+    await until('document.querySelector("[data-action=disable-extension]")!==null');
+    const [installedExtension] = await run('window.weft.execute("extensions.list")');
+    assert.equal(installedExtension.loaded, true);
+    assert.deepEqual(installedExtension.hostGrants, ["http://127.0.0.1/*"]);
+    await click('[data-action="remove-extension"]');
+    await until('document.getElementById("dialog-content").textContent.includes("No extensions are installed")');
+    await click('[data-action="close-dialog"]');
     await click("#theme-toggle");
     await until('document.documentElement.dataset.theme==="dark"');
     assert.ok(
