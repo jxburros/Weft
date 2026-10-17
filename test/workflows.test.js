@@ -76,7 +76,7 @@ test('runs substitute parameters, enforce allowed sites, ask for expected-output
   const f = setup(t);
   const workflow = await f.run('workflows.create', { workspaceId: f.workspaceId, ...orderWorkflow({ parameters: [...orderWorkflow().parameters, { name: 'note', type: 'string', sensitive: true, required: false, default: '' }],
     steps: [...orderWorkflow().steps, { title: 'Private note', kind: 'command', command: 'context.create', args: { title: 'Note', content: '{{note}}', category: 'findings' }, reviewRequired: false }] }) });
-  const task = await f.run('workflows.run', { id: workflow.id, parameters: { item: 'paper', size: 'large', quantity: 2, note: 'door code 4471' }, tabId: 1, executor: { type: 'runner', autonomy: 'autonomous' } });
+  const task = await f.run('workflows.run', { id: workflow.id, parameters: { item: 'paper', size: 'large', quantity: 2, note: 'door code qzxv-private' }, tabId: 1, executor: { type: 'runner', autonomy: 'autonomous' } });
   let record = await f.settle(task.id);
   assert.equal(record.status, 'waiting_on_human');
   assert.equal(record.run.blocker.kind, 'expected_outputs');
@@ -84,8 +84,8 @@ test('runs substitute parameters, enforce allowed sites, ask for expected-output
   assert.match(fill.source, /paper \(large\)/, 'parameters are substituted at execution time');
   assert.equal(f.workspace.data.context.find(item => item.title === 'Ordered paper').content, 'Quantity 2');
   assert.deepEqual(record.workflowRun.sensitive, ['note']);
-  assert.equal(JSON.stringify(record).includes('4471'), false, 'sensitive parameter values are never stored on the task');
-  assert.equal(JSON.stringify(f.authority.activity.entries).includes('4471'), false, 'or in activity');
+  assert.equal(JSON.stringify(record).includes('qzxv-private'), false, 'sensitive parameter values are never stored on the task');
+  assert.equal(JSON.stringify(f.authority.activity.entries).includes('qzxv-private'), false, 'or in activity');
   await f.run('tasks.review', { id: task.id, stepId: '_outputs', decision: 'approve', note: 'Finding recorded' });
   record = await f.settle(task.id);
   assert.equal(record.status, 'completed');
