@@ -99,7 +99,7 @@ export class Authority {
     if (context.clientId) {
       try {
         this.clients.assertAllowed(command, context, { workspaceId: target.workspaceId, workspaceIds, destination, actionClass,
-          resource: resourceForCommand(command), dataClasses: [...dataClassesForCommand(command), ...(args.allowReadTools || args.attachments?.some(item => item.kind === 'tab') ? ['page_content'] : [])], createsWorkspace: ['workspaces.create', 'workspaces.duplicate'].includes(command) });
+          resource: resourceForCommand(command), dataClasses: [...(spec.dataClasses ?? dataClassesForCommand(command)), ...(args.allowReadTools || args.attachments?.some(item => item.kind === 'tab') ? ['page_content'] : [])], createsWorkspace: ['workspaces.create', 'workspaces.duplicate'].includes(command) });
       } catch (error) {
         const reason = error.details?.authority?.reason ?? 'client_scope';
         this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args) });

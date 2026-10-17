@@ -15,6 +15,8 @@ import { Authority } from './authority.js';
 import { ActivityLog } from './activity-log.js';
 import { Providers } from './providers.js';
 import { TurnRelay } from './turn-relay.js';
+import { WorkspaceExtensions } from './extensions.js';
+import { PluginRegistry } from './plugins/registry.js';
 
 let browser;
 let workspace;
@@ -24,6 +26,7 @@ let window;
 let dispatch;
 let lists;
 let listTimer;
+let plugins;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const relay = new TurnRelay();
@@ -81,12 +84,16 @@ app.whenReady().then(async () => {
   browser = new Browser({ window, workspaceService: workspace, admission });
   browser.onAudit = entry => activity.append(entry);
   workspace.attachBrowser(browser);
+  // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
+  plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
+  const extensions = new WorkspaceExtensions({ directory, workspace, browser });
+  await extensions.restore();
   const clients = new ClientGrants({ directory, masterToken: token, workspace });
   lists = new CommunityLists({ workspace });
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, admission, onEvent: event => events.emit('event', event) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
@@ -117,6 +124,7 @@ app.on('before-quit', () => {
   server?.close();
   providers?.close();
   relay.close();
+  plugins?.close();
   browser?.close();
   browser = null;
   workspace?.close();

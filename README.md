@@ -232,8 +232,11 @@ is in [implementation coverage](docs/IMPLEMENTATION.md).
 
 The largest remaining capabilities are the isolated credential/payment broker,
 fine-grained agent grants and autonomous execution, comprehensive storage
-block/session modes, a community-list management screen and any hosted moderation service, extension support, synchronization,
-and signed installers/automatic updates. Provider key storage is not a credential
+block/session modes, a community-list management screen and any hosted moderation service, synchronization,
+and signed installers/automatic updates. Browser extension support is limited to unpacked
+Manifest V3 extensions installed per workspace with audited permissions
+([ADR-007](docs/decisions/007-extension-compatibility.md)); Weft plugins are
+described in [docs/PLUGINS.md](docs/PLUGINS.md). Provider key storage is not a credential
 broker. The application does not make strong secret-isolation claims against
 agents that can control the host computer.
 
@@ -267,7 +270,7 @@ Agent contributors should read [AGENTS.md](AGENTS.md). The packaged
 registry. [Offline task evals](evals/README.md) measure reference success and tool
 calls; [performance budgets](perf/README.md) cover large-store writes, capture
 search and catalog generation. [Architecture decisions](docs/decisions/) record
-current scope and outstanding encryption/plugin work.
+current scope, the plugin/extension boundaries and outstanding encryption work.
 
 The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
 variants are documented in [assets/logo/README.md](assets/logo/README.md).

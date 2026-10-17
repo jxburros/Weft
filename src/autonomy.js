@@ -39,6 +39,32 @@ for (const collection of ['materials', 'context', 'tasks', 'conversations', 'wor
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
 }
+// Plugin and browser-extension surfaces. Hook commands read only through nested gated dispatch;
+// plugin and extension administration and export are human-only administration.
+add('local_read', 'plugins.list plugins.invoke artifacts.render activity.report');
+add('external_read', 'page.extract');
+add('administration', 'workspaces.exportAs plugins.enable plugins.disable extensions.list extensions.audit extensions.install extensions.enable extensions.disable extensions.remove');
+const pluginCommand = /^plugin\.[a-z][a-z0-9-]{1,39}\.[a-z][a-zA-Z0-9]{0,39}$/;
+/**
+ * Built-in plugin commands are classified from validated manifests by the plugin registry, never by name guessing.
+ * The class is already raised to what the manifest permissions imply; data classes follow the permissions too.
+ */
+export function registerPluginActionClass(name, actionClass, dataClasses = null) {
+  if (!pluginCommand.test(name) || !ACTION_CLASSES.includes(actionClass)) throw new Error(`Invalid plugin command classification: ${name}`);
+  if (classifications.has(name) && classifications.get(name) !== actionClass) throw new Error(`Conflicting classification for ${name}`);
+  classifications.set(name, actionClass);
+  if (dataClasses) {
+    if (dataClasses.some(item => !DATA_CLASSES.includes(item))) throw new Error(`Invalid plugin data classes: ${name}`);
+    pluginDataClasses.set(name, [...new Set(dataClasses)]);
+  }
+}
+const pluginDataClasses = new Map();
+/** The more restrictive of two action classes (unknown values are unclassified). Used to raise a command to a plugin's effective class. */
+const CLASS_ORDER = ['local_read', 'external_read', 'local_write', 'external_write', 'code_exec', 'cloud_spend', 'bulk_export', 'credential_use', 'payment', 'administration', 'unclassified'];
+export function raiseActionClass(current, raised) {
+  const rank = value => { const index = CLASS_ORDER.indexOf(value); return index < 0 ? CLASS_ORDER.length - 1 : index; };
+  return CLASS_ORDER[Math.max(rank(current), rank(raised))];
+}
 export function actionClassForCommand(name) { return classifications.get(name) ?? 'unclassified'; }
 
 /** Sensitive outbound categories that a command may produce. Unknown external effects are treated as all three external-change categories. */
@@ -58,13 +84,13 @@ export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
   if (['tabs', 'page', 'downloads'].includes(namespace)) return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
-  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings'].includes(namespace)) return 'browser';
+  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions'].includes(namespace)) return 'browser';
   return 'records';
 }
 
 /** Data classes a command can disclose. Metadata-only commands return []. Unknown reads default to workspace records. */
 const dataOverrides = {
-  'guide.get': [], 'browser.info': [], 'storage.info': [], 'models.list': [], 'tabs.list': [], 'autonomy.get': [], 'settings.get': [],
+  'guide.get': [], 'browser.info': [], 'plugins.list': [], 'page.extract': ['page_content'], 'activity.report': ['activity', 'workspace_records'], 'storage.info': [], 'models.list': [], 'tabs.list': [], 'autonomy.get': [], 'settings.get': [],
   'page.readable': ['page_content'], 'page.title': ['page_content'], 'page.content': ['page_content'], 'page.inspect': ['page_content'], 'page.find': ['page_content'],
   'page.screenshot': ['page_capture'], 'page.pdf': ['page_capture'], 'artifacts.capture': ['page_capture'],
   'history.list': ['browsing_history'], 'downloads.list': ['browsing_history'],
@@ -76,6 +102,7 @@ const dataOverrides = {
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];
+  if (pluginDataClasses.has(name)) return [...pluginDataClasses.get(name)];
   const actionClass = actionClassForCommand(name);
   if (!['local_read', 'external_read'].includes(actionClass)) return [];
   return [name.startsWith('page.') ? 'page_content' : 'workspace_records'];
@@ -86,7 +113,7 @@ export function effectForCommand(name) {
   const actionClass = actionClassForCommand(name);
   if (['local_read', 'external_read'].includes(actionClass)) return 'none';
   if (EXTERNAL_CLASSES.includes(actionClass) || actionClass === 'unclassified') return 'external';
-  if (/\.(delete|clear|close|revoke)$/.test(name) || name === 'workspaces.import') return 'irreversible';
+  if (/\.(delete|clear|close|revoke|remove)$/.test(name) || name === 'workspaces.import') return 'irreversible';
   return 'local';
 }
 

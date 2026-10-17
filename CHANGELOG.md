@@ -72,6 +72,34 @@ alone is not a shipped capability.
   pagination, `activity.verify` and GUI filters (#29). Bootstrap token defaults
   to standing autonomy for compatibility; `activity.list` now returns
   `{items, nextCursor}` instead of an array.
+- Added a Weft plugin system (#61): strict data-only manifests, built-in
+  `markdown`, `citations` and `session-stats` plugins, `plugin.<name>.*`
+  catalog commands, five named hooks (`capture-format`, `page-extract`,
+  `after-command`, `activity-report`, `export-format`) reached only through a
+  registry, new `workspaces.exportAs`, `artifacts.render`, `activity.report`
+  and `page.extract` commands, and `plugins.list/enable/disable/invoke`.
+  Third-party plugins are listed without running code, enabled only by a person
+  against manifest/code digests, kept from automation by default and run in a
+  permission-model child process. An import-boundary test guards core.
+- Added per-workspace unpacked Manifest V3 browser extensions (#34):
+  human-only audit/install/enable/disable/remove with exact host grants,
+  an audited permission allowlist, hash pinning and restart re-verification.
+  Extension-originated requests are limited to granted hosts and every block
+  rule. A real Electron fixture run records supported/denied APIs in ADR-007.
+  Enabled extensions still run code in granted pages; this residual risk is
+  documented. Only Linux/Xvfb was observed.
+- Plugin and extension commands run under the shared authority gate: built-in
+  plugin commands are classified from their manifests (permissions raise the
+  class and set data classes), `plugins.invoke` is raised to the invoked
+  operation's class, nested hook/capability reads are re-dispatched with the
+  caller's identity (gated, approval-aware and recorded in activity), plugin
+  and extension administration and `workspaces.exportAs` are human-only
+  administration, and emergency stop also terminates plugin processes.
+  `activity.report` now renders the durable activity log.
+- Settings gained plugin and extension management dialogs that show scope
+  before enablement; workspace export can produce Markdown through the plugin.
+- The `unsupported` error code (HTTP 422, CLI exit 1) reports a requested
+  format, extractor or extension engine feature that is not available.
 
 ### Not completed
 

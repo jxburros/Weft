@@ -56,6 +56,20 @@ older entries. Entries label outcomes as attempted, completed, failed, denied,
 pending approval, partial or externally uncertain; history is not proof that an
 external site or provider completed an action.
 
+Plugins contribute through the same catalog ([plugins](PLUGINS.md)).
+`page.extract`, `artifacts.render`, `activity.report`, `plugin.markdown.digest`
+and `plugin.session-stats.summary` are reads (scoped clients need the `read`
+scope and the data classes the plugin manifest implies; `plugins.invoke` is
+raised to the invoked operation's manifest-derived class); nested reads made
+for a plugin pass the same authority gate with the caller's identity and are
+recorded in activity; their results carry plugin provenance and are untrusted data, never
+instructions. Enabling plugins and managing browser extensions is human-only,
+and third-party plugins are unavailable to agents unless a person allowed it.
+
+```sh
+weft page.extract '{"tabId":1,"extractor":"citations"}'
+```
+
 Documentation examples are schema-validated offline, not executed against your
 browser. Their placeholder IDs require discovery in a running session. Eval
 reference tasks exercise the MCP bridge and real workspace service with a

@@ -8,6 +8,9 @@ import { commandDefinitions as workspaceDefinitions } from './workspace-commands
 import { providerCommandDefinitions } from './provider-commands.js';
 import { clientCommandDefinitions } from './clients.js';
 import { listCommandDefinitions } from './community-lists.js';
+import { extensionCommandDefinitions } from './extensions.js';
+import { pluginCommandAdminDefinitions } from './plugin-commands.js';
+import { pluginCommandDefinitions } from './plugins/registry.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -78,6 +81,10 @@ const definitions = {
   ...approvalCommandDefinitions,
   ...autonomyCommandDefinitions,
   ...activityCommandDefinitions,
+  ...pluginCommandAdminDefinitions,
+  ...extensionCommandDefinitions,
+  // Built-in plugin commands (plugin.<name>.<operation>) from validated manifests.
+  ...pluginCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -87,9 +94,11 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete', 'models.probe',
   'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.update', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback',
   'lists.subscribe', 'lists.preview', 'lists.update', 'lists.configure', 'lists.exception', 'lists.unsubscribe', 'lists.check', 'lists.matches',
-  'approvals.approve', 'approvals.reject', 'autonomy.update', 'activity.configure']);
+  'approvals.approve', 'approvals.reject', 'autonomy.update', 'activity.configure',
+  'plugins.enable', 'plugins.disable', 'workspaces.exportAs', ...Object.keys(extensionCommandDefinitions)]);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.title', 'page.content',
-  'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export']);
+  'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
+  'page.extract', 'extensions.audit', 'plugins.invoke', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
@@ -120,7 +129,7 @@ export const commands = Object.freeze(Object.fromEntries(
     return [name, { description, inputSchema: describeNested(z.toJSONSchema(schemas[name])),
       humanOnly: humanOnly.has(name), actionClass: actionClassForCommand(name), resource: resourceForCommand(name),
       dataClasses: dataClassesForCommand(name), effect: effectForCommand(name), sensitiveCategories: sensitiveCategoriesForCommand(name),
-      readOnly: read, destructive: /\.(delete|clear|close)$/.test(name) }];
+      readOnly: read, destructive: /\.(delete|clear|close|remove)$/.test(name) }];
   }),
 ));
 
@@ -163,7 +172,7 @@ export function toCommandError(error, commandName, input) {
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
     unknown_command: 400, approval_required: 403, tab_busy: 409, action_interrupted: 409, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
-    command_failed: 422, transport_error: 503, unsupported_capability: 422 };
+    command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 };
   let code = Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
     if (/stale|STALE_STATE/i.test(message)) code = 'stale_state';

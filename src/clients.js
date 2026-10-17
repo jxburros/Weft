@@ -121,8 +121,9 @@ export class ClientGrants {
    * Generic grant check driven by command metadata, so newly added commands are covered:
    * reads need `read` and their data classes; writes need the resource write scope; classes beyond
    * reads/local/external writes must be granted explicitly; destinations and workspaces must match.
+   * Plugin reads (plugin.<name>.<op>, plugins.invoke, hook commands) are reads only when their manifest-derived class is a read.
    */
-  assertAllowed(name, context, target = {}) {
+  assertAllowed(name, context, target = {}, actionClassOverride = null) {
     if (!context.clientId) return;
     const grant = this.grants.find(item => item.clientId === context.clientId);
     if (!this.live(grant)) throw denied('Client grant expired or revoked', 'grant_inactive');
@@ -130,7 +131,8 @@ export class ClientGrants {
     if (touched.some(workspaceId => !grant.workspaceIds.includes(workspaceId))) throw denied('Workspace is outside this client grant', 'outside_workspace_grant');
     if (touched.length > 1 && !grant.crossWorkspace) throw denied('Moving between workspaces requires an explicit cross-workspace grant', 'cross_workspace_not_granted');
     if (target.createsWorkspace) throw denied(`Client scope does not permit ${name}: it would create a workspace outside this grant`, 'outside_workspace_grant');
-    const actionClass = target.actionClass ?? actionClassForCommand(name);
+    // Plugin commands carry the class raised from their manifest permissions; never lower than the catalog class.
+    const actionClass = target.actionClass ?? actionClassOverride ?? actionClassForCommand(name);
     const resource = target.resource ?? resourceForCommand(name);
     const dataClasses = target.dataClasses ?? dataClassesForCommand(name);
     const read = ['local_read', 'external_read'].includes(actionClass);
