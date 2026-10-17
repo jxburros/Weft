@@ -113,6 +113,14 @@ Human-only describes an unconditional administration gate; other commands may st
 | siteRules.create | Create siteRules record | administration | Human only | GUI IPC, CLI, REST, MCP |
 | siteRules.update | Update siteRules with optional revision check | administration | Human only | GUI IPC, CLI, REST, MCP |
 | siteRules.delete | Delete siteRules record | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.exportPackage | Write a large-project package folder (records, exact components, manifest) under the profile transfers folder | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.importPackage | Verify and import a package folder from the profile transfers folder as a new workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
+| batch.execute | Apply up to 100 record commands all-or-nothing in one transaction; page, browser and workspace-lifecycle commands are rejected | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| backups.create | Create a verified local backup of the database and stored components | administration | Human only | GUI IPC, CLI, REST, MCP |
+| backups.list | List local backups and automatic backup policy | administration | Human only | GUI IPC, CLI, REST, MCP |
+| backups.verify | Recompute backup digests, database integrity and component completeness | administration | Human only | GUI IPC, CLI, REST, MCP |
+| backups.restore | Restore a verified backup; current data is preserved in the profile recovery folder | administration | Human only | GUI IPC, CLI, REST, MCP |
+| backups.delete | Delete one local backup folder | administration | Human only | GUI IPC, CLI, REST, MCP |
 | models.list | List model connections and destinations (never returns keys) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | models.save | Save a model connection; keys require OS secure storage | administration | Human only | GUI IPC, CLI, REST, MCP |
 | models.delete | Delete a saved model connection and its encrypted key | administration | Human only | GUI IPC, CLI, REST, MCP |

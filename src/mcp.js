@@ -5,8 +5,8 @@ import { commands, executeOutcome, errorOutcome, CommandError, normalizeCommand 
 
 const groups = {
   tabs: ['tabs'], page: ['page'],
-  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide'],
-  records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists'],
+  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'backups'],
+  records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'batch'],
   artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {

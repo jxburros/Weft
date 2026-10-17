@@ -1,20 +1,37 @@
-import { randomUUID, createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, existsSync, statSync, openSync, closeSync, fsyncSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { domainToASCII } from 'node:url';
 import { z } from 'zod';
 import { workspaceSchemas, recordShapes } from './workspace-commands.js';
-import { acquireProfileLock, assertUnchanged, fileStamp, writeVerifiedJson, storageWarnings, syncDirectory } from './storage-safety.js';
+import { acquireProfileLock, storageWarnings, syncDirectory } from './storage-safety.js';
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
+import { MetadataStore, RECOVERY_DIR, canonicalJson } from './store.js';
+import { componentPath, sha256 } from './components.js';
+import { cleanupBackupTemporary, createBackup, deleteBackup, hashFile, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
 const clone = value => structuredClone(value);
 const uuid = prefix => `${prefix}_${randomUUID()}`;
-const digest = value => createHash('sha256').update(value).digest('hex');
+const digest = value => sha256(value);
 const MAX_FILE = 100 * 1024 * 1024;
+const MAX_PACKAGE_RECORDS_FILE = 256 * 1024 * 1024;
+const LEGACY_FILE = 'workspace-state.json';
+const TRANSFERS_DIR = 'transfers';
+const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+const REPLAYED = Symbol.for('weft.replayed');
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
+const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
+const HUMAN_ADMIN = new Set(['settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'activity.list', 'search.query', 'workspaces.list', 'workspaces.get', 'workspaces.export', ...collections.flatMap(name => [`${name}.list`, `${name}.get`])]);
+// Batches contain record writes only: these can be rolled back exactly.
+export const BATCHABLE = Object.freeze(new Set([...Object.keys(recordShapes).flatMap(name => [`${name}.create`, `${name}.update`, `${name}.delete`]),
+  'tasks.transition', 'conversations.message', 'artifacts.create', 'artifacts.annotate', 'artifacts.delete', 'bookmarks.create', 'bookmarks.delete', 'workspaces.update', 'settings.update']));
+const WITH_EFFECTS = new Set(['workspaces.create', 'workspaces.switch', 'workspaces.archive', 'workspaces.delete', 'workspaces.import', 'workspaces.importPackage']);
+const ID_TOKEN = /\b[a-z]{2,12}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
+const EXPORT_EXCLUDED = Object.freeze(['Browser sessions, tabs, cookies and site storage', 'Credentials, provider keys and model connection settings', 'Global site rules', 'Activity log and browsing history', 'Local search index and request identities', 'Local backups']);
 
 export function sanitizeUrl(value) {
   try {
@@ -26,9 +43,10 @@ export function sanitizeUrl(value) {
     return url.href;
   } catch { return ''; }
 }
-function cleanExport(value, key = '') {
-  if (Array.isArray(value)) return value.map(item => cleanExport(item));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([name]) => !secretKey.test(name)).map(([name, item]) => [name, cleanExport(item, name)]));
+// Capture text and binary fields are hashed components: never rewrite them.
+function cleanExport(value, key = '', parent = '') {
+  if (Array.isArray(value)) return value.map(item => cleanExport(item, '', key));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([name]) => !secretKey.test(name)).map(([name, item]) => [name, (parent === 'versions' && name === 'text') || /Base64$/.test(name) || name === '$component' ? item : cleanExport(item, name)]));
   if (typeof value === 'string' && (/url|endpoint/i.test(key) || (/^https?:\/\//i.test(value) && !/\s/.test(value)))) return sanitizeUrl(value);
   return value;
 }
@@ -61,54 +79,150 @@ function createWorkspace(name = 'My workspace') {
   delete record.workspaceId;
   return record;
 }
+function initialState() {
+  const initial = createWorkspace();
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null } };
+}
 function artifactSummary(record) {
   const copy = clone(record);
   copy.versions = copy.versions.map(({ text, pngBase64, ...metadata }) => metadata);
   return copy;
 }
+const withoutFile = record => clone(Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'fileBase64')));
+function fsyncFile(path) { const fd = openSync(path, 'r+'); try { fsyncSync(fd); } finally { closeSync(fd); } }
+function markReplayed(value) {
+  if (value && typeof value === 'object') Object.defineProperty(value, REPLAYED, { value: true });
+  return value;
+}
+function substitutePlaceholders(value, index, results) {
+  if (typeof value === 'string') {
+    const match = /^\$(\d+)\.id$/.exec(value);
+    if (!match || !results) return value;
+    const source = Number(match[1]);
+    if (source >= index || typeof results[source]?.id !== 'string') throw fail('invalid_arguments', `Placeholder ${value} must name the id of an earlier batch result`);
+    return results[source].id;
+  }
+  if (Array.isArray(value)) return value.map(item => substitutePlaceholders(item, index, results));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, substitutePlaceholders(item, index, results)]));
+  return value;
+}
+const componentRef = z.strictObject({ $component: z.strictObject({ sha256: z.string().regex(/^[0-9a-f]{64}$/), size: z.number().int().min(0), encoding: z.enum(['base64', 'utf8']) }) });
+const timestamp = z.string().max(100);
+const historyEntry = z.object({ revision: z.number().int().min(1), content: z.string().max(500000), actor: z.string().max(200).default('human'), createdAt: timestamp });
+const messageSchema = z.object({ id: z.string().max(128).optional(), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: timestamp, model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional(), attachments: z.array(z.string().max(128)).max(1000).optional() });
+const annotationSchema = z.object({ note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).optional(), revision: z.number().int().min(1).optional(), actor: z.string().max(200).optional(), createdAt: timestamp.optional() });
+const versionSchema = z.object({ id: z.string().max(128).optional(), number: z.number().int().min(1).optional(), createdAt: timestamp.optional(), actor: z.string().max(200).optional(), method: z.string().max(50).optional(),
+  url: z.string().max(16384).nullable().optional(), title: z.string().max(240).optional(), text: z.union([z.string().max(2000000), componentRef]).optional(), pngBase64: z.union([z.string().max(28000000), componentRef]).optional(),
+  components: z.array(z.object({ type: z.string().max(100), size: z.number().int().min(0), sha256: z.string().regex(/^[0-9a-f]{64}$/) })).max(10).optional(),
+  navigationVersion: z.number().int().nullable().optional(), limitations: z.array(z.string().max(2000)).max(50).optional(), redactionStatus: z.string().max(50).optional(), previousVersionId: z.string().max(128).nullable().optional() });
+const artifactSchema = z.object({ title: z.string().min(1).max(240), note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).default([]), versions: z.array(versionSchema).max(1000), annotations: z.array(annotationSchema).max(10000).default([]) });
+const SYSTEM_FIELDS = { common: ['id', 'workspaceId', 'createdAt', 'updatedAt', 'revision'], materials: ['history', 'size', 'sha256'], context: ['history'], conversations: ['messages', 'turnManifests'], artifacts: ['versions', 'annotations'] };
+const packageManifest = z.strictObject({ format: z.literal('weft-package'), formatVersion: z.literal(1), createdAt: z.string().max(40), workspace: z.strictObject({ name: z.string().max(240) }),
+  files: z.array(z.strictObject({ path: z.string().max(200), size: z.number().int().min(0), sha256: z.string().regex(/^[0-9a-f]{64}$/) })).min(1).max(1000000) });
 
-/** Locked atomic JSON persistence; no encryption or live multi-process editing. */
+/**
+ * Workspace records over transactional SQLite metadata and content-addressed
+ * component files. The in-memory `data` object keeps the established API;
+ * every mutation commits the changed records atomically or rolls back.
+ */
 export class WorkspaceService {
-  constructor({ directory, browser, onWarning = warning => console.warn(`Weft storage: ${warning.message}`) } = {}) {
+  constructor({ directory, browser, onWarning = warning => console.warn(`Weft storage: ${warning.message}`), backups = null, clock = Date.now } = {}) {
     if (!directory) throw new Error('Workspace data directory is required');
     this.directory = directory;
-    this.path = join(directory, 'workspace-state.json');
     this.lock = acquireProfileLock(directory);
     this.browser = browser;
     this.queue = Promise.resolve();
     this.onWarning = onWarning;
     this.warned = new Set();
+    this.clock = clock;
     try {
-      this.stamp = fileStamp(this.path);
       this.refreshStorageWarnings();
-      if (existsSync(this.path)) {
-        if (statSync(this.path).size > MAX_FILE) throw new Error('Workspace state exceeds supported 100 MiB size');
-        const original = readFileSync(this.path, 'utf8');
-        let raw;
-        try { raw = JSON.parse(original); } catch { throw new Error('Workspace state is unreadable. Preserve workspace-state.json and restore from an export or backup.'); }
-        this.data = migrateSchema(raw, { validate: validateStoredState });
-        rejectSecretKeys(this.data);
-        if (raw.schemaVersion !== CURRENT_SCHEMA_VERSION) {
-          assertUnchanged(this.path, this.stamp);
-          const backup = `${this.path}.schema${raw.schemaVersion}-${digest(original)}.bak`;
-          if (!existsSync(backup)) writeFileSync(backup, original, { flag: 'wx', mode: 0o600 });
-          if (readFileSync(backup, 'utf8') !== original) throw new Error('Migration backup verification failed; original preserved');
-          const backupFd = openSync(backup, 'r+');
-          try { fsyncSync(backupFd); } finally { closeSync(backupFd); }
-          syncDirectory(directory);
-          this.save();
-        }
-      } else {
-        if (this.storageWarnings.some(warning => ['SYNC_CONFLICT_COPY', 'SYNC_PLACEHOLDER'].includes(warning.code))) throw new Error('STORE_CONFLICT: Workspace copies/placeholders require human review before creating a new store.');
-        const initial = createWorkspace();
-        this.data = { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null } };
-        this.save();
-      }
-    } catch (error) { this.lock.release(); throw error; }
+      this.recoveredRestore = recoverInterruptedRestore(directory);
+      cleanupBackupTemporary(directory);
+      MetadataStore.cleanupTemporary(directory);
+      this.openStorage();
+      this.path = this.storage.path;
+      this.storage.sweepOrphans();
+    } catch (error) { this.storage?.close(); this.lock.release(); throw error; }
     const service = this;
     this.store = { get data() { return service.data; }, save: () => service.save() };
+    this.backupPolicy = { automatic: Boolean(backups?.automatic), intervalHours: backups?.intervalHours ?? 24, keep: backups?.keep ?? 5, lastRunAt: null, lastError: null };
+    if (this.backupPolicy.automatic) {
+      this.backupTimer = setInterval(() => this.runAutomaticBackup(), 3600 * 1000);
+      this.backupTimer.unref?.();
+      setImmediate(() => this.runAutomaticBackup());
+    }
   }
-  close() { this.lock.release(); }
+  get data() { return this._data; }
+  // Restoring a structuredClone of state must keep component-backed fields.
+  set data(value) { this._data = this.storage ? this.storage.reattach(value) : value; }
+  openStorage() {
+    const assertOwned = () => this.lock.assertOwned();
+    const legacy = join(this.directory, LEGACY_FILE);
+    if (!MetadataStore.exists(this.directory)) {
+      if (existsSync(legacy)) this.migrateLegacy(legacy, assertOwned);
+      else {
+        if (this.storageWarnings.some(warning => ['SYNC_CONFLICT_COPY', 'SYNC_PLACEHOLDER'].includes(warning.code))) throw new Error('STORE_CONFLICT: Workspace copies/placeholders require human review before creating a new store.');
+        MetadataStore.create({ directory: this.directory, state: initialState(), assertOwned, verify: false, info: { createdAt: now() } });
+      }
+    }
+    const storage = new MetadataStore({ directory: this.directory, assertOwned, clock: this.clock }).open();
+    try {
+      if (existsSync(legacy)) this.finishLegacyMigration(storage, legacy);
+      let data = storage.load();
+      if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
+        const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
+        rejectSecretKeys(migrated);
+        storage.preserveCopy(`pre-data-schema-${data.schemaVersion}`);
+        storage.commit(migrated);
+        data = migrated;
+      } else validateStoredState(data);
+      rejectSecretKeys(data);
+      this.storage = storage;
+      this.data = data;
+    } catch (error) { storage.close(); throw error; }
+  }
+  /** Lossless one-time move from the JSON store; the original bytes are preserved under recovery/. */
+  migrateLegacy(legacy, assertOwned) {
+    if (statSync(legacy).size > MAX_FILE) throw new Error('STORE_SIZE_LIMIT: Workspace state exceeds supported 100 MiB size; existing state preserved.');
+    const original = readFileSync(legacy);
+    let raw;
+    try { raw = JSON.parse(original.toString('utf8')); } catch { throw new Error('Workspace state is unreadable. Preserve workspace-state.json and restore from an export or backup.'); }
+    const data = migrateSchema(raw, { validate: validateStoredState });
+    rejectSecretKeys(data);
+    const source = digest(original);
+    this.preserveLegacy(original, source);
+    MetadataStore.create({ directory: this.directory, state: data, assertOwned, kind: 'migrating', info: { createdAt: now(), migratedFrom: { file: LEGACY_FILE, sha256: source, schemaVersion: raw.schemaVersion, migratedAt: now() } } });
+  }
+  finishLegacyMigration(storage, legacy) {
+    const bytes = readFileSync(legacy);
+    const source = JSON.parse(storage.info('migratedFrom') || 'null');
+    if (source?.sha256 !== digest(bytes)) throw new Error('STORE_CONFLICT: Both workspace.sqlite and a different workspace-state.json exist (an older Weft version may have written the JSON file). Neither was changed; review them and move one aside with Weft closed.');
+    this.preserveLegacy(bytes, source.sha256);
+    unlinkSync(legacy);
+    syncDirectory(this.directory);
+  }
+  preserveLegacy(bytes, hash) {
+    const directory = join(this.directory, RECOVERY_DIR);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const path = join(directory, `workspace-state.${hash}.json`);
+    if (existsSync(path) && digest(readFileSync(path)) === hash) return path;
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temp, bytes, { flag: 'wx', mode: 0o600 });
+      fsyncFile(temp);
+      if (digest(readFileSync(temp)) !== hash) throw new Error('Migration backup verification failed; original preserved');
+      renameSync(temp, path);
+      syncDirectory(directory);
+    } finally { rmSync(temp, { force: true }); }
+    return path;
+  }
+  close() {
+    this.closed = true;
+    clearInterval(this.backupTimer);
+    this.storage?.close();
+    this.lock.release();
+  }
   refreshStorageWarnings() {
     this.storageWarnings = storageWarnings(this.directory);
     for (const warning of this.storageWarnings) {
@@ -124,21 +238,22 @@ export class WorkspaceService {
     const before = clone(this.data.history || []);
     this.data.history ??= [];
     const previous = this.data.history.at(-1);
-    if (previous?.url === cleanUrl && previous.tabId === tabId && Date.now() - Date.parse(previous.visitedAt) < 2000) { previous.title = String(title || cleanUrl).slice(0, 1000); return; }
-    this.data.history.push({ id: uuid('visit'), workspaceId, url: cleanUrl, title: String(title || cleanUrl).slice(0, 1000), tabId, visitedAt: now() });
-    const current = this.data.history.filter(item => item.workspaceId === workspaceId);
-    if (current.length > 1000) { const remove = new Set(current.slice(0, current.length - 1000).map(item => item.id)); this.data.history = this.data.history.filter(item => !remove.has(item.id)); }
-    try { this.save(); } catch (error) { this.data.history = before; throw error; }
+    try {
+      if (previous?.url === cleanUrl && previous.tabId === tabId && Date.now() - Date.parse(previous.visitedAt) < 2000) previous.title = String(title || cleanUrl).slice(0, 1000);
+      else {
+        this.data.history.push({ id: uuid('visit'), workspaceId, url: cleanUrl, title: String(title || cleanUrl).slice(0, 1000), tabId, visitedAt: now() });
+        const current = this.data.history.filter(item => item.workspaceId === workspaceId);
+        if (current.length > 1000) { const remove = new Set(current.slice(0, current.length - 1000).map(item => item.id)); this.data.history = this.data.history.filter(item => !remove.has(item.id)); }
+      }
+      this.save();
+    } catch (error) { this.data.history = before; throw error; }
   }
 
   get activeWorkspaceId() { return this.data.activeWorkspaceId; }
   attachBrowser(browser) { this.browser = browser; }
-  save() {
+  save(options = {}) {
     this.lock.assertOwned();
-    rejectSecretKeys(this.data);
-    const serialized = JSON.stringify(this.data, null, 2);
-    if (Buffer.byteLength(serialized) > MAX_FILE) throw new Error('Workspace storage exceeds supported 100 MiB limit; export and remove unneeded captures');
-    this.stamp = writeVerifiedJson(this.path, serialized, this.stamp);
+    return this.storage.commit(this.data, options);
   }
   persistSession(session) {
     const before = this.data.browserSession;
@@ -149,7 +264,7 @@ export class WorkspaceService {
     try { this.save(); } catch (error) { this.data.browserSession = before; throw error; }
   }
   snapshot() {
-    return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(artifactSummary), materials: this.data.materials.map(({ fileBase64, ...record }) => clone(record)) };
+    return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(artifactSummary), materials: this.data.materials.map(withoutFile) };
   }
   workspace(id = this.activeWorkspaceId) {
     const record = this.data.workspaces.find(item => item.id === id);
@@ -162,6 +277,8 @@ export class WorkspaceService {
     if (context.workspaceId && record.workspaceId && record.workspaceId !== context.workspaceId) throw new Error('PERMISSION_REQUIRED: record is outside the authorized workspace');
     return record;
   }
+  /** Deep copy for callers, including verified component-backed content. */
+  output(value) { return value === undefined ? null : this.storage.materialize(value); }
   log(action, workspaceId, targetId, actor = 'human', detail = '') {
     this.data.activity.push({ id: uuid('event'), workspaceId, targetId, action, actor, detail, createdAt: now() });
   }
@@ -177,57 +294,124 @@ export class WorkspaceService {
   recordTurnManifest(id, manifest) {
     const run = this.queue.then(() => {
       rejectSecretKeys(manifest);
-      const before = clone(this.data);
-      try {
+      return this.transact(() => {
         const record = this.record('conversations', id);
         record.turnManifests ??= [];
         const index = record.turnManifests.findIndex(item => item.id === manifest.id);
         if (index < 0) record.turnManifests.push(clone(manifest));
         else record.turnManifests[index] = clone(manifest);
         this.log('chat.turn', record.workspaceId, id, 'model', JSON.stringify(manifest));
-        this.save();
-      } catch (error) { this.data = before; throw error; }
+      }).then(() => undefined);
     });
     this.queue = run.catch(() => {});
     return run;
   }
 
-
   execute(name, args = {}, context = {}) {
-    const run = this.queue.then(() => this.dispatch(name, args, context));
+    const run = this.queue.then(() => this.run(name, args, context));
     this.queue = run.catch(() => {});
     return run;
   }
-  async dispatch(name, input, context) {
+  async run(name, input, context) {
     context.assertAuthorized?.();
+    this.storage.assertOpen();
+    if (name === 'batch.execute') return this.runBatch(input, context);
     const schema = workspaceSchemas[name];
     if (!schema) throw new Error(`Unknown workspace command: ${name}`);
     rejectSecretKeys(input);
-    const args = schema.parse(input);
+    const { requestId, dryRun, ...args } = schema.parse(input);
+    const scope = this.authorize(name, args, context);
+    if (READS.has(name)) return this.read(name, args, context, scope);
+    if (name === 'workspaces.exportPackage') return this.exportPackage(args.id, args.name, args.sensitiveTerms);
+    if (name.startsWith('backups.')) return this.backupCommand(name, args, dryRun);
+    const request = requestId && !dryRun ? this.requestIdentity(name, args, context, requestId) : null;
+    if (request?.replay) return request.replay;
+    const effects = [];
+    return this.transact(() => this.apply(name, args, context, effects), { context, dryRun, request, effects, checkpoint: WITH_EFFECTS.has(name) ? this.storage.checkpoint() : null });
+  }
+  authorize(name, args, context) {
     const actor = context.actor || 'human';
     const admin = actor === 'human' || actor === 'admin';
-    if (!admin && (/^siteRules\.(create|update|delete)$/.test(name) || ['settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch'].includes(name))) throw new Error('PERMISSION_REQUIRED: this action requires human administration');
+    if (!admin && (/^siteRules\.(create|update|delete)$/.test(name) || HUMAN_ADMIN.has(name))) throw new Error('PERMISSION_REQUIRED: this action requires human administration');
     const workspaceId = args.workspaceId || context.workspaceId || this.activeWorkspaceId;
     if (context.workspaceId && args.workspaceId && context.workspaceId !== args.workspaceId) throw new Error('PERMISSION_REQUIRED: workspace is outside the authorized scope');
     this.workspace(workspaceId);
+    if (name.startsWith('workspaces.') && context.workspaceId && args.id && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED: workspace is outside the authorized scope');
+    return { actor, admin, workspaceId };
+  }
+  /** Run one mutation: commit atomically with its request identity, or roll back. */
+  async transact(work, { context = {}, dryRun = false, request = null, effects = [], checkpoint = null } = {}) {
+    let output;
+    let released = [];
+    try {
+      const result = await work();
+      context.assertAuthorized?.();
+      if (dryRun) {
+        const preview = { dryRun: true, applied: false, result: this.output(result), changes: this.storage.changes(this.data) };
+        this.data = this.storage.revert(this.data);
+        return preview;
+      }
+      output = this.output(result);
+      ({ released } = this.save({ requests: request ? [{ ...request.record, result: output }] : [], deferCollection: effects.length > 0 }));
+    } catch (error) {
+      this.data = this.storage.revert(this.data);
+      throw error;
+    }
+    if (effects.length) {
+      try { for (const effect of effects) await effect(); }
+      catch (error) {
+        // Browser effects are best effort; keep durable state consistent with the browser.
+        try { this.data = this.storage.stateFrom(checkpoint); this.save({ removeRequests: request ? [request.record] : [] }); } catch { /* The original error is more useful. */ }
+        throw error;
+      } finally { this.storage.collectGarbage(released); }
+    }
+    return output;
+  }
+  requestIdentity(name, args, context, requestId) {
+    const scope = String(context.actor || 'human');
+    const fingerprint = digest(canonicalJson({ command: name, args, workspaceId: context.workspaceId ?? null }));
+    const existing = this.storage.request(scope, requestId);
+    if (!existing) return { record: { scope, requestId, command: name, fingerprint, workspaceId: args.workspaceId ?? context.workspaceId ?? null } };
+    if (existing.fingerprint !== fingerprint || existing.command !== name) throw fail('idempotency_conflict', 'requestId was already used with a different command or arguments; nothing was applied. Use a new requestId for a different request.');
+    if (existing.result === null) throw fail('already_committed', 'requestId was already committed, but its result is no longer retained. Read current state instead of retrying.');
+    return { replay: markReplayed(JSON.parse(existing.result)) };
+  }
+  async runBatch(input, context) {
+    rejectSecretKeys(input);
+    const { requestId, dryRun, commands } = workspaceSchemas['batch.execute'].parse(input);
+    const label = (index, command) => `batch command ${index} (${command})`;
+    const annotate = (error, index, command) => {
+      if (Array.isArray(error.issues)) for (const issue of error.issues) issue.path = ['commands', index, 'args', ...(issue.path || [])];
+      else error.message = `${label(index, command)}: ${error.message}`;
+      return error;
+    };
+    const prepared = commands.map(({ command, args }, index) => {
+      if (!BATCHABLE.has(command)) throw fail('invalid_arguments', `${label(index, command)} cannot run in an atomic batch. Page, browser, capture, import, backup and workspace-lifecycle commands cannot be rolled back; run them separately.`);
+      if (Object.hasOwn(args, 'requestId') || Object.hasOwn(args, 'dryRun')) throw fail('invalid_arguments', `${label(index, command)}: requestId and dryRun apply to the whole batch`);
+      try { rejectSecretKeys(args); this.authorize(command, workspaceSchemas[command].parse(args), context); }
+      catch (error) { throw annotate(error, index, command); }
+      return { command, args };
+    });
+    const request = requestId && !dryRun ? this.requestIdentity('batch.execute', { commands: prepared }, context, requestId) : null;
+    if (request?.replay) return request.replay;
+    return this.transact(async () => {
+      const results = [];
+      for (const [index, item] of prepared.entries()) {
+        try {
+          const { requestId: ignored, dryRun: alsoIgnored, ...args } = workspaceSchemas[item.command].parse(substitutePlaceholders(item.args, index, results));
+          const effects = [];
+          const result = await this.apply(item.command, args, context, effects);
+          if (effects.length) throw new Error('Command has browser effects and cannot be batched');
+          results.push(this.output(result));
+        } catch (error) { throw annotate(error, index, item.command); }
+      }
+      return { atomic: true, count: results.length, results };
+    }, { context, dryRun, request });
+  }
+  read(name, args, context, { workspaceId }) {
     const [collection, action] = name.split('.');
-    if (collection === 'workspaces' && context.workspaceId && args.id && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED: workspace is outside the authorized scope');
     if (name === 'history.list') return clone((this.data.history || []).filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
-    if (name === 'history.clear') {
-      if (!admin) throw new Error('History clearing requires human administration');
-      const before = clone(this.data);
-      try {
-        this.data.history = (this.data.history || []).filter(item => item.workspaceId !== workspaceId);
-        this.log(name, workspaceId, null, actor); this.save(); return { cleared: true, workspaceId };
-      } catch (error) { this.data = before; throw error; }
-    }
-    if (name === 'bookmarks.list') return clone(this.data.materials.filter(item => item.workspaceId === workspaceId && item.kind === 'website' && item.pinned));
-    if (name === 'bookmarks.create') return this.dispatch('materials.create', { ...args, kind: 'website', pinned: true }, context);
-    if (name === 'bookmarks.delete') {
-      const bookmark = this.record('materials', args.id, context);
-      if (bookmark.kind !== 'website' || !bookmark.pinned) throw new Error('Bookmark not found');
-      return this.dispatch('materials.delete', args, context);
-    }
+    if (name === 'bookmarks.list') return this.data.materials.filter(item => item.workspaceId === workspaceId && item.kind === 'website' && item.pinned).map(withoutFile);
     if (name === 'workspace.snapshot') {
       const snapshot = this.snapshot();
       if (!context.workspaceId && !args.workspaceId) return snapshot;
@@ -242,70 +426,83 @@ export class WorkspaceService {
     }
     if (name === 'settings.get') return clone(this.data.settings);
     if (name === 'activity.list') return clone(this.data.activity.filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
-    if (name === 'search.query') {
-      const query = args.query.trim().toLocaleLowerCase();
-      if (!query) return [];
-      return collections.flatMap(type => this.data[type].filter(item => item.workspaceId === workspaceId).map(item => ({ type, id: item.id, localOnly: item.localOnly === true, title: item.title || item.hostname, content: item.content || item.objective || item.description || item.versions?.map(version => version.text || '').join('\n') || '', updatedAt: item.updatedAt }))).filter(item => `${item.title}\n${item.content}`.toLocaleLowerCase().includes(query)).slice(0, args.limit || 50).map(item => ({ ...item, content: item.content.slice(0, 300) }));
-    }
+    if (name === 'search.query') return this.search(args.query, workspaceId, args.limit || 50);
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
     if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms);
-    if (collections.includes(collection) && action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? clone(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'fileBase64'))) : clone(item));
-    if (collections.includes(collection) && action === 'get') {
+    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? withoutFile(item) : clone(item));
+    const record = this.record(collection, args.id, context);
+    if (collection === 'artifacts' && args.versionId) {
+      const version = record.versions.find(item => item.id === args.versionId);
+      if (!version) throw new Error('Artifact version not found');
+      return { artifactId: record.id, workspaceId: record.workspaceId, ...this.output(version) };
+    }
+    return this.output(record);
+  }
+  /** Ranked local full-text search. Results cite the record revision or exact capture version. */
+  search(query, workspaceId, limit) {
+    return this.storage.search({ workspaceId, query, limit }).map(row => {
+      const citation = { recordType: row.collection, recordId: row.record_id, revision: row.revision, versionId: row.version_id || null, versionNumber: row.version_number };
+      return { type: row.collection, id: row.record_id, ...(row.version_id ? { versionId: row.version_id, versionNumber: row.version_number } : {}), revision: row.revision,
+        localOnly: row.local_only === 1, title: row.title, content: String(row.excerpt || '').slice(0, 300), updatedAt: row.updated_at, score: Number((-row.score).toFixed(6)), match: row.match, citation };
+    });
+  }
+  async apply(name, args, context, effects) {
+    const { actor, admin, workspaceId } = this.authorize(name, args, context);
+    const [collection, action] = name.split('.');
+    if (name === 'history.clear') {
+      if (!admin) throw new Error('History clearing requires human administration');
+      this.data.history = (this.data.history || []).filter(item => item.workspaceId !== workspaceId);
+      this.log(name, workspaceId, null, actor);
+      return { cleared: true, workspaceId };
+    }
+    if (name === 'bookmarks.create') return this.apply('materials.create', workspaceSchemas['materials.create'].parse({ ...args, kind: 'website', pinned: true }), context, effects);
+    if (name === 'bookmarks.delete') {
+      const bookmark = this.record('materials', args.id, context);
+      if (bookmark.kind !== 'website' || !bookmark.pinned) throw new Error('Bookmark not found');
+      return this.apply('materials.delete', args, context, effects);
+    }
+    if (collection === 'workspaces') return this.mutateWorkspace(action, args, actor, effects);
+    if (name === 'settings.update') {
+      this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model } };
+      this.log(name, workspaceId, workspaceId, actor);
+      return this.data.settings;
+    }
+    if (name === 'conversations.message') {
       const record = this.record(collection, args.id, context);
-      if (collection === 'artifacts' && args.versionId) {
-        const version = record.versions.find(item => item.id === args.versionId);
-        if (!version) throw new Error('Artifact version not found');
-        return clone({ artifactId: record.id, workspaceId: record.workspaceId, ...version });
-      }
-      return clone(record);
+      const { id, ...message } = args;
+      record.messages.push({ id: uuid('msg'), ...message, createdAt: now() });
+      this.touch(record); this.log(name, record.workspaceId, record.id, actor);
+      return record;
     }
-    const before = clone(this.data);
-    try {
-      let result;
-      if (collection === 'workspaces') result = this.mutateWorkspace(action, args, actor);
-      else if (name === 'settings.update') {
-        this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model } };
-        this.log(name, workspaceId, workspaceId, actor);
-        result = this.data.settings;
-      } else if (name === 'conversations.message') {
-        const record = this.record(collection, args.id, context);
-        const { id, ...message } = args;
-        record.messages.push({ id: uuid('msg'), ...message, createdAt: now() });
-        this.touch(record); this.log(name, record.workspaceId, record.id, actor);
-        result = record;
-      } else if (name === 'tasks.transition') {
-        const record = this.record(collection, args.id, context);
-        const prior = record.status;
-        record.status = args.status;
-        if (args.checkpoint !== undefined) record.checkpoint = args.checkpoint;
-        if (args.status === 'completed') record.progress = 100;
-        this.touch(record); this.log(name, record.workspaceId, record.id, actor, `${prior} → ${args.status}${args.cause ? `: ${args.cause}` : ''}`);
-        result = record;
-      } else if (collection === 'artifacts') result = await this.mutateArtifact(action, args, workspaceId, actor, context);
-      else if (Object.hasOwn(recordShapes, collection)) result = this.mutateRecord(collection, action, args, workspaceId, actor, admin, context);
-      else throw new Error(`Unsupported workspace command: ${name}`);
-      context.assertAuthorized?.();
-      this.save();
-      if (name === 'workspaces.delete') { this.data.history = this.data.history.filter(item => item.workspaceId !== args.id); this.save(); await this.browser?.closeWorkspace?.(args.id); }
-      if (collection === 'workspaces' && ['switch', 'archive', 'delete', 'create', 'import'].includes(action)) await this.browser?.switchWorkspace?.(this.activeWorkspaceId);
-      return clone(result);
-    } catch (error) {
-      this.data = before;
-      // Browser effects are best effort; preserve consistency of durable state on failure.
-      try { this.save(); } catch { /* Original error is more useful. */ }
-      throw error;
+    if (name === 'tasks.transition') {
+      const record = this.record(collection, args.id, context);
+      const prior = record.status;
+      record.status = args.status;
+      if (args.checkpoint !== undefined) record.checkpoint = args.checkpoint;
+      if (args.status === 'completed') record.progress = 100;
+      this.touch(record); this.log(name, record.workspaceId, record.id, actor, `${prior} → ${args.status}${args.cause ? `: ${args.cause}` : ''}`);
+      return record;
     }
+    if (collection === 'artifacts') return this.mutateArtifact(action, args, workspaceId, actor, context);
+    if (Object.hasOwn(recordShapes, collection)) return this.mutateRecord(collection, action, args, workspaceId, actor, admin, context);
+    throw new Error(`Unsupported workspace command: ${name}`);
   }
   touch(record) { record.updatedAt = now(); record.revision += 1; }
-  mutateWorkspace(action, args, actor) {
+  mutateWorkspace(action, args, actor, effects) {
+    const switchBrowser = () => this.browser?.switchWorkspace?.(this.activeWorkspaceId);
     if (action === 'create') {
       const record = { ...createWorkspace(args.name), ...args };
       this.data.workspaces.push(record); this.data.activeWorkspaceId = record.id;
       this.log('workspaces.create', record.id, record.id, actor);
+      effects.push(switchBrowser);
       return record;
     }
-    if (action === 'import') return this.importWorkspace(args.data, actor);
+    if (action === 'import' || action === 'importPackage') {
+      const { workspace, report } = action === 'import' ? this.importWorkspace(args.data, actor) : this.importPackage(args.name, actor);
+      effects.push(switchBrowser);
+      return { ...workspace, importReport: report };
+    }
     const record = this.workspace(args.id);
     if (action === 'update') {
       if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: workspace changed');
@@ -313,20 +510,23 @@ export class WorkspaceService {
     } else if (action === 'switch') {
       if (record.archived) throw new Error('Restore this workspace before switching to it');
       this.data.activeWorkspaceId = record.id;
+      effects.push(switchBrowser);
     } else if (action === 'archive' || action === 'restore') {
       record.archived = action === 'archive'; this.touch(record);
       if (record.archived && record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
+      if (action === 'archive') effects.push(switchBrowser);
     } else if (action === 'delete') {
       if (record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
       if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
       for (const key of [...collections, 'activity', 'history']) this.data[key] = this.data[key].filter(item => item.workspaceId !== record.id);
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
+      effects.push(() => this.browser?.closeWorkspace?.(record.id), switchBrowser);
     } else if (action === 'duplicate') {
-      const exported = this.exportWorkspace(record.id);
+      const exported = this.exportWorkspace(record.id, undefined, { mode: 'package' });
       exported.workspace.name = args.name || `${record.name} copy`;
-      const copy = this.importWorkspace(exported, actor, false);
-      this.log('workspaces.duplicate', copy.id, record.id, actor, 'Records and stored files copied. Browser sessions and credentials excluded.');
+      const { workspace: copy } = this.importWorkspace(exported, actor, false, { resolver: { read: marker => this.storage.components.read(marker.sha256, marker.size) } });
+      this.log('workspaces.duplicate', copy.id, record.id, actor, 'Records, revisions and stored components copied. Browser sessions and credentials excluded.');
       return copy;
     } else throw new Error('Unsupported workspace action');
     this.log(`workspaces.${action}`, record.id, record.id, actor);
@@ -372,7 +572,7 @@ export class WorkspaceService {
     if (!record.path.startsWith('/') || /[?#\\]/.test(record.path)) throw new Error('Site rule path must be an absolute URL path without query or fragment');
   }
   validateMaterial(record) {
-    if (record.fileBase64 !== undefined) {
+    if (Object.hasOwn(record, 'fileBase64') && typeof record.fileBase64 === 'string') {
       if (!/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(record.fileBase64)) throw new Error('Invalid base64 file');
       const bytes = Buffer.from(record.fileBase64, 'base64');
       if (bytes.length > 10 * 1024 * 1024) throw new Error('Stored materials are limited to 10 MiB');
@@ -408,7 +608,7 @@ export class WorkspaceService {
     }
     if (source.pngBase64) {
       const bytes = Buffer.from(source.pngBase64, 'base64');
-      if (bytes.length > 20 * 1024 * 1024 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error('Artifact images must be PNG and at most 20 MiB');
+      if (bytes.length > 20 * 1024 * 1024 || !bytes.subarray(0, 8).equals(PNG)) throw new Error('Artifact images must be PNG and at most 20 MiB');
       source.pngBase64 = bytes.toString('base64');
       components.push({ type: 'image/png', size: bytes.length, sha256: digest(bytes) });
     }
@@ -423,65 +623,335 @@ export class WorkspaceService {
     this.log('artifacts.capture', workspaceId, record.id, actor, `Version ${version.number}`);
     return artifactSummary(record);
   }
-  exportWorkspace(id, sensitiveTerms) {
+
+  // ---- Export and import -------------------------------------------------------------
+  /**
+   * Format 2 exports keep revisions, revision history, conversations, turn
+   * manifests, exact artifact versions with component hashes and annotations.
+   * `package` mode references components by digest instead of inlining them.
+   */
+  exportWorkspace(id, sensitiveTerms, { mode = 'inline' } = {}) {
     const record = this.workspace(id);
-    const exported = cleanExport({ format: 'weft-workspace', schemaVersion: CURRENT_SCHEMA_VERSION, exportedAt: now(), workspace: record, ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global'))])), limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
-    if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(exported, null, 2), sensitiveTerms);
+    const plain = (name, item) => mode === 'inline' ? this.output(item) : JSON.parse(this.storage.serialize(name, item, { write: false }).doc);
+    const notExported = Object.entries(this.data).filter(([key, value]) => !collections.includes(key) && !['workspaces', 'activity', 'history'].includes(key) && Array.isArray(value) && value.some(item => item?.workspaceId === id)).map(([key, value]) => `${key} (${value.filter(item => item?.workspaceId === id).length} records not supported by this export format)`);
+    const exported = cleanExport({ format: 'weft-workspace', schemaVersion: CURRENT_SCHEMA_VERSION, formatVersion: 2, exportedAt: now(), workspace: clone(record),
+      ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global')).map(item => plain(name, item))])),
+      excluded: [...EXPORT_EXCLUDED, ...notExported],
+      limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
+    if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(mode === 'inline' ? exported : this.exportWorkspace(id), null, 2), sensitiveTerms);
     return exported;
   }
-  importWorkspace(input, actor, activate = true) {
+  transferPath(name) {
+    if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name) || name.includes('..')) throw fail('invalid_arguments', 'Invalid package name');
+    return join(this.directory, TRANSFERS_DIR, name);
+  }
+  /** Large-project transfer: a folder of verified component files plus a manifest, beyond REST/JSON size limits. */
+  exportPackage(id, name, sensitiveTerms) {
+    const target = this.transferPath(name);
+    if (existsSync(target)) throw fail('invalid_arguments', 'A package with this name already exists; existing packages are never overwritten');
+    const exported = this.exportWorkspace(id, undefined, { mode: 'package' });
+    const markers = new Map();
+    const collect = value => {
+      if (Array.isArray(value)) value.forEach(collect);
+      else if (value && typeof value === 'object') { if (componentRef.safeParse(value).success) markers.set(value.$component.sha256, value.$component.size); else Object.values(value).forEach(collect); }
+    };
+    collect(exported);
+    const root = join(this.directory, TRANSFERS_DIR);
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const temp = join(root, `.tmp-${randomUUID()}`);
+    mkdirSync(temp, { mode: 0o700 });
+    try {
+      const files = [];
+      for (const [hash, size] of markers) { this.storage.components.copyTo(hash, join(temp, 'components'), size); files.push({ path: `components/${hash.slice(0, 2)}/${hash}`, size, sha256: hash }); }
+      const records = JSON.stringify(exported, null, 2);
+      writeFileSync(join(temp, 'workspace.json'), records, { flag: 'wx', mode: 0o600 });
+      fsyncFile(join(temp, 'workspace.json'));
+      files.unshift({ path: 'workspace.json', size: Buffer.byteLength(records), sha256: digest(records) });
+      const manifest = { format: 'weft-package', formatVersion: 1, createdAt: now(), workspace: { name: exported.workspace.name }, files };
+      writeFileSync(join(temp, 'manifest.json'), JSON.stringify(manifest, null, 2), { flag: 'wx', mode: 0o600 });
+      fsyncFile(join(temp, 'manifest.json'));
+      renameSync(temp, target);
+      syncDirectory(root);
+      const result = { name, path: target, formatVersion: 1, files: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0), excluded: exported.excluded, limitations: exported.limitations };
+      if (sensitiveTerms !== undefined) result.residueScan = inspectExportResidue(JSON.stringify(this.exportWorkspace(id), null, 2), sensitiveTerms);
+      return result;
+    } catch (error) { rmSync(temp, { recursive: true, force: true }); throw error; }
+  }
+  importPackage(name, actor) {
+    const folder = this.transferPath(name);
+    const regular = (path, limit) => {
+      const stat = lstatSync(path, { throwIfNoEntry: false });
+      if (!stat || stat.isSymbolicLink() || !stat.isFile()) throw fail('invalid_arguments', 'PACKAGE_INVALID: package entries must be regular files, not links');
+      if (stat.size > limit) throw fail('request_too_large', 'PACKAGE_INVALID: package file exceeds its size limit');
+      return stat;
+    };
+    const folderStat = lstatSync(folder, { throwIfNoEntry: false });
+    if (!folderStat) throw fail('not_found', 'Package not found in the profile transfers folder');
+    if (folderStat.isSymbolicLink() || !folderStat.isDirectory()) throw fail('invalid_arguments', 'PACKAGE_INVALID: package must be a folder, not a link');
+    regular(join(folder, 'manifest.json'), 64 * 1024 * 1024);
+    let manifest;
+    try { manifest = packageManifest.parse(JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8'))); }
+    catch { throw fail('invalid_arguments', 'PACKAGE_INVALID: manifest is unreadable or unsupported'); }
+    const files = new Map();
+    for (const file of manifest.files) {
+      const match = /^components\/([0-9a-f]{2})\/([0-9a-f]{64})$/.exec(file.path);
+      if ((file.path !== 'workspace.json' && !match) || (match && (match[2] !== file.sha256 || !match[2].startsWith(match[1]))) || files.has(file.path)) throw fail('invalid_arguments', 'PACKAGE_INVALID: manifest lists a malformed or duplicate path');
+      files.set(file.path, file);
+    }
+    const recordsEntry = files.get('workspace.json');
+    if (!recordsEntry) throw fail('invalid_arguments', 'PACKAGE_INVALID: manifest does not list workspace.json');
+    regular(join(folder, 'workspace.json'), MAX_PACKAGE_RECORDS_FILE);
+    const records = readFileSync(join(folder, 'workspace.json'));
+    if (records.length !== recordsEntry.size || digest(records) !== recordsEntry.sha256) throw fail('component_integrity', 'COMPONENT_INTEGRITY: package workspace.json failed SHA-256 verification');
+    let data;
+    try { data = JSON.parse(records.toString('utf8')); } catch { throw fail('invalid_arguments', 'PACKAGE_INVALID: workspace.json is not valid JSON'); }
+    const resolver = { read: marker => {
+      const entry = files.get(`components/${marker.sha256.slice(0, 2)}/${marker.sha256}`);
+      if (!entry || entry.size !== marker.size) throw fail('invalid_arguments', 'PACKAGE_INVALID: a record references a component the manifest does not list');
+      const path = componentPath(join(folder, 'components'), marker.sha256);
+      regular(path, 64 * 1024 * 1024);
+      const bytes = readFileSync(path);
+      if (bytes.length !== entry.size || digest(bytes) !== entry.sha256) throw fail('component_integrity', `COMPONENT_INTEGRITY: package component ${marker.sha256.slice(0, 12)} failed SHA-256 verification`);
+      return bytes;
+    } };
+    return this.importWorkspace(data, actor, true, { resolver, maxBytes: MAX_PACKAGE_RECORDS_FILE });
+  }
+  /**
+   * Import format 1 or 2 as a new workspace with new IDs. Structured references
+   * are remapped and must resolve; free-form citations of exported IDs are
+   * rewritten. Every lossy mapping is reported. Policies/workflows stay inactive.
+   */
+  importWorkspace(input, actor, activate = true, { resolver = null, maxBytes = MAX_FILE } = {}) {
     let raw = input;
     if (typeof input === 'string') { if (Buffer.byteLength(input) > MAX_FILE) throw new Error('Import exceeds 100 MiB'); raw = JSON.parse(input); }
     if (!raw || typeof raw !== 'object' || raw.format !== 'weft-workspace' || !raw.workspace) throw new Error('Expected a versioned Weft workspace export');
-    if (Buffer.byteLength(JSON.stringify(raw)) > MAX_FILE) throw new Error('Import exceeds 100 MiB');
+    if (Buffer.byteLength(JSON.stringify(raw)) > maxBytes) throw new Error(`Import exceeds ${Math.round(maxBytes / 1024 / 1024)} MiB; use a package import for larger projects`);
     rejectSecretKeys(raw);
+    const formatVersion = raw.formatVersion ?? 1;
+    if (!Number.isSafeInteger(formatVersion) || formatVersion < 1 || formatVersion > 2) throw new Error('Unsupported workspace export format; it may be from a newer Weft version');
     raw = migrateSchema(raw, { kind: 'export' });
+    const lossy = new Map();
+    const loss = (collection, field, reason, count = 1) => { const key = `${collection}\u0000${field}\u0000${reason}`; const item = lossy.get(key) || { collection, field, reason, count: 0 }; item.count += count; lossy.set(key, item); };
     const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon });
-    const workspace = { ...createWorkspace(), ...workspaceFields };
+    const workspace = { ...createWorkspace(), ...workspaceFields, importedFrom: { exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt.slice(0, 100) : null, formatVersion } };
     const mapping = new Map([[raw.workspace.id, workspace.id]]);
-    const imported = {};
+    const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', ...collections]);
+    for (const [key, value] of Object.entries(raw)) if (!knownKeys.has(key)) loss('export', key, Array.isArray(value) ? 'collection not supported by this Weft version; not imported' : 'unrecognized export field ignored', Array.isArray(value) ? value.length : 1);
+    // First pass: allocate every new identifier so references resolve in any order.
     for (const collection of collections) {
       if (raw[collection] !== undefined && !Array.isArray(raw[collection])) throw new Error(`Invalid ${collection} collection`);
       if ((raw[collection]?.length || 0) > 10000) throw new Error('Import collection exceeds 10,000 records');
-      imported[collection] = (raw[collection] || []).map(item => {
+      for (const item of raw[collection] || []) {
         if (!item || typeof item !== 'object' || typeof item.id !== 'string') throw new Error('Invalid imported record');
         if (mapping.has(item.id)) throw new Error('Duplicate imported record ID');
+        mapping.set(item.id, uuid(collection === 'artifacts' ? 'artifact' : collection.slice(0, 4)));
+        if (collection === 'artifacts') for (const version of Array.isArray(item.versions) ? item.versions : []) if (typeof version?.id === 'string' && !mapping.has(version.id)) mapping.set(version.id, uuid('version'));
+        if (collection === 'conversations') for (const message of Array.isArray(item.messages) ? item.messages : []) if (typeof message?.id === 'string' && !mapping.has(message.id)) mapping.set(message.id, uuid('msg'));
+      }
+    }
+    const heavy = (value, encoding) => {
+      if (typeof value === 'string') return { inline: value };
+      if (!resolver) throw new Error('Component references require a package import');
+      const marker = value.$component;
+      if (marker.encoding !== encoding) throw new Error('Imported component has the wrong encoding');
+      const bytes = resolver.read(marker);
+      return { bytes, marker };
+    };
+    const lazy = (object, key, ref) => { this.storage.components.put(ref.bytes); this.storage.defineLazy(object, key, ref.marker); };
+    const imported = {};
+    const stats = { structuredReferences: 0, freeFormCitations: 0, unresolvedCitations: new Set(), versions: 0, revisions: 0 };
+    for (const collection of collections) {
+      imported[collection] = (raw[collection] || []).map(item => {
+        const system = [...SYSTEM_FIELDS.common, ...(SYSTEM_FIELDS[collection] || [])];
+        const shape = collection === 'artifacts' ? null : recordShapes[collection];
+        for (const key of Object.keys(item)) if (!system.includes(key) && !(shape ? Object.hasOwn(shape, key) : ['title', 'note', 'tags'].includes(key))) loss(collection, key, 'field not supported by import; dropped');
         let fields;
-        if (collection === 'artifacts') fields = this.validateImportedArtifact(item);
+        const deferred = [];
+        if (collection === 'artifacts') fields = this.importArtifact(item, { heavy, lazy, deferred, mapping, loss, stats });
         else {
-          fields = z.strictObject(recordShapes[collection]).parse(Object.fromEntries(Object.keys(recordShapes[collection]).filter(key => item[key] !== undefined).map(key => [key, item[key]])));
-          if (collection === 'siteRules') { fields.scope = 'workspace'; fields.enabled = false; this.validateRule(fields); }
-          if (collection === 'workflows') fields.enabled = false;
-          if (collection === 'materials') this.validateMaterial(fields);
-          if (collection === 'conversations') fields.messages = z.array(z.object({ id: z.string().max(128), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: z.string().max(100), model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional() })).max(10000).parse(item.messages || []);
+          const picked = Object.fromEntries(Object.keys(shape).filter(key => item[key] !== undefined).map(key => [key, item[key]]));
+          let fileRef = null;
+          if (collection === 'materials' && picked.fileBase64 && typeof picked.fileBase64 === 'object') {
+            fileRef = heavy(componentRef.parse(picked.fileBase64), 'base64');
+            delete picked.fileBase64;
+          }
+          fields = z.strictObject(shape).parse(picked);
+          if (collection === 'siteRules') { if (fields.enabled || fields.scope !== 'workspace') loss(collection, 'enabled/scope', 'imported site rules are workspace-scoped and disabled until reviewed'); fields.scope = 'workspace'; fields.enabled = false; this.validateRule(fields); if (item.provenance) loss(collection, 'provenance', 'community-list provenance is not imported; reinstall the list to track it'); }
+          if (collection === 'workflows') { if (fields.enabled) loss(collection, 'enabled', 'imported workflows are disabled until reviewed'); fields.enabled = false; }
+          if (collection === 'materials') {
+            if (fileRef) {
+              if (fileRef.bytes.length > 10 * 1024 * 1024) throw new Error('Stored materials are limited to 10 MiB');
+              fields.size = fileRef.bytes.length; fields.sha256 = fileRef.marker.sha256;
+              fields.filename = String(fields.filename || 'file').split(/[\\/]/).pop();
+              deferred.push(record => lazy(record, 'fileBase64', fileRef));
+            } else this.validateMaterial(fields);
+            if (typeof item.sha256 === 'string' && fields.sha256 && item.sha256 !== fields.sha256) throw fail('component_integrity', 'COMPONENT_INTEGRITY: imported material file does not match its recorded SHA-256');
+          }
+          if (collection === 'conversations') {
+            fields.messages = z.array(messageSchema).max(10000).parse(item.messages || []).map(message => ({ ...message, id: mapping.get(message.id) || uuid('msg') }));
+            if (item.turnManifests !== undefined) {
+              const manifests = z.array(z.record(z.string(), z.unknown())).max(1000).parse(item.turnManifests);
+              if (Buffer.byteLength(JSON.stringify(manifests)) > 5 * 1024 * 1024) throw new Error('Imported turn manifests exceed 5 MiB');
+              fields.turnManifests = manifests;
+            }
+          }
+          if (['materials', 'context'].includes(collection)) {
+            if (item.history !== undefined) { fields.history = z.array(historyEntry).max(10000).parse(item.history).map(entry => ({ revision: entry.revision, content: entry.content, actor: entry.actor, createdAt: entry.createdAt })); stats.revisions += fields.history.length; }
+            else { loss(collection, 'history', 'revision history absent in source; started a new history'); fields.history = [{ revision: 1, content: fields.content, actor, createdAt: now() }]; }
+          }
         }
-        const record = createRecord(fields, workspace.id, collection.slice(0, 4));
-        mapping.set(item.id, record.id);
+        const record = { id: mapping.get(item.id), workspaceId: workspace.id, ...fields,
+          createdAt: timestamp.safeParse(item.createdAt).success && item.createdAt ? item.createdAt : now(), updatedAt: timestamp.safeParse(item.updatedAt).success && item.updatedAt ? item.updatedAt : now(),
+          revision: Number.isSafeInteger(item.revision) && item.revision >= 1 ? item.revision : 1 };
+        for (const apply of deferred) apply(record);
         return record;
       });
     }
-    for (const records of Object.values(imported)) for (const record of records) for (const key of ['evidence', 'materialIds', 'outputs']) if (Array.isArray(record[key])) record[key] = record[key].map(id => { if (!mapping.has(id)) throw new Error('Invalid imported record reference'); return mapping.get(id); });
+    // Structured references must resolve inside the export; free-form citations are rewritten.
+    const remap = (collection, field, id) => { if (!mapping.has(id)) throw new Error(`Invalid imported record reference in ${collection}.${field}`); stats.structuredReferences++; return mapping.get(id); };
+    for (const [collection, records] of Object.entries(imported)) for (const record of records) {
+      for (const key of ['evidence', 'materialIds', 'outputs']) if (Array.isArray(record[key])) record[key] = record[key].map(id => remap(collection, key, id));
+      if (collection === 'conversations') for (const message of record.messages) if (Array.isArray(message.attachments)) message.attachments = message.attachments.map(id => remap(collection, 'messages.attachments', id));
+      this.rewriteCitations(record, mapping, stats);
+    }
+    if (stats.unresolvedCitations.size) loss('all', 'free-form citations', 'identifiers not present in the export were left unchanged and do not resolve in the new workspace', stats.unresolvedCitations.size);
     this.data.workspaces.push(workspace);
     for (const collection of collections) this.data[collection].push(...imported[collection]);
     if (activate) this.data.activeWorkspaceId = workspace.id;
-    this.log('workspaces.import', workspace.id, workspace.id, actor, 'Imported records with new IDs; policies and workflows inactive; no sessions or credentials imported');
-    return workspace;
+    if (formatVersion === 1) loss('export', 'formatVersion', 'format 1 export: fields absent from the older format were initialized');
+    const linked = [];
+    for (const record of imported.materials) if (['website', 'linked-file', 'service'].includes(record.kind)) linked.push({ collection: 'materials', id: record.id, kind: record.kind, title: record.title, ...(record.url ? { url: record.url } : {}), ...(record.filename ? { filename: record.filename } : {}) });
+    for (const record of imported.context) for (const source of record.sources || []) if (/^https?:/i.test(source)) linked.push({ collection: 'context', id: record.id, kind: 'source', url: source });
+    for (const record of imported.artifacts) for (const version of record.versions) if (version.url) linked.push({ collection: 'artifacts', id: record.id, versionId: version.id, kind: 'live page', url: version.url });
+    const report = {
+      formatVersion, sourceSchemaVersion: raw.schemaVersion, newIds: true,
+      records: Object.fromEntries(collections.map(name => [name, imported[name].length])), artifactVersions: stats.versions, revisionHistoryEntries: stats.revisions,
+      remapped: { identifiers: mapping.size, structuredReferences: stats.structuredReferences, freeFormCitations: stats.freeFormCitations },
+      lossy: [...lossy.values()],
+      excluded: [...new Set([...EXPORT_EXCLUDED, ...(Array.isArray(raw.excluded) ? raw.excluded.filter(item => typeof item === 'string').map(item => item.slice(0, 300)).slice(0, 100) : [])])],
+      linkedSourcesNotIncluded: { count: linked.length, items: linked.slice(0, 1000) },
+      policies: {
+        siteRules: imported.siteRules.map(rule => ({ id: rule.id, hostname: rule.hostname, path: rule.path, includeSubdomains: rule.includeSubdomains, behavior: rule.behavior, mode: rule.mode, reason: rule.reason, enabled: false })),
+        workflows: imported.workflows.map(workflow => ({ id: workflow.id, title: workflow.title, steps: workflow.steps.length, allowedSites: workflow.allowedSites, parameters: workflow.parameters, enabled: false })),
+        activation: 'Imported site rules and workflows are inactive until a human reviews and enables them.',
+      },
+    };
+    this.log('workspaces.import', workspace.id, workspace.id, actor, `Imported format ${formatVersion} with new IDs; ${report.lossy.length} lossy mapping types reported; policies and workflows inactive; no sessions or credentials imported`);
+    return { workspace, report };
   }
-  validateImportedArtifact(item) {
-    const fields = z.object({ title: z.string().min(1).max(240), note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).default([]), versions: z.array(z.object({ text: z.string().max(2000000).optional(), pngBase64: z.string().max(28000000).optional(), title: z.string().max(240).optional(), url: z.string().max(16384).optional(), createdAt: z.string().max(100).optional() })).max(1000) }).parse(item);
-    fields.annotations = [];
+  importArtifact(item, { heavy, lazy, deferred, mapping, loss, stats }) {
+    const fields = artifactSchema.parse(item);
+    fields.annotations = fields.annotations.map(annotation => ({ note: annotation.note, ...(annotation.tags ? { tags: annotation.tags } : {}), revision: annotation.revision ?? 1, actor: annotation.actor ?? 'human', createdAt: annotation.createdAt ?? now() }));
+    const versionKeys = new Set(Object.keys(versionSchema.shape));
     fields.versions = fields.versions.map((version, index) => {
+      const original = item.versions[index];
+      for (const key of Object.keys(original)) if (!versionKeys.has(key)) loss('artifacts', `versions.${key}`, 'version field not supported by import; dropped');
       const components = [];
-      if (version.text !== undefined) components.push({ type: 'text/plain', size: Buffer.byteLength(version.text), sha256: digest(version.text) });
+      let text; let png;
+      if (version.text !== undefined) {
+        text = heavy(version.text, 'utf8');
+        if (text.bytes) {
+          try { text.value = new TextDecoder('utf-8', { fatal: true }).decode(text.bytes); } catch { throw fail('component_integrity', 'COMPONENT_INTEGRITY: imported text component is not valid UTF-8'); }
+          if (text.value.length > 2000000) throw new Error('Artifact text exceeds 2 million characters');
+        }
+        const bytes = text.bytes || Buffer.from(text.inline);
+        components.push({ type: 'text/plain', size: bytes.length, sha256: text.marker?.sha256 || digest(bytes) });
+      }
       if (version.pngBase64) {
-        const bytes = Buffer.from(version.pngBase64, 'base64');
-        if (bytes.length > 20 * 1024 * 1024 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error('Invalid imported PNG');
-        version.pngBase64 = bytes.toString('base64');
-        components.push({ type: 'image/png', size: bytes.length, sha256: digest(bytes) });
+        png = heavy(version.pngBase64, 'base64');
+        const bytes = png.bytes || Buffer.from(png.inline, 'base64');
+        if (bytes.length > 20 * 1024 * 1024 || !bytes.subarray(0, 8).equals(PNG)) throw new Error('Invalid imported PNG');
+        if (png.inline !== undefined) png.inline = bytes.toString('base64');
+        components.push({ type: 'image/png', size: bytes.length, sha256: png.marker?.sha256 || digest(bytes) });
       }
       if (!components.length) throw new Error('Imported artifact has no offline content');
-      return { ...version, id: uuid('version'), number: index + 1, url: sanitizeUrl(version.url), components, method: 'import', actor: 'human', redactionStatus: 'not-reviewed', limitations: ['Imported content has not been independently verified.'] };
+      if (version.components) {
+        for (const claimed of version.components) {
+          const actual = components.find(component => component.type === claimed.type);
+          if (actual && (actual.sha256 !== claimed.sha256 || actual.size !== claimed.size)) throw fail('component_integrity', `COMPONENT_INTEGRITY: imported ${claimed.type} component does not match its recorded SHA-256; the export is damaged or was altered`);
+        }
+      } else loss('artifacts', 'versions.components', 'source had no component hashes; hashes computed at import');
+      const previous = version.previousVersionId ? mapping.get(version.previousVersionId) : null;
+      if (version.previousVersionId && !previous) loss('artifacts', 'versions.previousVersionId', 'previous version not in export; link removed');
+      stats.versions++;
+      const stored = { id: (version.id && mapping.get(version.id)) || uuid('version'), number: version.number ?? index + 1, createdAt: version.createdAt ?? now(), actor: version.actor ?? 'human', method: version.method ?? 'import',
+        url: version.url ? sanitizeUrl(version.url) : '', title: version.title ?? fields.title, components, ...(text?.inline !== undefined ? { text: text.inline } : {}), ...(png?.inline !== undefined ? { pngBase64: png.inline } : {}),
+        navigationVersion: version.navigationVersion ?? undefined, limitations: version.limitations ?? ['Imported content has not been independently verified.'], redactionStatus: version.redactionStatus ?? 'not-reviewed', previousVersionId: previous,
+        provenance: { imported: true, sourceVersionId: version.id ?? null } };
+      if (text?.bytes) deferred.push(() => lazy(stored, 'text', text));
+      if (png?.bytes) deferred.push(() => lazy(stored, 'pngBase64', png));
+      return stored;
     });
     return fields;
   }
+  /** Rewrite exported identifiers cited inside free-form text. Captured text and hashed bytes are never altered. */
+  rewriteCitations(record, mapping, stats) {
+    const skip = new Set(['id', 'workspaceId', 'evidence', 'materialIds', 'outputs', 'attachments', 'previousVersionId', 'provenance', 'components', 'sha256', 'text', 'pngBase64', 'fileBase64']);
+    const visit = value => {
+      if (typeof value === 'string') return value.replace(ID_TOKEN, token => { if (mapping.has(token)) { stats.freeFormCitations++; return mapping.get(token); } stats.unresolvedCitations.add(token); return token; });
+      if (Array.isArray(value)) return value.map(visit);
+      if (value && typeof value === 'object') { for (const name of Object.keys(value)) if (!skip.has(name)) value[name] = visit(value[name]); }
+      return value;
+    };
+    visit(record);
+  }
+
+  // ---- Backups -----------------------------------------------------------------------
+  async backupCommand(name, args, dryRun) {
+    if (name === 'backups.create') {
+      const result = createBackup(this.storage, { kind: 'manual', note: args.note || '', clock: this.clock });
+      if (result.status !== 'verified') throw fail('command_failed', `BACKUP_INVALID: the new backup failed verification (${result.problems.map(item => item.problem).join(', ')})`);
+      return result;
+    }
+    if (name === 'backups.list') return { backups: listBackups(this.directory), policy: { ...this.backupPolicy }, location: join(this.directory, 'backups') };
+    if (name === 'backups.verify') return verifyBackup(this.directory, args.id);
+    if (name === 'backups.delete') return deleteBackup(this.directory, args.id);
+    const verification = verifyBackup(this.directory, args.id);
+    if (verification.status !== 'verified') throw fail('command_failed', `BACKUP_INVALID: backup failed verification; nothing was changed (${verification.problems.slice(0, 5).map(item => `${item.path}: ${item.problem}`).join('; ')})`);
+    if (dryRun) {
+      const current = Object.fromEntries(Object.entries(this.data).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.length]));
+      return { dryRun: true, applied: false, result: { backup: verification }, changes: { current, restored: verification.counts } };
+    }
+    return this.restoreFrom(args.id);
+  }
+  restoreFrom(id) {
+    const previousWorkspaces = new Set(this.data.workspaces.map(item => item.id));
+    this.storage.close();
+    let result;
+    let failure;
+    try { result = restoreBackup(this.directory, id, { clock: this.clock }); }
+    catch (error) { failure = error; try { recoverInterruptedRestore(this.directory); } catch { /* reported below */ } }
+    try { this.openStorage(); }
+    catch (error) { throw fail('command_failed', `RESTORE_INCOMPLETE: ${failure?.message || error.message}. Restart Weft to finish recovery; originals are preserved under ${RECOVERY_DIR}/.`); }
+    if (failure) throw failure;
+    this.storage.sweepOrphans();
+    this.log('backups.restore', this.activeWorkspaceId, this.activeWorkspaceId, 'human', `Restored ${id}; previous data preserved in ${result.preservedOriginal}`);
+    this.save();
+    const remaining = new Set(this.data.workspaces.map(item => item.id));
+    return Promise.resolve().then(async () => {
+      for (const workspaceId of previousWorkspaces) if (!remaining.has(workspaceId)) await this.browser?.closeWorkspace?.(workspaceId);
+      await this.browser?.switchWorkspace?.(this.activeWorkspaceId);
+      return { ...result, activeWorkspaceId: this.activeWorkspaceId };
+    });
+  }
+  runAutomaticBackup() {
+    const run = this.queue.then(() => {
+      if (this.closed || !this.backupPolicy.automatic) return;
+      try {
+        const latest = listBackups(this.directory).find(item => item.kind === 'automatic' && item.status !== 'invalid');
+        if (latest && this.clock() - Date.parse(latest.createdAt) < this.backupPolicy.intervalHours * 3600 * 1000) return;
+        const result = createBackup(this.storage, { kind: 'automatic', clock: this.clock });
+        if (result.status !== 'verified') throw new Error(`automatic backup failed verification: ${result.problems.map(item => item.problem).join(', ')}`);
+        pruneBackups(this.directory, { kind: 'automatic', keep: this.backupPolicy.keep });
+        this.backupPolicy.lastRunAt = new Date(this.clock()).toISOString();
+        this.backupPolicy.lastError = null;
+      } catch (error) {
+        this.backupPolicy.lastError = error.message;
+        this.onWarning({ code: 'BACKUP_FAILED', message: `Automatic backup failed: ${error.message}` });
+      }
+    });
+    this.queue = run.catch(() => {});
+    return run;
+  }
 }
+export { hashFile };

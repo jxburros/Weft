@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { CommunityLists } from '../src/community-lists.js';
+import { DatabaseSync } from '../src/sqlite.js';
 
 const human = { actor: 'human' };
 function fixture(t) {
@@ -84,12 +85,15 @@ test('list status is offline, scoped and repeated identical installation is idem
 
 test('external store changes roll back all subscription and rule mutations', async t => {
   const { workspace, lists } = fixture(t);
-  const external = readFileSync(workspace.path, 'utf8') + '\n';
-  writeFileSync(workspace.path, external);
+  const external = new DatabaseSync(workspace.path);
+  external.prepare("INSERT INTO state_meta(key, value) VALUES ('externalMarker', '1')").run();
+  const before = workspace.storage.contentDigest();
   await assert.rejects(lists.execute('lists.install', source(), human), /STORE_CONFLICT/);
   assert.equal(workspace.data.siteLists, undefined);
   assert.deepEqual(workspace.data.siteRules, []);
-  assert.equal(readFileSync(workspace.path, 'utf8'), external);
+  assert.equal(workspace.storage.contentDigest(), before);
+  assert.equal(external.prepare("SELECT count(*) AS count FROM records WHERE collection = 'siteRules'").get().count, 0);
+  external.close();
 });
 
 test('rollback rechecks preserved bytes rather than trusting cached rule descriptors', async t => {
@@ -101,7 +105,7 @@ test('rollback rechecks preserved bytes rather than trusting cached rule descrip
   assert.equal(restored.integrity, 'verified');
   assert.equal(workspace.data.siteRules[0].hostname, 'example.com');
   workspace.data.siteLists[0].previous.data += '\n';
-  const before = readFileSync(workspace.path, 'utf8');
+  const before = workspace.storage.contentDigest();
   await assert.rejects(lists.execute('lists.rollback', { id: 'community' }, human), /LIST_INTEGRITY/);
-  assert.equal(readFileSync(workspace.path, 'utf8'), before);
+  assert.equal(workspace.storage.contentDigest(), before);
 });

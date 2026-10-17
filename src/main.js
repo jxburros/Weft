@@ -37,7 +37,8 @@ app.whenReady().then(async () => {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('WEFT_PORT must be between 1 and 65535');
   const token = process.env.WEFT_TOKEN || randomBytes(32).toString('hex');
   const directory = join(app.getPath('userData'), 'workspace-data');
-  workspace = new WorkspaceService({ directory });
+  // Verified automatic backups at startup and then daily, keeping the latest five.
+  workspace = new WorkspaceService({ directory, backups: { automatic: true, intervalHours: 24, keep: 5 } });
   providers = new Providers({ directory, workspace, safeStorage, admission,
     readPage: async ({ tabId, workspaceId }) => {
       if (!browser || !Number.isSafeInteger(tabId) || browser.tab(tabId).workspaceId !== workspaceId) throw new Error('The selected tab is outside this conversation workspace');
