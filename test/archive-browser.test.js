@@ -149,6 +149,7 @@ if (process.argv.includes('--archive-smoke')) {
 <a id="link" href="${beaconOrigin}/clicked" style="position:fixed;left:0;top:0;width:300px;height:60px;display:block;background:#ccc">Follow</a>
 <form action="${beaconOrigin}/submit" method="post"><input name="a" value="b"><button style="position:fixed;left:0;top:100px;width:300px;height:60px">Submit</button></form>
 <iframe src="${beaconOrigin}/frame"></iframe><object data="${beaconOrigin}/object"></object></body></html>`;
+      step('hostile-preview');
       await browser.openArchivePreview({ artifactId: 'artifact_fixture', versionId: 'version_fixture', title: 'Hostile', documentUrl: 'https://hostile.example/',
         resources: [{ url: 'https://hostile.example/', role: 'document', mimeType: 'text/html', bytes: Buffer.from(hostile) }] });
       const hostileView = browser.preview.view.webContents;

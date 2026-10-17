@@ -1171,15 +1171,25 @@ export class Browser {
     try { if (!/^https?:$/.test(new URL(url).protocol)) url = FALLBACK_DOCUMENT_URL; } catch { url = FALLBACK_DOCUMENT_URL; }
     if (url === FALLBACK_DOCUMENT_URL) byUrl.set(archiveKey(url), document);
     this.layout();
+    let committed = false;
+    contents.once('did-navigate', () => { committed = true; });
     try { await bounded(contents.loadURL(url), 15000); }
-    catch (error) { if (!/ERR_ABORTED/.test(error.message)) { this.closeArchivePreview(); throw error; } }
+    catch (error) {
+      // The archived document is shown, but an embedded resource (e.g. an <object>) never finished loading. The preview is
+      // static and script-free, so keep it open, stop loading, and say it is incomplete instead of failing.
+      if (committed && this.preview?.view === view && /timed out/.test(error.message)) {
+        contents.stop();
+        this.preview.loadIncomplete = 'An embedded resource did not finish loading within 15 seconds; loading was stopped.';
+      } else if (!/ERR_ABORTED/.test(error.message)) { this.closeArchivePreview(); throw error; }
+    }
     return this.describePreview();
   }
   describePreview() {
     const state = this.preview;
     if (!state) return { open: false };
     return { open: true, previewId: state.id, artifactId: state.artifactId, versionId: state.versionId, title: state.title, url: state.view.webContents.getURL(), openedAt: state.openedAt,
-      resources: state.byUrl.size, javascript: 'disabled', network: 'refused (archive-only responses)', navigation: 'blocked', forms: 'blocked', popups: 'blocked', downloads: 'blocked', stats: structuredClone(state.stats) };
+      resources: state.byUrl.size, javascript: 'disabled', network: 'refused (archive-only responses)', navigation: 'blocked', forms: 'blocked', popups: 'blocked', downloads: 'blocked', stats: structuredClone(state.stats),
+      ...(state.loadIncomplete && { complete: false, incomplete: state.loadIncomplete }) };
   }
   closeArchivePreview() {
     const state = this.preview;

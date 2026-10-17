@@ -611,6 +611,12 @@ alone is not a shipped capability.
   restrict, purge or delete afterwards, then check the database and WAL bytes
   (`test/index-reset-privacy.test.js`); the prior `secure_delete` value is
   restored on every path.
+- The offline archive preview no longer fails and closes when the archived
+  document has been shown but an embedded resource (for example an `<object>`)
+  never finishes loading; after 15 seconds loading stops and the preview stays
+  open with `complete: false` and the reason. It still fails if the document
+  itself never loads. Found by reproducing a CI-only archive-test failure under
+  parallel load.
 - Screenshots wait for a painted frame and treat Chromium's transient
   `UnknownVizError` (no compositor surface yet) like an empty frame within the
   bounded retry; new collections keep the workspace they were created in when
