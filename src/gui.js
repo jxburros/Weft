@@ -1,4 +1,5 @@
 import { icon } from "./icons.js";
+import { knowledgeUI } from "./gui-knowledge.js";
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
   String(value ?? "").replace(
@@ -38,6 +39,7 @@ const names = {
   activity: "Activity",
   approvals: "Agent requests",
   workflows: "Workflows",
+  shared: "Shared context",
   settings: "Settings",
   updates: "Updates",
   privacy: "Privacy & site rules",
@@ -128,6 +130,10 @@ const controlStatus = (t) =>
   `${controlLabel(t)}${t?.version ? " · v" + t.version : ""}${t?.activity ? ` · running ${t.activity.command}` : ""}${t?.queued?.length ? ` · ${t.queued.length} queued` : ""}`;
 const action = (name, label, ico = "", attrs = "", cls = "secondary") =>
   `<button class="${cls}" data-action="${name}" ${attrs}>${ico ? icon(ico) : ""}${esc(label)}</button>`;
+// Shared collections, linked sources, services, proposals, conflicts and citations (src/gui-knowledge.js).
+const knowledge = knowledgeUI({ $: (id) => $(id), esc, short, date, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a),
+  closeDialog: () => closeDialog(), field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e),
+  refresh: (f) => refresh(f), state: () => state, ws: () => ws(), records: (k) => records(k) });
 // Polling replaces controls. Keep keyboard focus on the equivalent new control.
 function rememberFocus() {
   const element = document.activeElement;
@@ -458,6 +464,7 @@ function renderContent() {
         )
       }</div>`;
   else if (section === "privacy") html = privacyView();
+  else if (section === "shared") html = knowledge.sharedView();
   else if (section === "settings") html = settingsView();
   else if (section === "updates")
     html =
@@ -524,7 +531,8 @@ function collectionView(kind) {
       ),
     ) +
     (kind === "tasks" ? handoffPanel() : "") +
-    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting">Waiting for you</option><option value="paused">Paused</option><option value="completed">Completed</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
+    (kind === "context" ? knowledge.contextPanel() : "") +
+    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "context" ? knowledge.contextToolbar() : ""}${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting">Waiting for you</option><option value="paused">Paused</option><option value="completed">Completed</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
   );
 }
 function cards(kind) {
@@ -553,7 +561,7 @@ function renderCards() {
 function recordCard(kind, r) {
   let tag = r.kind || r.category || r.status || "Conversation";
   if (kind === "workflows") tag = `${r.steps.length} steps`;
-  return `<article class="record-card"><div class="card-top"><span class="tag ${r.status === "completed" ? "sage" : r.status === "waiting" ? "clay" : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${kind === "tasks" ? action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "") : ""}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", "Create tasks", "tasks", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}</div></article>`;
+  return `<article class="record-card"><div class="card-top"><span class="tag ${r.status === "completed" ? "sage" : r.status === "waiting" ? "clay" : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}${["context", "materials"].includes(kind) ? knowledge.badges(kind, r) : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${["context", "materials"].includes(kind) ? knowledge.cardActions(kind, r) : ""}${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${kind === "tasks" ? action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "") : ""}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", "Create tasks", "tasks", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}</div></article>`;
 }
 function artifactCard(r) {
   const version = r.versions?.at(-1);
@@ -952,6 +960,8 @@ function openDialog(title, body, footer = "", wide = false) {
   );
 }
 function clearDialogSecrets() {
+  const secret = $("service-secret");
+  if (secret) secret.value = "";
   const token = $("new-client-token");
   if (token) {
     token.value = "";
@@ -1133,7 +1143,8 @@ function editRecord(kind, id) {
             ["true", "Yes"],
           ],
           String(r?.pinned || false),
-        );
+        ) +
+        knowledge.recordDetails(kind, r);
     if (kind === "context")
       fields +=
         choice(
@@ -1149,7 +1160,8 @@ function editRecord(kind, id) {
           r?.category || "questions",
         ) +
         area("Content", "content", r?.content || "", true) +
-        area("Sources (one per line)", "sources", r?.sources?.join("\n") || "");
+        area("Sources (one per line)", "sources", r?.sources?.join("\n") || "") +
+        knowledge.recordDetails(kind, r);
     if (kind === "tasks")
       fields +=
         area("Objective", "objective", r?.objective || "") +
@@ -1258,8 +1270,8 @@ function editRecord(kind, id) {
             "trash",
             `data-kind="${kind}" data-id="${esc(r.id)}"`,
             "secondary danger",
-          )
-        : "",
+          ) + (["context", "materials"].includes(kind) ? knowledge.shareButton(kind, r.id) : "")
+        : kind === "materials" ? knowledge.materialDialogExtras() : "",
     },
   );
 }
@@ -1347,7 +1359,7 @@ async function viewArtifact(id, versionId) {
       "trash",
       `data-kind="artifacts" data-id="${esc(id)}"`,
       "secondary danger",
-    ) + action("close-dialog", "Close"),
+    ) + knowledge.shareButton("artifacts", id) + action("close-dialog", "Close"),
     true,
   );
   if ($("capture-version"))
@@ -1949,6 +1961,7 @@ async function act(button) {
     id = button.dataset.id,
     kind = button.dataset.kind;
   if (button.closest?.(".palette-results")) closeDialog();
+  if (await knowledge.handle(a, button)) return;
   switch (a) {
     case "manage-clients":
       await manageClients();

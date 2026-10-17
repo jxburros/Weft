@@ -188,6 +188,17 @@ test('linked files and folders: status detection, refresh, relink and bounded ag
     assert.doesNotMatch(JSON.stringify(refused), /SECRET OUTSIDE/);
   }
   assert.equal((await f.rest('sources.read', { id: folder.id, workspaceId: f.a, path: 'plan.md', maxBytes: 2 }, agent.token)).result.truncated, true, 'reads are bounded');
+  // A referenced folder shared through a collection is readable from the participant only through the link, and only while shared.
+  const partner = await f.grant({ scopes: ['read'], workspaceIds: [f.b] });
+  assert.equal((await f.rest('sources.read', { id: folder.id, workspaceId: f.b, path: 'plan.md' }, partner.token)).error.code, 'permission_required');
+  const shared = await f.run('collections.create', { workspaceId: f.a, name: 'Project files' });
+  await f.run('collections.addItem', { id: shared.id, type: 'materials', itemId: folder.id });
+  await f.run('collections.grant', { id: shared.id, memberWorkspaceId: f.b, role: 'read' });
+  assert.equal((await f.rest('sources.read', { id: folder.id, workspaceId: f.b, path: 'plan.md' }, partner.token)).result.content, '# Plan');
+  assert.equal((await f.rest('sources.read', { id: folder.id, workspaceId: f.b, path: '../outside.txt' }, partner.token)).error.code, 'invalid_arguments');
+  assert.equal((await f.rest('collections.read', { id: shared.id, workspaceId: f.b, itemId: folder.id }, partner.token)).result.link.path, undefined, 'the local path is not disclosed to the participant');
+  await f.run('collections.revoke', { id: shared.id, memberWorkspaceId: f.b });
+  assert.equal((await f.rest('sources.read', { id: folder.id, workspaceId: f.b, path: 'plan.md' }, partner.token)).error.code, 'permission_required');
   // Managed copies are a separate, explicit choice.
   writeFileSync(join(project, 'copy-me.txt'), 'managed bytes');
   const copied = await f.run('sources.link', { workspaceId: f.a, path: join(project, 'copy-me.txt'), mode: 'copy' });
