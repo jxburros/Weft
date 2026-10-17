@@ -234,6 +234,8 @@ export class MetadataStore {
       set(value) { Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true }); } });
   }
   componentMarker(object, key) { return lazyMarker(object, key); }
+  /** Write a component ahead of the transaction that will reference it. */
+  putComponent(bytes) { this.uncommittedComponents = true; return this.components.put(bytes); }
   readComponent(marker) {
     const pending = this.pending?.get(marker.sha256);
     if (pending !== undefined) return pending;
@@ -308,7 +310,7 @@ export class MetadataStore {
     const encoding = /Base64$/.test(name) ? 'base64' : 'utf8';
     const bytes = Buffer.from(value, encoding);
     if (!write) return { sha256: sha256(bytes), size: bytes.length, encoding };
-    const marker = { ...this.components.put(bytes), encoding };
+    const marker = { ...this.putComponent(bytes), encoding };
     if (encoding === 'utf8' && this.pending) this.pending.set(marker.sha256, value);
     this.defineLazy(object, name, marker);
     return marker;
@@ -408,6 +410,7 @@ export class MetadataStore {
         this.pruneRequests();
       });
       this.applyPlan(plan);
+      this.uncommittedComponents = false;
       const releasedList = [...released];
       if (!deferCollection) this.collectGarbage(releasedList);
       return { released: releasedList };
@@ -467,8 +470,9 @@ export class MetadataStore {
     for (const name of checkpoint.layout) state[name] = [...(checkpoint.docs.get(name) || new Map())].sort((a, b) => a[1].seq - b[1].seq).map(([, { doc }]) => this.parse(name, doc));
     return state;
   }
-  /** Return the last committed state, reusing unchanged in-memory objects. */
+  /** Return the last committed state, reusing unchanged in-memory objects. Components written for the discarded changes are removed. */
   revert(state) {
+    if (this.uncommittedComponents && this.db) { this.uncommittedComponents = false; this.sweepOrphans(); }
     const restored = {};
     for (const [key, json] of this.meta) restored[key] = state && JSON.stringify(state[key]) === json ? state[key] : JSON.parse(json);
     for (const name of this.layout) {

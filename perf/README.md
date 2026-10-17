@@ -26,9 +26,9 @@ deliberately generous ceilings:
 | 100 OpenAPI generations and serializations | 3 s |
 
 Reference run (Linux container, Node 22, 2026-10-17): 10k-record update
-~100-230 ms (JSON store: ~270 ms), 1k-capture search ~10-50 ms, import ~2.6-3.1 s
+~50-230 ms (JSON store: ~270 ms), 1k-capture search ~10-50 ms, import ~2.6-3.1 s
 (JSON store: ~2.3 s), 500-capture initial write ~1.6-2.3 s, note update
-~55-100 ms, annotation ~15-30 ms, ranked search ~25 ms, reopen ~150-195 ms.
+~55-100 ms, annotation ~15-30 ms, ranked search ~25-40 ms, reopen ~150-300 ms.
 
 Timings print in TAP diagnostics. A failure should be investigated on the same
 fixture before raising a budget; do not automatically tune ceilings to the

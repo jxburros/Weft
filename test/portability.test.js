@@ -85,6 +85,7 @@ test('import preview reports policies, workflows, linked sources and lossy mappi
   await project(service);
   const exported = await service.execute('workspaces.export', { id: service.activeWorkspaceId });
   exported.tasks[0].legacyPriority = 'high';
+  exported.conversations[0].messages[0].reaction = 'thumbs-up';
   exported.context[0].content += ' and ctx_00000000-0000-4000-8000-00000000dead';
   const before = service.storage.contentDigest();
   const preview = await service.execute('workspaces.import', { data: exported, dryRun: true });
@@ -93,6 +94,7 @@ test('import preview reports policies, workflows, linked sources and lossy mappi
   const report = preview.result.importReport;
   assert.deepEqual(report.policies.workflows.map(item => [item.title, item.enabled, item.steps]), [['Review', false, 1]]);
   assert.ok(report.lossy.some(item => item.collection === 'tasks' && item.field === 'legacyPriority'));
+  assert.ok(report.lossy.some(item => item.collection === 'conversations' && item.field === 'messages.reaction'));
   assert.ok(report.lossy.some(item => item.field === 'free-form citations' && item.count === 1));
   assert.ok(preview.changes.created.count > 5);
   assert.equal(commands['workspaces.import'].humanOnly, true);
@@ -161,6 +163,14 @@ test('package transfer moves projects larger than the REST limit with verified c
   const copy = (await service.execute('artifacts.list', { workspaceId: imported.id })).find(item => item.title === 'Large');
   assert.equal((await service.execute('artifacts.get', { id: copy.id })).versions[0].pngBase64, (await service.execute('artifacts.get', { id: large.id })).versions[0].pngBase64);
   assert.equal(imported.importReport.records.artifacts, 2);
+  // Previews and failed imports leave no component files behind.
+  await service.execute('artifacts.delete', { id: copy.id });
+  await service.execute('artifacts.delete', { id: large.id });
+  const files = () => readdirSync(join(directory, 'components')).flatMap(prefix => readdirSync(join(directory, 'components', prefix))).sort();
+  const before = files();
+  const preview = await service.execute('workspaces.importPackage', { name: 'project-1', dryRun: true });
+  assert.equal(preview.applied, false);
+  assert.deepEqual(files(), before);
   await assert.rejects(service.execute('workspaces.importPackage', { name: 'project-1' }, { actor: 'automation' }), /PERMISSION_REQUIRED/);
 });
 

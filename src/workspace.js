@@ -9,7 +9,7 @@ import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
 import { MetadataStore, RECOVERY_DIR, canonicalJson } from './store.js';
 import { componentPath, sha256 } from './components.js';
-import { cleanupBackupTemporary, createBackup, deleteBackup, hashFile, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
+import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -170,6 +170,8 @@ export class WorkspaceService {
     try {
       if (existsSync(legacy)) this.finishLegacyMigration(storage, legacy);
       let data = storage.load();
+      // A record collection introduced after this database was created starts empty.
+      for (const name of collections) if (data[name] === undefined) data[name] = [];
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
         rejectSecretKeys(migrated);
@@ -732,8 +734,9 @@ export class WorkspaceService {
     raw = migrateSchema(raw, { kind: 'export' });
     const lossy = new Map();
     const loss = (collection, field, reason, count = 1) => { const key = `${collection}\u0000${field}\u0000${reason}`; const item = lossy.get(key) || { collection, field, reason, count: 0 }; item.count += count; lossy.set(key, item); };
+    const nested = (collection, field, schema, items) => { for (const entry of Array.isArray(items) ? items : []) if (entry && typeof entry === 'object') for (const key of Object.keys(entry)) if (!Object.hasOwn(schema.shape, key)) loss(collection, `${field}.${key}`, 'nested field not supported by import; dropped'); };
     const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon });
-    const workspace = { ...createWorkspace(), ...workspaceFields, importedFrom: { exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt.slice(0, 100) : null, formatVersion } };
+    const workspace = { ...createWorkspace(), ...workspaceFields, importedFrom: { exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt.slice(0, 100) : null, createdAt: timestamp.safeParse(raw.workspace.createdAt).success ? raw.workspace.createdAt ?? null : null, formatVersion } };
     const mapping = new Map([[raw.workspace.id, workspace.id]]);
     const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', ...collections]);
     for (const [key, value] of Object.entries(raw)) if (!knownKeys.has(key)) loss('export', key, Array.isArray(value) ? 'collection not supported by this Weft version; not imported' : 'unrecognized export field ignored', Array.isArray(value) ? value.length : 1);
@@ -757,7 +760,7 @@ export class WorkspaceService {
       const bytes = resolver.read(marker);
       return { bytes, marker };
     };
-    const lazy = (object, key, ref) => { this.storage.components.put(ref.bytes); this.storage.defineLazy(object, key, ref.marker); };
+    const lazy = (object, key, ref) => { this.storage.putComponent(ref.bytes); this.storage.defineLazy(object, key, ref.marker); };
     const imported = {};
     const stats = { structuredReferences: 0, freeFormCitations: 0, unresolvedCitations: new Set(), versions: 0, revisions: 0 };
     for (const collection of collections) {
@@ -767,7 +770,7 @@ export class WorkspaceService {
         for (const key of Object.keys(item)) if (!system.includes(key) && !(shape ? Object.hasOwn(shape, key) : ['title', 'note', 'tags'].includes(key))) loss(collection, key, 'field not supported by import; dropped');
         let fields;
         const deferred = [];
-        if (collection === 'artifacts') fields = this.importArtifact(item, { heavy, lazy, deferred, mapping, loss, stats });
+        if (collection === 'artifacts') { nested(collection, 'annotations', annotationSchema, item.annotations); fields = this.importArtifact(item, { heavy, lazy, deferred, mapping, loss, stats }); }
         else {
           const picked = Object.fromEntries(Object.keys(shape).filter(key => item[key] !== undefined).map(key => [key, item[key]]));
           let fileRef = null;
@@ -788,6 +791,7 @@ export class WorkspaceService {
             if (typeof item.sha256 === 'string' && fields.sha256 && item.sha256 !== fields.sha256) throw fail('component_integrity', 'COMPONENT_INTEGRITY: imported material file does not match its recorded SHA-256');
           }
           if (collection === 'conversations') {
+            nested(collection, 'messages', messageSchema, item.messages);
             fields.messages = z.array(messageSchema).max(10000).parse(item.messages || []).map(message => ({ ...message, id: mapping.get(message.id) || uuid('msg') }));
             if (item.turnManifests !== undefined) {
               const manifests = z.array(z.record(z.string(), z.unknown())).max(1000).parse(item.turnManifests);
@@ -796,7 +800,7 @@ export class WorkspaceService {
             }
           }
           if (['materials', 'context'].includes(collection)) {
-            if (item.history !== undefined) { fields.history = z.array(historyEntry).max(10000).parse(item.history).map(entry => ({ revision: entry.revision, content: entry.content, actor: entry.actor, createdAt: entry.createdAt })); stats.revisions += fields.history.length; }
+            if (item.history !== undefined) { nested(collection, 'history', historyEntry, item.history); fields.history = z.array(historyEntry).max(10000).parse(item.history).map(entry => ({ revision: entry.revision, content: entry.content, actor: entry.actor, createdAt: entry.createdAt })); stats.revisions += fields.history.length; }
             else { loss(collection, 'history', 'revision history absent in source; started a new history'); fields.history = [{ revision: 1, content: fields.content, actor, createdAt: now() }]; }
           }
         }
@@ -954,4 +958,4 @@ export class WorkspaceService {
     return run;
   }
 }
-export { hashFile };
+
