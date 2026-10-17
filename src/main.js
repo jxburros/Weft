@@ -192,14 +192,14 @@ if (primary) app.whenReady().then(async () => {
   display = new DisplayController({ window, browser, launchedHeadless: launchHeadless, userData: app.getPath('userData'), environment,
     pendingApprovals: () => authority.pendingApprovals(), locked: () => (workspace.locked ? workspace.encryption?.lockReason ?? 'locked' : null),
     audit: entry => activity.append(entry), onEvent: event => events.emit('event', event) });
-  // Payment authorization (ADR 019): records outside workspace-data like the vault; virtual cards stay off until a person configures them.
+  // Payment authorization (ADR 019): records outside workspace-data, sealed with the workspace keys when encryption is on; virtual cards stay off until a person configures them.
   const payments = new PaymentService({ directory: join(app.getPath('userData'), 'payments'), browser, workspace, credentials, protector: safeStorageProtector(safeStorage) });
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, payments, knowledge, admission, transfers, eventLog, display, onEvent: event => events.emit('event', event) });
   // A headless session of a locked encrypted profile waits for a person: say so where the operator can see it.
   if (workspace.locked && !display.visible) console.log('Weft (headless): the encrypted workspace data is locked. Run "weft attach" or launch Weft again, then unlock it in the window.');
   // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain.
   // A locked encrypted profile sweeps after each unlock instead; nothing is scheduled while locked (ADR 014, ADR 016).
-  // A payment click that was in flight becomes uncertain on its payment record (payments live outside workspace data, so this runs even while locked).
+  // A payment click that was in flight becomes uncertain on its payment record; sealed payment records of a locked profile are swept at unlock.
   payments.init();
   const startTasks = async () => { if (workspace.locked) return; await dispatch.tasks.init(); dispatch.tasks.start(); };
   await startTasks();

@@ -205,6 +205,8 @@ export class WorkspaceService {
     // Workspace encryption (ADR 014). Hooks are set by the app: stop work before lock, restore tabs after unlock.
     this.encryption = new ProfileEncryption({ directory, protector: keyProtector ?? createKeyProtector(), ...(encryption.kdf && { kdfParams: encryption.kdf }), clock });
     this.encryptionHooks = { beforeLock: async () => {}, afterUnlock: async () => {} };
+    // Profile files outside workspace-data that are sealed with the same keys (payment records, ADR 019) follow every key change.
+    this.sealedStores = new Set();
     this.locked = false;
     try {
       this.refreshStorageWarnings();
@@ -699,6 +701,9 @@ export class WorkspaceService {
     return forCaller(collection, this.output(record), context);
   }
   attachRetrieval(retrieval) { this.retrieval = retrieval; }
+  /** A profile store outside workspace-data sealed with this profile's keys: told about enable, disable, rotation, lock, unlock and restore. */
+  attachSealedStore(store) { this.sealedStores.add(store); return store; }
+  sealedStoreStep(step) { for (const store of this.sealedStores) store[step]?.(); }
   /** search.* commands: reads and embedding administration outside the write queue. */
   async searchCommand(name, input, context) {
     // A locked encrypted profile has no open store or decrypted index (ADR 014).
@@ -1668,6 +1673,7 @@ export class WorkspaceService {
   }
   restoreFrom(id) {
     const previousWorkspaces = new Set(this.data.workspaces.map(item => item.id));
+    this.sealedStoreStep('beforeRestore');
     this.storage.close();
     let result;
     let failure;
@@ -1679,6 +1685,7 @@ export class WorkspaceService {
     const encryption = this.encryption.adoptRestored(keys);
     if (encryption === 'locked') {
       this.storage = null; this._data = null; this.locked = true;
+      this.sealedStoreStep('afterRestore');
       if (failure) throw failure;
       return Promise.resolve().then(async () => {
         await this.encryptionHooks.beforeLock?.({ persist: false });
@@ -1689,6 +1696,7 @@ export class WorkspaceService {
     catch (error) { throw fail('command_failed', `RESTORE_INCOMPLETE: ${failure?.message || error.message}. Restart Weft to finish recovery; originals are preserved under ${RECOVERY_DIR}/.`); }
     if (failure) throw failure;
     this.storage.sweepOrphans();
+    this.sealedStoreStep('afterRestore');
     result.encryption = this.storage.encrypted ? 'encrypted' : 'plaintext';
     // A backup taken mid-rotation carries both data keys; finish re-encrypting under the newest.
     if (this.encryption.keyring?.rotation) this.resumeRotation().catch(() => {});
@@ -1762,6 +1770,7 @@ export class WorkspaceService {
       if (this.encryption.keyring) throw fail('invalid_arguments', 'This profile is already encrypted');
       const recoveryKey = this.encryption.enable(this.storage, { passphrase: passphrase ?? null, unlockMode, onStep: context.onStep });
       this.reopenStorage();
+      this.sealedStoreStep('afterEnable');
       const removed = removePlaintextCopies ? this.encryption.removePlaintextCopies() : [];
       const remaining = this.encryption.plaintextCopies();
       this.log('encryption.enable', this.activeWorkspaceId, null, 'human', `Workspace encryption on; unlock: ${unlockMode}${removed.length ? `; ${removed.length} plaintext copies overwritten and removed` : ''}`);
@@ -1777,6 +1786,7 @@ export class WorkspaceService {
     return this.exclusive(() => {
       this.assertUnlocked();
       if (this.encryption.keyring?.rotation) throw fail('invalid_arguments', 'Finish the data-key rotation before turning encryption off');
+      this.sealedStoreStep('beforeDisable');
       this.encryption.disable(this.storage, { onStep: context.onStep });
       this.reopenStorage();
       this.log('encryption.disable', this.activeWorkspaceId, null, 'human', 'Workspace encryption turned off; data rewritten as plaintext');
@@ -1795,6 +1805,7 @@ export class WorkspaceService {
     if (!this.encryption.enabled) throw fail('invalid_arguments', 'Turn on workspace encryption before locking');
     if (this.locked) return { locked: true, alreadyLocked: true };
     await this.encryptionHooks.beforeLock?.({ persist: true });
+    for (const store of this.sealedStores) await store.beforeLock?.();
     return this.exclusive(() => {
       if (this.locked) return { locked: true, alreadyLocked: true };
       try { this.log('encryption.lock', this.activeWorkspaceId, null, 'human', 'Workspace data locked'); this.save(); } catch { /* locking proceeds */ }
@@ -1815,6 +1826,7 @@ export class WorkspaceService {
       try { this.openStorage(); this.storage.sweepOrphans(); }
       catch (error) { this.storage?.close(); this.storage = null; this._data = null; this.encryption.forget(); throw error; }
       this.locked = false;
+      this.sealedStoreStep('afterUnlock');
       try { this.log('encryption.unlock', this.activeWorkspaceId, null, 'human', `Unlocked with ${method === 'os' ? 'the OS key' : method === 'passphrase' ? 'the passphrase' : 'the recovery key'}`); this.save(); } catch { /* unlocked regardless */ }
       return { unlocked: true, method };
     });
@@ -1843,6 +1855,7 @@ export class WorkspaceService {
       }
       return this.exclusive(() => {
         this.assertUnlocked();
+        this.sealedStoreStep('beforeFinishRotation');
         this.encryption.finishDataKeyRotation();
         this.storage.compact();
         this.log('encryption.rotate', this.activeWorkspaceId, null, 'human', `Data key rotation complete: ${reencrypted} values and components re-encrypted under version ${this.encryption.keyring.currentVersion}`);

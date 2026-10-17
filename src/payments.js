@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { readJson, writeJsonDurable } from './atomic-json.js';
 import { minimizeUrl } from './activity-log.js';
+import { encryptionError, lockedError } from './encryption.js';
+import { scrubFile } from './components.js';
 import { CURRENCY_EXPONENTS, INTERVALS, isCurrency, toMinor, formatMinor, parseAmount, detectRecurrence, describeRecurrence, termsFingerprint, urlDigest, classifyCharges, pageText } from './payment-terms.js';
 import { IssuerApiProvider, PROVIDER_KINDS, PROVIDER_REASONS, cardPlan, unsupported } from './virtual-cards.js';
 
@@ -106,9 +108,12 @@ export class PaymentService {
     this.path = join(directory, 'payments.json');
     this.settingsPath = join(directory, 'provider.json');
     this.keyPath = join(directory, 'issuer-key.wrapped');
-    const saved = readJson(this.path, { version: 1, records: [] });
-    if (saved.version !== 1 || !Array.isArray(saved.records)) throw new Error(`${this.path} has an unsupported format; preserve it and review before retrying`);
-    this.records = saved.records.filter(record => record && /^pay_/.test(record.id) && PAYMENT_STATUSES.includes(record.status));
+    // Payment records are sealed with the profile's data key when workspace encryption is on (ADR 014, ADR 019);
+    // they load lazily, so a locked profile never opens them and every read waits for a person to unlock.
+    this._records = null;
+    this.fileFormat = null;
+    this.restoredRecords = null;
+    workspace?.attachSealedStore?.(this);
     const settings = readJson(this.settingsPath, { version: 1, provider: 'issuer_api', enabled: false, baseUrl: null, currencies: ['USD'] });
     this.settings = { version: 1, provider: PROVIDER_KINDS.includes(settings.provider) ? settings.provider : 'issuer_api', enabled: settings.enabled === true,
       baseUrl: typeof settings.baseUrl === 'string' ? settings.baseUrl : null, currencies: Array.isArray(settings.currencies) && settings.currencies.every(isCurrency) ? settings.currencies : ['USD'] };
@@ -117,8 +122,80 @@ export class PaymentService {
     this.tasks = null;
     this.clients = null;
   }
-  /** Whether a payment on this tab awaits approval or is being submitted (its checkout must stay loaded). */
-  holdsTab(tabId) { return this.records.some(record => record.tabId === tabId && ['proposed', 'submitting'].includes(record.status)); }
+  get records() { if (this._records === null) this.load(); return this._records; }
+  set records(value) { this._records = value; }
+  /** Whether a payment on this tab awaits approval or is being submitted (its checkout must stay loaded). A locked profile has no tabs. */
+  holdsTab(tabId) { try { return this.records.some(record => record.tabId === tabId && ['proposed', 'submitting'].includes(record.status)); } catch { return false; } }
+
+  // ---- Storage (plaintext, or sealed with the profile's data key under workspace encryption) ---------------------
+  /** Encryption state of the profile this service belongs to: sealed when enabled, unreadable while locked. */
+  sealing() {
+    const encryption = this.workspace?.encryption;
+    return { enabled: Boolean(encryption?.enabled), keys: this.workspace?.locked ? null : encryption?.keys ?? null };
+  }
+  /**
+   * Read payments.json. Format 1 is plaintext; format 2 holds one AES-256-GCM envelope sealed with the current data
+   * key (AAD binds the profile id and key version, like sealed workspace settings). A plaintext file inside an
+   * encrypted profile is an interrupted enable or disable: it is sealed now (after unlock) and the old blocks are
+   * overwritten. Startup and unlock then run the interrupted-submission sweep.
+   */
+  load() {
+    const { enabled, keys } = this.sealing();
+    // A copy kept by an interrupted migration still holds plaintext: overwrite it before anything else.
+    if (existsSync(`${this.path}.plain-old`)) scrubFile(`${this.path}.plain-old`);
+    if (enabled && !keys) throw lockedError(this.workspace?.encryption?.lockReason ?? 'locked');
+    const saved = readJson(this.path, { version: 1, records: [] });
+    let records;
+    let migrate = false;
+    if (saved.version === 2) {
+      try {
+        if (!keys) throw encryptionError('component_integrity', 'ENCRYPTION_INTEGRITY: payment records are sealed but this profile is not encrypted. Nothing was changed; restore the matching keyring or backup.');
+        if (saved.profileId !== keys.profileId) throw encryptionError('component_integrity', 'ENCRYPTION_INTEGRITY: payment records were sealed by a different profile keyring. Nothing was changed; restore the matching keyring or backup.');
+        records = JSON.parse(keys.openText(['payments', 'records'], saved.sealed, 'payment records').json).records;
+      } catch (error) {
+        // A restore that changed the keyring (ADR 014) re-seals the records this session already held.
+        if (!this.restoredRecords) throw error;
+        records = this.restoredRecords;
+        migrate = true;
+      }
+    } else if (saved.version === 1 && Array.isArray(saved.records)) {
+      records = saved.records;
+      migrate = enabled;
+    } else throw new Error(`${this.path} has an unsupported format; preserve it and review before retrying`);
+    if (!Array.isArray(records)) throw encryptionError('component_integrity', 'ENCRYPTION_INTEGRITY: payment records are malformed');
+    this.restoredRecords = null;
+    this._records = records.filter(record => record && /^pay_/.test(record.id) && PAYMENT_STATUSES.includes(record.status));
+    this.fileFormat = saved.version;
+    if (migrate) this.save();
+    return this._records;
+  }
+  /** Drop decrypted records (lock). Submissions in flight finish or fail first; the next load marks an unfinished one uncertain. */
+  async beforeLock() {
+    for (let waited = 0; this.inFlight.size && waited < 15000; waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
+    this._records = null;
+  }
+  afterUnlock() { this._records = null; try { this.load(); this.sweep(); } catch (error) { console.warn(`Weft payments: ${error.message}`); } }
+  /** Encryption turned on: seal the records already read as plaintext. */
+  afterEnable() { const records = this.records; this.save(records); }
+  /** Before encryption is turned off: write plaintext while the key is still held (a crash leaves an interrupted migration, sealed again at unlock). */
+  beforeDisable() { const records = this.records; this.write(records, null); }
+  /** Data-key rotation: re-seal under the new current key before older keys are removed. */
+  beforeFinishRotation() { this.save(); }
+  /** Before a backup restore: hold the decrypted records so they can be sealed under whatever keyring is restored. */
+  beforeRestore() { try { this.restoredRecords = structuredClone(this.records); } catch { this.restoredRecords = null; } this._records = null; }
+  afterRestore() { try { this.load(); this.sweep(); } catch (error) { if (error.code !== 'locked') console.warn(`Weft payments: ${error.message}`); } }
+  write(records, keys) {
+    const payload = keys
+      ? { version: 2, profileId: keys.profileId, sealed: keys.sealText(['payments', 'records'], JSON.stringify({ records })) }
+      : { version: 1, records };
+    const plaintextBefore = this.fileFormat !== 2 && keys && existsSync(this.path);
+    // Keep the plaintext inode reachable until the sealed file replaced it, then overwrite it (best effort, like components).
+    if (plaintextBefore) { rmSync(`${this.path}.plain-old`, { force: true }); try { linkSync(this.path, `${this.path}.plain-old`); } catch { /* no hard links: the old blocks are only unlinked */ } }
+    writeJsonDurable(this.path, payload);
+    if (plaintextBefore && existsSync(`${this.path}.plain-old`)) scrubFile(`${this.path}.plain-old`);
+    this.fileFormat = payload.version;
+  }
+
   /** Wired by createDispatcher: the approval binding, the task-runtime reconciler and task cancellation. */
   attach({ authority, tasks, clients }) {
     this.authority = authority ?? this.authority;
@@ -127,14 +204,17 @@ export class PaymentService {
     this.tasks?.registerReconciler?.('payments.submit', op => this.lookupOperation(op));
     return this;
   }
-  save() {
+  save(records = this.records) {
+    this.records = records;
     if (this.records.length > 2000) {
       const open = record => ['proposed', 'submitting', 'uncertain'].includes(record.status);
       const closed = this.records.filter(record => !open(record));
       const drop = new Set(closed.slice(0, this.records.length - 2000).map(record => record.id));
       this.records = this.records.filter(record => !drop.has(record.id));
     }
-    writeJsonDurable(this.path, { version: 1, records: this.records });
+    const { enabled, keys } = this.sealing();
+    if (enabled && !keys) throw lockedError(this.workspace?.encryption?.lockReason ?? 'locked');
+    this.write(this.records, enabled ? keys : null);
   }
   /** One synchronous, durable change; rolled back in memory if it cannot be written. */
   commit(work) {
@@ -145,16 +225,21 @@ export class PaymentService {
   audit(entry) { try { this.authority?.activity?.append({ actionClass: 'payment', ...entry }); } catch (error) { console.warn(`Weft payment activity: ${error.message}`); } }
   history(record, event, actor, detail = '') { record.history = [...(record.history ?? []), { at: now(this.clock), event, actor, ...(detail ? { detail: String(detail).slice(0, 300) } : {}) }].slice(-100); }
 
-  /** Startup sweep, before any caller can reach the API: an attempt that was in flight when Weft stopped is uncertain. */
+  /** Startup: load and sweep now, or (encrypted and locked) at unlock, before any caller can reach payments. */
   init() {
-    const interrupted = this.records.filter(record => record.status === 'submitting');
+    try { this.load(); } catch (error) { if (error.code !== 'locked') throw error; return this; }
+    return this.sweep();
+  }
+  /** An attempt that was in flight when Weft stopped (or the profile locked) is uncertain. */
+  sweep() {
+    const interrupted = this._records.filter(record => record.status === 'submitting' && !this.inFlight.has(record.id));
     if (!interrupted.length) return this;
     this.commit(() => {
       for (const record of interrupted) {
         record.status = 'uncertain';
         const attempt = record.attempts?.at(-1);
         if (attempt?.status === 'attempted') Object.assign(attempt, { status: 'uncertain', finishedAt: now(this.clock), error: 'interrupted' });
-        this.history(record, 'uncertain', 'system', 'Weft stopped while the pay control was being clicked; whether the merchant received it is unknown.');
+        this.history(record, 'uncertain', 'system', 'Weft stopped (or the profile locked) while the pay control was being clicked; whether the merchant received it is unknown.');
         record.updatedAt = now(this.clock);
       }
     });
