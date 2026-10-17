@@ -34,6 +34,13 @@ Set `WEFT_PORT` to change the port. In PowerShell, use `$env:WEFT_TOKEN = ...`.
 A desktop display is required. On headless Linux, `xvfb-run -a npm start` provides
 a virtual display. Normal startup keeps Chromium's sandbox enabled.
 
+To run without a visible window (same profile, policies and agent API; pages
+render offscreen), start with `npm start -- --headless` or `WEFT_HEADLESS=1`.
+Launch Weft again or run `weft attach` to show the window of that running
+session; agent requests that need your decision wait until you do. Linux still
+needs a display server for this (a desktop session or `xvfb-run`). See
+[ADR-015](docs/decisions/015-headless-resume-and-resource-scheduling.md).
+
 ### Installers and updates
 
 Stable releases are packaged for Windows x64 (branded per-user NSIS installer),

@@ -17,7 +17,7 @@ for (let index = 0; index < argv.length; index++) {
 }
 const [command, json = '{}', ...extra] = argv;
 if (!command || ['help', '--help', '-h'].includes(command)) {
-  console.log(`Usage: weft commands | <command> [JSON arguments] | mcp
+  console.log(`Usage: weft commands | <command> [JSON arguments] | mcp | attach
 
 Connects to the running Weft browser using WEFT_TOKEN.
 WEFT_API_URL defaults to http://127.0.0.1:9222.
@@ -26,6 +26,9 @@ Discovery: weft weft.capabilities
 Examples:
   weft tabs.new '{"url":"https://example.com"}'
   weft page.screenshot '{"tabId":1}'
+
+Show the window of a headless Weft session (display.show): weft attach
+Start Weft without a window: electron . --headless (or WEFT_HEADLESS=1)
 
 Offline backup maintenance (Weft closed): weft store backups|verify|restore <directory> [backup id]`);
 } else if (command === 'store') {
@@ -52,6 +55,7 @@ Offline backup maintenance (Weft closed): weft store backups|verify|restore <dir
     } else {
       const result = command === 'commands'
         ? await client.listCommands()
+        : command === 'attach' ? await client.executeOutcome('display.show', {}, deadlineMs !== undefined ? { deadlineMs } : {})
         : await client.executeOutcome(command, JSON.parse(json), deadlineMs !== undefined ? { deadlineMs } : {});
       console.log(JSON.stringify(result, null, 2));
       if (command !== 'commands') process.exitCode = resultExitCode(result);

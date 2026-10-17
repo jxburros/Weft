@@ -61,7 +61,7 @@ test('version-1 JSON stores migrate losslessly with preserved original, records,
   const service = open(t, directory);
   assert.equal(existsSync(join(directory, 'workspace-state.json')), false);
   assert.equal(readFileSync(join(directory, 'recovery', `workspace-state.${sha(original)}.json`), 'utf8'), original);
-  const expected = { ...structuredClone(legacy), schemaVersion: 2, history: [], handoffs: [], sharedCollections: [], conflicts: [], freshnessPolicies: [] };
+  const expected = { ...structuredClone(legacy), schemaVersion: 2, history: [], handoffs: [], sharedCollections: [], conflicts: [], freshnessPolicies: [], tabGroups: [], resumeStates: [] };
   assert.deepEqual(JSON.parse(JSON.stringify(service.storage.materialize(service.data), (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)),
     JSON.parse(JSON.stringify(expected, (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)));
   // Browser containers are derived from workspace IDs; tab ownership survives.
@@ -217,4 +217,24 @@ test('stored files are private to the user and oversized components are refused'
   for (const file of ['workspace.sqlite', ...componentFiles(directory).map(file => file.slice(directory.length + 1))]) assert.equal(statSync(join(directory, file)).mode & 0o077, 0, file);
   assert.equal(statSync(join(directory, 'components')).mode & 0o077, 0);
   assert.throws(() => new ComponentStore(join(directory, 'components')).put(Buffer.alloc(MAX_COMPONENT_BYTES + 1)), /COMPONENT_SIZE_LIMIT/);
+});
+
+test('session and history writes commit only their own rows, never unrelated uncommitted changes', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-store-only-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  let service = new WorkspaceService({ directory });
+  const note = await service.execute('materials.create', { title: 'Committed title' });
+  // A change still in progress elsewhere (not saved) must not ride along with a tab update.
+  service.data.materials.find(item => item.id === note.id).title = 'Uncommitted edit';
+  service.persistSession({ tabs: [{ id: 3, workspaceId: service.activeWorkspaceId, url: 'https://example.com/a', title: 'Tab', pinned: false, version: 2, controller: 'available',
+    suspended: { at: '2026-10-17T00:00:00.000Z', reason: 'idle', scrollX: 0, scrollY: 640, zoom: 1.25 }, groupId: 'tgrp_x' }], activeId: 3 });
+  service.recordVisit({ workspaceId: service.activeWorkspaceId, url: 'https://example.com/a', title: 'Visit', tabId: 3 });
+  service.close();
+  service = new WorkspaceService({ directory });
+  try {
+    assert.equal(service.data.materials.find(item => item.id === note.id).title, 'Committed title');
+    assert.deepEqual(service.data.browserSession.tabs[0].suspended, { at: '2026-10-17T00:00:00.000Z', reason: 'idle', scrollX: 0, scrollY: 640, zoom: 1.25 });
+    assert.equal(service.data.browserSession.tabs[0].groupId, 'tgrp_x');
+    assert.equal(service.data.history.at(-1).url, 'https://example.com/a');
+  } finally { service.close(); }
 });

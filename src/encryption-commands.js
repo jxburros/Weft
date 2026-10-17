@@ -23,4 +23,5 @@ export const encryptionCommandDefinitions = {
 };
 export const encryptionSchemas = Object.fromEntries(Object.entries(encryptionCommandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));
 /** Commands that run while the profile is locked; every other command returns `locked`. */
-export const LOCK_EXEMPT = Object.freeze(new Set(['encryption.status', 'encryption.unlock', 'encryption.checkRecoveryKey', 'guide.get']));
+// Display status and attach (ADR 015) also work while locked, so a person can attach to a headless session and unlock it.
+export const LOCK_EXEMPT = Object.freeze(new Set(['encryption.status', 'encryption.unlock', 'encryption.checkRecoveryKey', 'guide.get', 'display.status', 'display.show']));

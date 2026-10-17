@@ -85,6 +85,10 @@ if (process.argv.includes("--visual-child")) {
       if(name==="clients.create") { clientArgs=args; const grant={...args,clientId:"client-fixture",expiresAt:1893456000000,revoked:false};grants.push(grant);return {...grant,token:"weft1.fixture-secret-token"}; }
       if(name==="clients.revoke") { grants.find(g=>g.clientId===args.clientId).revoked=true;return {revoked:true}; }
       if(name==="tabs.activate") return tabs[0];
+      if(name==="resume.get") return {workspaceId:"fixture",saved:false,view:{section:"overview",activeTabId:null,split:{tabId:null,focusedPane:"primary"},panels:{}},missing:{},pinned:[],pinnedMaterials:[],continue:{blockers:[],tasks:[],handoffs:[]},tabs:{count:0,suspended:0,groups:[]},notices:[]};
+      if(name==="resume.save") return {};
+      if(name==="display.status") return {mode:"headed",windowVisible:true,launchedHeadless:false,renderMode:"onscreen",tabs:{total:1,offscreen:0,onscreen:1,suspended:0},pendingApprovals:0,profile:{fingerprint:"0123456789abcdef"},transitions:[]};
+      if(name==="resources.status") return {limits:{maxAgentCommands:8,maxPerClient:4,maxPerTask:2,captureConcurrency:1,captureQueueLimit:8,idleSuspendMinutes:30,memoryBudgetMb:null,maxCaptureEdge:4096},agentCommands:{running:0,byCommand:[]},captures:{running:0,queued:0,jobs:[]},memory:null,suspendedTabs:[],budgets:null};
       if(name.startsWith("update.")) updateCalls.push([name,args]);
       if(name==="update.status") return structuredClone(updateStatus);
       if(name==="update.configure") { updateStatus.automaticChecks.enabled=args.automaticChecks; return structuredClone(updateStatus); }

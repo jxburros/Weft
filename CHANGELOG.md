@@ -31,6 +31,15 @@ alone is not a shipped capability.
   FTS5 secure-delete. GUI: archive coverage, offline preview banner, version
   comparison, redaction editor and export capture policy. Limits: no archived
   HTML redaction, OCR, note/annotation rewriting or erasure of earlier backups.
+- Integrated headless sessions, resume state, tab groups, browsing-data import
+  and resource scheduling (#11, #24, #30, ADR 015) with the credential broker,
+  archives, task runtime, encryption and integration contracts: tabs are never
+  suspended under a protected login, during a capture or workflow recording,
+  or while a runtime task step targets them; task steps take scheduler slots
+  and count against budgets; a locked headless profile reports the lock in
+  `display.status` and on stdout; resume records and tab groups are sealed;
+  `resource_busy` (exit 3) and `budget_exhausted` (exit 4) join the outcome
+  tables as documented exit-code categories.
 - Integrated the durable task runtime, phase vocabulary and workflows (#8,
   #58, #10, ADR 016) with archives/redaction, shared context, encryption and
   integration contracts: task identities keep restricted originals withheld and
@@ -435,6 +444,44 @@ alone is not a shipped capability.
   of uncertain work (reconcile, duplicate-risk retry), workflow editor with
   parameters and JSON steps, run dialog and recording from the current tab.
 - Approval previews withhold sensitive workflow parameter values.
+- Headless sessions and display handoff (#11, ADR 015): `--headless` or
+  `WEFT_HEADLESS=1` runs the same profile, hidden GUI renderer, policies and
+  command catalog with pages rendered offscreen, so reads and captures work
+  without a visible window. A single-instance lock turns a second launch into a
+  display handoff (no restart); `display.status`, `display.show`, `weft attach`
+  and human-only `display.hide` attach and detach. Pending human decisions are
+  reported in `display.status` and on stdout while headless. Pages reload when
+  they move between offscreen and on-screen rendering, and the transition is
+  recorded and disclosed. `--ozone-platform=headless` was evaluated and is
+  unsupported (Electron 44 sizes windows and views at 1×1). SIGINT/SIGTERM now
+  quit cleanly.
+- Resume state, tab groups, tab search and browsing-data import (#24):
+  per-workspace resume records (`resume.get`/`resume.save`: section, active tab,
+  split panes and focused pane, panel layout, pinned resources) with continuation
+  links to blockers, open tasks and handoffs, restore disclosures in the window;
+  tab groups (`tabGroups.*`, `tabs.group`) with named colors shown as text;
+  `tabs.search` and a Ctrl+Shift+A quick switcher with ownership, group, task and
+  suspension indicators; human-only `browsingData.sources/preview/import` for
+  Chromium-family `Bookmarks`/`History`, Firefox `places.sqlite` (containers
+  listed) and Netscape bookmark HTML, previewed with duplicates, unsupported
+  fields and a digest the import must match. Passwords, cookies, sessions,
+  autofill and payment data are never read; SQLite files are copied before
+  reading.
+- Resource scheduling (#30): global, per-client and per-task agent concurrency
+  (`resource_busy`, HTTP 429, CLI exit 3), a bounded capture queue for
+  screenshots, PDFs and artifact captures with progress events, `captures.list`
+  and `captures.cancel`, client run-time and model-spend budgets measured from
+  provider-reported usage and configured prices (`budget_exhausted`, HTTP 429,
+  CLI exit 4; unpriced models are refused under a spend budget), one home for
+  capture and model image limits, `resources.status`, and idle or memory-pressure
+  tab suspension (`tabs.suspend`) that keeps URL, title, scroll and records,
+  restores on use and never suspends leased, task-bound, busy, playing or edited
+  tabs. Human resource limits live in `settings.update` (`resources`).
+- Performance: browser commands no longer copy the whole workspace to look up a
+  workspace, and browser-session and history writes commit only their own rows.
+  `perf/responsiveness.js` measures GUI first render, agent navigation, input and
+  scroll latency, memory and CPU in real Electron with concurrent agents;
+  `test/responsiveness.test.js` enforces generous budgets in the Linux job.
 
 ### Not completed
 
@@ -466,6 +513,15 @@ alone is not a shipped capability.
   Settings golden needs a reviewed update for the changed automation notice.
 - Live-model evals, actual plugin installation in a Claude client and GUI
   first-render performance measurements have not been verified.
+- Live-model evals and actual plugin installation in a Claude client have not
+  been verified. GUI first-render and responsiveness numbers come from Linux
+  under Xvfb with software rendering, not real hardware.
+- Headless sessions, offscreen captures and display handoff were tested on
+  Linux/Xvfb only; macOS and Windows behavior is not verified. Browsing-data
+  import was tested with synthetic profile fixtures, not real browser profiles.
+  Search indexing is not a deferred queue (startup index rebuilds still block
+  opening). The Settings view gained a Display & resources section, so the
+  Linux `settings` golden needs a reviewed update on the reference platform.
 - Installers are unsigned (no signing/notarization credentials). The Windows
   installer was compiled but not built runnable or run; macOS packages, the
   release workflow on GitHub and real updates between published versions have not

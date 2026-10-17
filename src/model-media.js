@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { MODEL_IMAGE_LIMITS } from './resources.js';
 
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-export const IMAGE_LIMITS = Object.freeze({ maxBytes: 4 * 1024 * 1024, maxEdge: 2048, maxImages: 4 });
+// Image resolution limits live in one place (src/resources.js) with the capture limits.
+export const IMAGE_LIMITS = MODEL_IMAGE_LIMITS;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
 /** Read PNG dimensions from IHDR without decoding pixels. */

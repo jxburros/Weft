@@ -15,16 +15,23 @@ import { Knowledge } from './knowledge.js';
 import { LOCK_EXEMPT } from './encryption-commands.js';
 import { lockedError } from './encryption.js';
 import { TaskRuntime, RUNTIME_COMMANDS } from './task-runtime.js';
+import { ResourceScheduler } from './resources.js';
+import { ResumeService } from './resume.js';
+import { executeBrowsingCommand } from './browsing-import.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'captures.cancel'];
 // Commands that page natively; every other pageable command is paged here from its full list.
 const NATIVE_PAGED = new Set(['search.query', 'conversations.messages', 'artifacts.versions', 'transfers.list']);
 const DEADLINE = Symbol('deadline');
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
+  // Agent concurrency, capture queue and budgets apply to every caller (#30), including task-runtime steps.
+  // A locked encrypted profile has no settings to read; the defaults apply until unlock.
+  scheduler ??= new ResourceScheduler({ settings: () => (workspace?.locked ? {} : workspace?.data?.settings) ?? {}, onEvent });
+  resume ??= new ResumeService({ workspace, browser });
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
   // The credential broker contributes task-grant evidence and the approval preview for credentials.fill; nothing else.
@@ -94,6 +101,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (workspace?.locked && !LOCK_EXEMPT.has(command)) throw lockedError(workspace.encryption?.lockReason ?? 'locked');
     // The stopped-state latch refuses before any handler runs: nothing started.
     try { admission.assertAutomationAdmitted(context.actor, command); } catch (error) { error.notStarted = true; throw error; }
+    // One concurrency slot per top-level agent command; nested plugin/hook reads reuse it.
+    if (!context.slotHeld) { context.slotHeld = true; state.release = scheduler.admit(command, context); }
     if (context.clientId) {
       const grant = clients.current?.(context.clientId);
       // A task-bound grant names its task; the task runtime supplies the task a step belongs to.
@@ -112,6 +121,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       if (context.signal?.aborted) throw Object.assign(new Error('The request deadline passed before the command started'), { code: 'deadline_exceeded', notStarted: true, details: { started: false, effect: 'not_started' } });
       context.markStarted?.();
       if (command === 'guide.get') return getGuidance(validated.topic);
+      if (command.startsWith('display.')) {
+        if (!display) throw Object.assign(new Error('Display controls are available only in the Weft application'), { code: 'unavailable' });
+        return display.execute(command, validated, context);
+      }
       return workspace.executeEncryption(command, validated, context);
     }
     const resolved = resolveCommandTargets(command, validated, context, { workspace, browser, commands, transfers });
@@ -135,6 +148,11 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       clients?.assertAllowed(command, context, { workspaceId: target.workspaceId, workspaceIds: authority.touchedWorkspaces(command, args, target),
         actionClass: spec.actionClass, ...(spec.dataClasses ? { dataClasses: spec.dataClasses } : {}), recheck: true });
     };
+    if (context.clientId) {
+      // Cost and time budgets are checked after the authority gate so out-of-scope requests are still reported as denials.
+      try { clients?.assertBudgets?.(context.clientId, command, { pricing: command === 'chat.send' ? providers?.profiles?.find(profile => profile.id === args.modelId)?.pricing : undefined }); }
+      catch (error) { authority.restoreApproval(decision, { command, context, target, error }); throw error; }
+    }
     authority.recordAttempt({ command, args, context, target, decision });
     const scopedWorkspaces = () => workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
     // Workspace-queued commands mark their own start when dequeued; everything else starts here.
@@ -194,7 +212,12 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     catch (error) { authority.restoreApproval(decision, { command: 'batch.execute', context, target, error }); throw error; }
   };
 
-  const route = async (command, args, context, target) => {
+  /** Costly captures run through the bounded queue; everything else routes directly. */
+  const route = (command, args, context, target) => scheduler.isCapture(command)
+    ? scheduler.capture({ command, context, workspaceId: target.workspaceId, tabId: target.tabId }, () => routeCommand(command, args, context, target))
+    : routeCommand(command, args, context, target);
+
+  const routeCommand = async (command, args, context, target) => {
     const call = async (nested, input) => {
       const nestedContext = { ...context };
       const value = await execute(nested, input, nestedContext);
@@ -240,6 +263,21 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);
     if (knowledge.handles(command)) return knowledge.execute(command, args, context);
     if (runtimeCommands.has(command)) return tasks.execute(command, args, context);
+    if (command.startsWith('resume.') || command.startsWith('tabGroups.')) return resume.execute(command, args, context);
+    if (command.startsWith('browsingData.')) return executeBrowsingCommand(command, args, context, { workspace });
+    if (command.startsWith('display.')) {
+      if (!display) throw Object.assign(new Error('Display controls are available only in the Weft application'), { code: 'unavailable' });
+      return display.execute(command, args, context);
+    }
+    if (command === 'resources.status') {
+      const visible = tab => !context.workspaceIds || context.workspaceIds.includes(tab.workspaceId);
+      return { ...scheduler.status(context), memory: browser?.memoryStatus ?? null,
+        suspendedTabs: [...(browser?.tabs?.values() ?? [])].filter(tab => tab.suspended && visible(tab)).map(tab => ({ tabId: tab.id, workspaceId: tab.workspaceId, at: tab.suspended.at, reason: tab.suspended.reason })),
+        budgets: context.clientId ? clients?.budgetStatus?.(context.clientId) ?? null : null,
+        notes: ['Idle suspension never touches leased, task-bound, busy, playing or edited tabs; a suspended tab reloads when opened or used.', 'Search indexing is incremental inside each record transaction rather than a deferred job.'] };
+    }
+    if (command === 'captures.list') return scheduler.list(context.workspaceIds ? { workspaceIds: context.workspaceIds, ...(args.workspaceId && { workspaceId: args.workspaceId }) } : args.workspaceId ? { workspaceId: args.workspaceId } : {});
+    if (command === 'captures.cancel') return scheduler.cancel(args.jobId, context);
     if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
     if (command === 'browser.emergencyStop' && context.actor === 'human') {
       admission.stop();
@@ -310,6 +348,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     const context = { actor: 'automation', ...identity };
     const target = { workspaceId: null, tabId: null };
     const state = { name, started: false };
+    const began = Date.now();
     context.markStarted = () => { state.started = true; };
     let outcome;
     if (deadlineMs !== undefined && deadlineMs !== null) {
@@ -324,9 +363,18 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         else upstream?.addEventListener('abort', () => controller.abort(upstream.reason), { once: true });
         context.signal = controller.signal;
         context.abortForDeadline = () => controller.abort(Object.assign(new Error('Request deadline exceeded'), { code: 'deadline_exceeded' }));
-        outcome = await withDeadline(deadlineMs, context, state, () => executeOutcome((command, validated) => { state.command = command; return run(command, validated, context, target, state); }, name, input));
+        try { outcome = await withDeadline(deadlineMs, context, state, () => executeOutcome((command, validated) => { state.command = command; return run(command, validated, context, target, state); }, name, input)); }
+        finally { state.release?.(); }
       }
-    } else outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input);
+    } else {
+      try { outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input); }
+      finally { state.release?.(); }
+    }
+    if (context.clientId && state.decision) {
+      // Measured consumption: run time for every admitted command, spend only from provider-reported usage and a configured price.
+      const cost = outcome.command === 'chat.send' ? outcome.result?.cost ?? null : null;
+      clients?.recordConsumption?.(context.clientId, { runtimeMs: Date.now() - began, cost: cost && { amount: cost.amount, currency: cost.currency }, unpriced: outcome.command === 'chat.send' && outcome.execution === 'succeeded' && !cost });
+    }
     outcome.workspaceId = target.workspaceId ?? outcome.workspaceId;
     outcome.tabId = target.tabId ?? outcome.tabId;
     if (context.workspaceIds && outcome.workspaceId && !context.workspaceIds.includes(outcome.workspaceId)) {
@@ -365,6 +413,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     return outcome;
   };
   dispatch.authority = authority;
+  dispatch.scheduler = scheduler;
+  dispatch.resume = resume;
   dispatch.plugins = plugins;
   dispatch.knowledge = knowledge;
   dispatch.tasks = tasks.attach({ dispatch, authority, providers, clients, browser, admission });

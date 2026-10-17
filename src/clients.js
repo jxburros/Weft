@@ -20,6 +20,10 @@ const grantFields = {
   autonomy: z.enum(AUTONOMY_LEVELS).default('scoped'),
   maxCommands: z.number().int().min(1).max(1000000).nullable().default(null),
   maxPerMinute: z.number().int().min(1).max(10000).nullable().default(null),
+  // Resource budgets (#30): total model spend measured from provider-reported usage and configured prices, and total command run time.
+  maxCost: z.strictObject({ amount: z.number().min(0).max(1000000).describe('Spend limit in the currency of the configured model prices.'), currency: z.string().regex(/^[A-Z]{3}$/).describe('ISO currency code.') }).nullable().default(null)
+    .describe('Model spend budget; model connections without a configured price are refused while it is set.'),
+  maxRuntimeSeconds: z.number().int().min(1).max(31536000).nullable().default(null).describe('Total command run time this grant may use.'),
   taskId: z.string().min(1).max(128).nullable().default(null),
 };
 const optionalFields = Object.fromEntries(Object.entries(grantFields).map(([key, field]) => [key, field.removeDefault ? field.removeDefault().optional() : field.optional()]));
@@ -33,7 +37,9 @@ export const clientCommandDefinitions = {
 };
 const schemas = Object.fromEntries(Object.entries(clientCommandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));
 const grantSchema = z.strictObject({ clientId: id, name: z.string().max(100), ...Object.fromEntries(Object.entries(grantFields).map(([key, field]) => [key, field.removeDefault ? field.removeDefault() : field])),
-  expiresAt: z.number().int(), revoked: z.boolean(), createdAt: z.number().int(), updatedAt: z.number().int().optional(), usage: z.strictObject({ count: z.number().int().min(0), lastUsedAt: z.number().int().nullable() }) });
+  expiresAt: z.number().int(), revoked: z.boolean(), createdAt: z.number().int(), updatedAt: z.number().int().optional(), usage: z.strictObject({ count: z.number().int().min(0), lastUsedAt: z.number().int().nullable(),
+    runtimeMs: z.number().min(0).optional(), cost: z.strictObject({ amount: z.number().min(0), currency: z.string().regex(/^[A-Z]{3}$/) }).nullable().optional(), unpricedTurns: z.number().int().min(0).optional() }) });
+const exhausted = (message, details) => Object.assign(new Error(message), { code: 'budget_exhausted', notStarted: true, details });
 const denied = (message, reason = 'client_scope') => Object.assign(new Error(message), { code: 'permission_required', details: { authority: { decision: 'deny', reason } } });
 const equal = (a, b) => {
   const left = Buffer.from(a || ''), right = Buffer.from(b || '');
@@ -59,7 +65,8 @@ export class ClientGrants {
     try {
       const saved = JSON.parse(readFileSync(this.path, 'utf8'));
       if (![1, 2].includes(saved.version) || !Array.isArray(saved.grants)) throw new Error('Invalid client grant store');
-      this.grants = saved.grants.map(value => grantSchema.parse(saved.version === 1 ? migrateGrant(value) : value));
+      // Budget fields were added later; older grants have none.
+      this.grants = saved.grants.map(value => grantSchema.parse({ maxCost: null, maxRuntimeSeconds: null, ...(saved.version === 1 ? migrateGrant(value) : value) }));
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
   save() {
@@ -155,6 +162,42 @@ export class ClientGrants {
       const window = (this.rate.get(grant.clientId) || []).filter(time => time > this.clock() - 60000);
       if (window.length >= grant.maxPerMinute) throw denied('Client rate limit reached; retry later', 'rate_limit');
     }
+  }
+  /**
+   * Cost and time budgets, checked before a command starts. Spend is measured only from provider-reported
+   * tokens and a configured price, so with a cost budget an unpriced model connection is refused, never guessed.
+   */
+  assertBudgets(clientId, command, { pricing } = {}) {
+    const grant = this.current(clientId);
+    if (!grant) return;
+    const runtime = grant.usage.runtimeMs ?? 0;
+    if (grant.maxRuntimeSeconds !== null && runtime >= grant.maxRuntimeSeconds * 1000) {
+      throw exhausted(`This client used its ${grant.maxRuntimeSeconds} s run-time budget; a person can raise it`, { budget: 'runtime', limit: grant.maxRuntimeSeconds, used: Math.round(runtime / 1000), unit: 'seconds' });
+    }
+    if (grant.maxCost && command === 'chat.send') {
+      const spent = grant.usage.cost?.amount ?? 0;
+      if (spent >= grant.maxCost.amount) throw exhausted(`This client spent its ${grant.maxCost.amount} ${grant.maxCost.currency} model budget; a person can raise it`, { budget: 'cost', limit: grant.maxCost.amount, used: spent, unit: grant.maxCost.currency });
+      if (!pricing) throw exhausted('This client has a model spend budget, but the selected model connection has no configured price, so spend cannot be measured', { budget: 'cost', limit: grant.maxCost.amount, used: spent, unit: grant.maxCost.currency, reason: 'unpriced_model' });
+      if (pricing.currency !== grant.maxCost.currency) throw exhausted(`The model is priced in ${pricing.currency}, but this client's budget is in ${grant.maxCost.currency}`, { budget: 'cost', limit: grant.maxCost.amount, used: spent, unit: grant.maxCost.currency, reason: 'currency_mismatch' });
+    }
+  }
+  /** Record time and provider-measured spend after a command. Persisted only for grants with budgets. */
+  recordConsumption(clientId, { runtimeMs = 0, cost = null, unpriced = false } = {}) {
+    const grant = this.grants.find(item => item.clientId === clientId);
+    if (!grant) return;
+    grant.usage.runtimeMs = (grant.usage.runtimeMs ?? 0) + Math.max(0, runtimeMs);
+    if (cost && Number.isFinite(cost.amount)) {
+      const previous = grant.usage.cost;
+      grant.usage.cost = { amount: Math.round(((previous?.currency === cost.currency ? previous.amount : 0) + cost.amount) * 1e6) / 1e6, currency: cost.currency };
+    }
+    if (unpriced) grant.usage.unpricedTurns = (grant.usage.unpricedTurns ?? 0) + 1;
+    if (grant.maxRuntimeSeconds !== null || grant.maxCost) this.save();
+  }
+  budgetStatus(clientId) {
+    const grant = this.current(clientId);
+    if (!grant) return null;
+    return { actions: { used: grant.usage.count, limit: grant.maxCommands }, runtime: { usedSeconds: Math.round((grant.usage.runtimeMs ?? 0) / 1000), limitSeconds: grant.maxRuntimeSeconds },
+      cost: { used: grant.usage.cost ?? null, limit: grant.maxCost, basis: 'Configured price × provider-reported tokens; not a bill.' }, perMinute: grant.maxPerMinute };
   }
   /** The live grant, so scope changes and revocation apply to the next command even for long-lived contexts. */
   current(clientId) { const grant = this.grants.find(item => item.clientId === clientId); return this.live(grant) ? grant : null; }

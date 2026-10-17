@@ -83,6 +83,10 @@ add('administration', 'search.configureEmbeddings');
 // Workspace encryption (#26, ADR 014): status is a metadata read that works while locked; the lifecycle is human-only.
 add('local_read', 'encryption.status');
 add('administration', 'encryption.enable encryption.lock encryption.unlock encryption.configure encryption.rotate encryption.checkRecoveryKey encryption.disable');
+// Resume state, tab groups and search (#24); scheduling, suspension and capture queue (#30); display handoff (#11).
+add('local_read', 'resume.get tabGroups.list tabs.search resources.status captures.list display.status');
+add('local_write', 'resume.save tabGroups.create tabGroups.update tabGroups.delete tabs.group tabs.suspend captures.cancel display.show');
+add('administration', 'display.hide browsingData.sources browsingData.preview browsingData.import');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -131,9 +135,9 @@ export function sensitiveCategoriesForCommand(name) {
 /** Resource a command writes: decides which client write scope applies. Derived from namespace so new commands are covered. */
 export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
-  if (['tabs', 'page', 'downloads'].includes(namespace) || name === 'credentials.fill') return 'tabs';
+  if (['tabs', 'page', 'downloads', 'captures'].includes(namespace) || name === 'credentials.fill') return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
-  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions'].includes(namespace)) return 'browser';
+  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions', 'display', 'browsingData'].includes(namespace)) return 'browser';
   return 'records';
 }
 
@@ -152,6 +156,7 @@ const dataOverrides = {
   'weft.capabilities': [], 'search.status': [], 'events.list': ['activity'], 'transfers.list': [], 'conversations.messages': ['conversations'],
   'transfers.read': ['workspace_records', 'page_capture'],
   'encryption.status': [],
+  'tabs.search': ['workspace_records'], 'display.status': [], 'resources.status': [], 'captures.list': [],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];

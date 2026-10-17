@@ -82,6 +82,10 @@
   --border-strong: #a9a0a8;
   --shadow-subtle: 0 1px 3px #30273908;
   --backdrop: #27212c55;
+  --group-sky: #3f6f8f;
+  --group-sand: #8a6d2f;
+  --group-rose: #a2496b;
+  --group-slate: #5a6470;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -107,6 +111,10 @@
   --border-strong: #827787;
   --shadow-subtle: 0 1px 3px #0003;
   --backdrop: #100c18aa;
+  --group-sky: #9cc3dd;
+  --group-sand: #dcc18a;
+  --group-rose: #e5a3bd;
+  --group-slate: #b4bdc8;
   color-scheme: dark;
 }
 @media (prefers-reduced-motion: reduce) {

@@ -24,6 +24,10 @@ import { eventCommandDefinitions } from './events.js';
 import { capabilityCommandDefinitions } from './capabilities.js';
 import { PAGEABLE, pageField } from './pagination.js';
 import { encryptionCommandDefinitions } from './encryption-commands.js';
+import { resourceCommandDefinitions } from './resources.js';
+import { resumeCommandDefinitions } from './resume.js';
+import { displayCommandDefinitions } from './display.js';
+import { browsingCommandDefinitions } from './browsing-import.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -57,6 +61,12 @@ const definitions = {
   'tabs.move': ['Reopen a tab in another workspace isolated container', { tabId: tabId.unwrap(), workspaceId: workspaceId.unwrap(), expectedVersion }],
   'tabs.pin': ['Pin or unpin a tab', { tabId: tabId.unwrap(), pinned: z.boolean(), expectedVersion }],
   'tabs.duplicate': ['Duplicate a tab in its workspace', { tabId: tabId.unwrap() }],
+  'tabs.group': ['Put a tab in a tab group of its workspace, or remove it from its group with null', { tabId: tabId.unwrap(),
+    groupId: z.string().min(1).max(128).nullable().describe('Tab group id from tabGroups.list; null ungroups the tab.') }],
+  'tabs.search': ['Search open tab titles and URLs with group, ownership, task and suspension indicators', {
+    query: z.string().max(500).describe('Words that must all appear in the title, URL or group name; empty lists every tab.'),
+    allWorkspaces: z.boolean().optional().describe('Search every workspace (the person and the unscoped local token only).') }],
+  'tabs.suspend': ['Release an idle background tab renderer, keeping its URL, scroll and records; refused for leased, task-bound, busy, playing or edited tabs', { tabId: tabId.unwrap(), expectedVersion }],
   'tabs.claim': ['Claim tab input control', { tabId: tabId.unwrap(), controller: z.string().min(1).max(100).optional(), expectedVersion }],
   'tabs.takeover': ['Human takes control and revokes old versions', { tabId: tabId.unwrap() }],
   'tabs.release': ['Release tab input control', { tabId: tabId.unwrap() }],
@@ -135,6 +145,10 @@ const definitions = {
   ...eventCommandDefinitions,
   ...capabilityCommandDefinitions,
   ...encryptionCommandDefinitions,
+  ...resourceCommandDefinitions,
+  ...resumeCommandDefinitions,
+  ...displayCommandDefinitions,
+  ...browsingCommandDefinitions,
 };
 // Additive pagination for every potentially large collection (ADR 018).
 for (const name of PAGEABLE) if (definitions[name] && !definitions[name][1].page) definitions[name][1] = { ...definitions[name][1], page: pageField.optional() };
@@ -155,7 +169,8 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'sources.link', 'sources.relink', 'services.create', 'services.update', 'services.setCredential', 'services.revoke', 'services.refresh', 'freshness.configure', ...CREDENTIAL_ADMIN_COMMANDS,
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview', 'search.configureEmbeddings',
   ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status'),
-  'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop']);
+  'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop',
+  'display.hide', ...Object.keys(browsingCommandDefinitions)]);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'collections.read', 'sources.read', 'services.read',
@@ -219,7 +234,7 @@ const suggest = (value, allowed) => allowed.filter(item => typeof item === 'stri
 export const ERROR_HTTP_STATUS = Object.freeze({ unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
   unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
   timeout: 504, deadline_exceeded: 504, not_found: 404, duplicate_risk: 409, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
-  command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422, locked: 423, key_invalid: 422 });
+  command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422, locked: 423, key_invalid: 422, resource_busy: 429, budget_exhausted: 429 });
 /**
  * Stable outcome taxonomy shared by GUI, CLI, MCP and REST. Every outcome carries exactly one
  * `status`; failures derive it from the error code so all surfaces classify a result identically.
@@ -227,9 +242,9 @@ export const ERROR_HTTP_STATUS = Object.freeze({ unauthorized: 401, permission_r
 export const OUTCOME_STATUSES = Object.freeze(['succeeded', 'partial', 'blocked', 'approval_required', 'stale_state', 'conflict', 'unsupported', 'invalid', 'cancelled', 'timed_out', 'failed']);
 export const ERROR_STATUS = Object.freeze({
   invalid_arguments: 'invalid', invalid_json: 'invalid', unknown_command: 'invalid', ambiguous_target: 'invalid', request_too_large: 'invalid', key_invalid: 'invalid',
-  unauthorized: 'blocked', permission_required: 'blocked', locked: 'blocked', human_required: 'blocked', target_mismatch: 'blocked', site_blocked: 'blocked',
+  unauthorized: 'blocked', permission_required: 'blocked', locked: 'blocked', budget_exhausted: 'blocked', human_required: 'blocked', target_mismatch: 'blocked', site_blocked: 'blocked',
   approval_required: 'approval_required', stale_state: 'stale_state',
-  idempotency_conflict: 'conflict', already_committed: 'conflict', duplicate_risk: 'conflict', lease_conflict: 'conflict', tab_busy: 'conflict',
+  idempotency_conflict: 'conflict', already_committed: 'conflict', duplicate_risk: 'conflict', resource_busy: 'conflict', lease_conflict: 'conflict', tab_busy: 'conflict',
   unsupported_capability: 'unsupported', unsupported: 'unsupported', unsupported_media_type: 'unsupported',
   cancelled: 'cancelled', emergency_stop: 'cancelled', action_interrupted: 'cancelled',
   timeout: 'timed_out', deadline_exceeded: 'timed_out',
@@ -306,6 +321,14 @@ export function toCommandError(error, commandName, input) {
       stale: typeof error.details.stale === 'boolean' ? error.details.stale : null, exception: text(error.details.exception), explain: text(error.details.explain, 50) };
   }
   if (code === 'locked' && ['locked', 'unlock_required', 'os_key_unavailable'].includes(error.details?.reason)) details.reason = error.details.reason;
+  // Backpressure and budgets (#30): fixed resource names and numbers only.
+  const count = value => Number.isFinite(value) && value >= 0 ? Math.round(value * 1e6) / 1e6 : null;
+  if (code === 'resource_busy' && error.details) details.busy = { resource: ['agent_commands', 'client', 'task', 'capture_queue'].includes(error.details.resource) ? error.details.resource : null,
+    limit: count(error.details.limit), active: count(error.details.active), queued: count(error.details.queued), retryAfterMs: count(error.details.retryAfterMs) };
+  if (code === 'budget_exhausted' && error.details) details.budget = { budget: ['runtime', 'cost', 'actions'].includes(error.details.budget) ? error.details.budget : null,
+    limit: count(error.details.limit), used: count(error.details.used), unit: typeof error.details.unit === 'string' && /^[A-Za-z]{1,10}$/.test(error.details.unit) ? error.details.unit : null,
+    reason: ['unpriced_model', 'currency_mismatch'].includes(error.details.reason) ? error.details.reason : null };
+  if (code === 'cancelled' && typeof error.details?.jobId === 'string' && /^capture_[0-9a-f-]{36}$/.test(error.details.jobId)) details.jobId = error.details.jobId;
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   if (code === 'unsupported_capability') {
     if (['images', 'tools', 'streaming', 'contextWindow', 'visionFallback', 'embeddings'].includes(error.details?.capability)) details.capability = error.details.capability;
@@ -355,7 +378,7 @@ export function normalizeCommand(name, args = {}) {
   return { command, args: output, normalized };
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
-  stale_state: 3, idempotency_conflict: 3, duplicate_risk: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
+  stale_state: 3, idempotency_conflict: 3, duplicate_risk: 3, resource_busy: 3, budget_exhausted: 4, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
   emergency_stop: 6, timeout: 7, deadline_exceeded: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8, locked: 9 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;

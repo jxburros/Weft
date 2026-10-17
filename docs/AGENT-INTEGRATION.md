@@ -40,7 +40,10 @@ Every outcome carries one stable `status`: `succeeded`, `partial`, `blocked`,
 `approval_required`, `stale_state`, `conflict`, `unsupported`, `invalid`,
 `cancelled`, `timed_out` or `failed`. GUI, CLI, REST and MCP derive it from the
 same table, so branch on `status` (and `error.code` for detail) rather than on
-HTTP status or exit code. `partial` means the command completed but its result
+HTTP status or exit code. CLI exit codes are categories, not unique codes: 3 is
+a retryable conflict (stale state, request-ID conflicts, `duplicate_risk`,
+`resource_busy`), 4 is a refusal a person must resolve (authority denials,
+`site_blocked`, `budget_exhausted`) and 9 is `locked`. `partial` means the command completed but its result
 says it is incomplete (for example a length-limited reply or a hybrid search
 that fell back to lexical); never report it as complete. Outcomes of commands that reached the dispatcher also echo
 `request: {apiVersion, requestId, actor, clientId, taskId, deadlineMs}` from your
@@ -300,6 +303,52 @@ application launches (`launches.approve`) are human-only. Agents may read
 prefetch/prerender requests are cancelled for every destination. Browser
 enforcement covers requests made by Weft's Chromium sessions only; your own
 HTTP clients, shells and tools are outside it and need their own controls.
+
+## Headless sessions, limits, queues and suspended tabs
+
+Weft can run headless: start it with `--headless` (or `WEFT_HEADLESS=1`) and it
+uses the same profile, policies, approvals and commands with its window hidden
+and pages rendered offscreen ([ADR-015](decisions/015-headless-resume-and-resource-scheduling.md)).
+`display.status` reports whether a person can see the window and how many agent
+requests wait for a human decision. Approvals still need a person: report the
+`approvalId` and ask them to show the window, which you can also request:
+
+```sh
+weft display.status
+weft attach
+```
+
+Showing or hiding the window reloads the affected pages (Chromium cannot move a
+live offscreen page into a window), so tab versions advance: inspect again.
+Hiding the window is human-only.
+
+Agents share bounded resources. When a global, per-client or per-task
+concurrency limit is reached, or the capture queue is full, the outcome is
+`resource_busy` (HTTP 429, CLI exit 3) with `error.details.busy` naming the
+resource and `retryAfterMs`; wait and retry rather than switching interfaces.
+Screenshots, PDFs and artifact captures run through a queue; list and cancel
+your jobs:
+
+```json
+{"command":"captures.cancel","args":{"jobId":"capture_00000000-0000-4000-8000-000000000000"}}
+```
+
+A cancelled or discarded capture is not evidence. When a person set a run-time
+or model-spend budget on your connection and it is spent, the outcome is
+`budget_exhausted` (HTTP 429, CLI exit 4) with `error.details.budget`; with a
+spend budget, a model connection without a configured price is refused because
+its spend cannot be measured. `resources.status` shows limits, running and queued
+work and your budgets. Task-runtime steps take a slot and count against budgets
+like your own commands (a busy step pauses the task; a spent budget pauses it with
+a `grant` blocker), while reads a plugin or export hook makes for your command
+reuse its slot.
+
+Idle background tabs may be suspended. A suspended tab keeps its id, URL, title,
+ownership and group; using it reloads the page (sites may ask to sign in again,
+unsent input is gone) and `page.inspect` reports `restored`. Agents may suspend only tabs nobody holds (`lease_conflict` otherwise); `tabs.suspend`
+refuses tabs that are leased, linked to an open task, busy, playing media or
+holding edited form fields and lists why. `tabs.search` finds tabs by title, URL
+or group, and `resume.get` lists blockers, open tasks and handoffs to continue.
 
 ## Updates
 

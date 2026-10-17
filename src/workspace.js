@@ -58,12 +58,15 @@ const EXPORT_EXCLUDED = Object.freeze(['Browser sessions, tabs, cookies and site
   'Approvals, autonomy ceilings and agent connection grants: authority is never transferred with data',
   'Shared collection participants and roles: grants to other workspaces are authority and must be given again',
   'Linked file and folder contents and local paths, service credentials and cached service content: relink or refresh after import',
-  'Scheduled freshness check settings']);
+  'Scheduled freshness check settings',
+  'Tab groups and the last-view resume record: they describe this profile’s open tabs and layout, not project records']);
 /** Workspace-scoped collections handled outside recordShapes: shared collections, evidence conflicts and freshness policies. */
 const KNOWLEDGE_COLLECTIONS = Object.freeze(['sharedCollections', 'conflicts', 'freshnessPolicies']);
 const PLAINTEXT_EXPORT = 'Exported from an encrypted profile: this export is NOT encrypted. Store or share it accordingly.';
 // Workspace-scoped profile state that is deliberately not part of the export format (listed above with the reason).
-const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists', 'freshnessPolicies']);
+const NOT_EXPORTED = new Set(['storagePolicies', 'siteLists', 'freshnessPolicies', 'tabGroups', 'resumeStates']);
+// Workspace-scoped view state removed with its workspace.
+const VIEW_STATE = ['tabGroups', 'resumeStates'];
 
 export function sanitizeUrl(value) {
   try {
@@ -114,7 +117,7 @@ function createWorkspace(name = 'My workspace') {
 }
 function initialState() {
   const initial = createWorkspace();
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [],
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [], tabGroups: [], resumeStates: [],
     ...Object.fromEntries(KNOWLEDGE_COLLECTIONS.map(name => [name, []])) };
 }
 /** Version metadata without content. Agents see restricted originals as withheld stubs that name their sanitized derivatives. */
@@ -258,6 +261,8 @@ export class WorkspaceService {
       // One phase vocabulary (ADR 016): the older `waiting` task state is `waiting_on_human`.
       const legacyTasks = (data.tasks ?? []).filter(task => task.status === 'waiting');
       for (const task of legacyTasks) { task.status = 'waiting_on_human'; appendTimeline(task, { type: 'transition', from: 'waiting', to: 'waiting_on_human', actor: 'system', reason: 'legacy', at: now() }); }
+      // Tab groups and resume records (#24) likewise start empty in older stores.
+      for (const key of VIEW_STATE) if (!Array.isArray(data[key])) data[key] = [];
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
         rejectSecretKeys(migrated);
@@ -335,7 +340,7 @@ export class WorkspaceService {
         const current = this.data.history.filter(item => item.workspaceId === workspaceId);
         if (current.length > 1000) { const remove = new Set(current.slice(0, current.length - 1000).map(item => item.id)); this.data.history = this.data.history.filter(item => !remove.has(item.id)); }
       }
-      this.save();
+      this.save({ only: ['history'] });
     } catch (error) { this.data.history = before; throw error; }
   }
 
@@ -363,11 +368,15 @@ export class WorkspaceService {
   persistSession(session) {
     const before = this.data.browserSession;
     this.data.browserSession = {
-      tabs: session.tabs.map(tab => ({ id: tab.id, workspaceId: tab.workspaceId, url: sanitizeUrl(tab.url) || 'about:blank', title: String(tab.title || '').slice(0, 1000), pinned: Boolean(tab.pinned), version: tab.version || 0, group: String(tab.group || '').slice(0, 100),
+      tabs: session.tabs.map(tab => ({ id: tab.id, workspaceId: tab.workspaceId, url: sanitizeUrl(tab.url) || 'about:blank', title: String(tab.title || '').slice(0, 1000), pinned: Boolean(tab.pinned), version: tab.version || 0,
+        ...(typeof tab.groupId === 'string' && { groupId: tab.groupId.slice(0, 128) }),
+        // A suspended tab is restored unloaded at its saved scroll position (#30).
+        ...(tab.suspended && { suspended: { at: String(tab.suspended.at || '').slice(0, 40), reason: String(tab.suspended.reason || '').slice(0, 60), scrollX: Number(tab.suspended.scrollX) || 0, scrollY: Number(tab.suspended.scrollY) || 0, zoom: Number(tab.suspended.zoom) || 1 } }),
         controller: tab.controller === 'human' ? 'human' : 'available', ...(tab.controller === 'human' && tab.assistant && { assistant: String(tab.assistant).slice(0, 200) }) })),
       activeId: session.activeId ?? null,
     };
-    try { this.save(); } catch (error) { this.data.browserSession = before; throw error; }
+    // Only the session row is written: frequent tab updates never re-serialize every record (#30).
+    try { this.save({ only: ['browserSession'] }); } catch (error) { this.data.browserSession = before; throw error; }
   }
   snapshot({ agent = false } = {}) {
     return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(item => artifactSummary(item, { agent })), materials: this.data.materials.map(withoutFile) };
@@ -789,7 +798,8 @@ export class WorkspaceService {
     }
     if (collection === 'workspaces') return this.mutateWorkspace(action, args, actor, effects);
     if (name === 'settings.update') {
-      this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }) };
+      this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }),
+        ...(args.resources && { resources: { ...this.data.settings.resources, ...args.resources } }) };
       this.log(name, workspaceId, workspaceId, actor);
       return this.data.settings;
     }
@@ -861,7 +871,7 @@ export class WorkspaceService {
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
       if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
       if (this.data.storagePolicies) this.data.storagePolicies = this.data.storagePolicies.filter(item => item.workspaceId !== record.id);
-      for (const key of [...collections, 'activity', 'history', 'handoffs', ...KNOWLEDGE_COLLECTIONS]) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
+      for (const key of [...collections, 'activity', 'history', 'handoffs', ...KNOWLEDGE_COLLECTIONS, ...VIEW_STATE]) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
       // Access granted to the deleted workspace ends with it; the membership stays as history.
       for (const shared of this.data.sharedCollections) for (const member of shared.members ?? []) if (member.workspaceId === record.id && !member.revokedAt) Object.assign(member, { revokedAt: now(), revokedBy: actor, reason: 'workspace deleted' });
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);

@@ -22,7 +22,7 @@ const INPUT_COMMANDS = new Set(['credentials.fill', 'page.navigate', 'page.back'
 const TAB_COMMANDS = name => name.startsWith('page.') || ['artifacts.capture', 'credentials.fill'].includes(name);
 // Refusals that happen before any effect: the step did not run and may be attempted again safely.
 const NOT_STARTED_CODES = new Set(['approval_required', 'permission_required', 'human_required', 'site_blocked', 'stale_state', 'lease_conflict', 'tab_busy', 'ambiguous_target',
-  'target_mismatch', 'invalid_arguments', 'unknown_command', 'not_found', 'idempotency_conflict', 'unsupported_capability', 'locked']);
+  'target_mismatch', 'invalid_arguments', 'unknown_command', 'not_found', 'idempotency_conflict', 'unsupported_capability', 'locked', 'resource_busy', 'budget_exhausted']);
 const INVALIDATION = { unknown_ref: 'ref_not_found', element_detached: 'element_removed', element_changed: 'element_changed' };
 const GRANT_REASONS = new Set(['grant_inactive', 'usage_limit', 'rate_limit', 'task_closed']);
 const OUTPUTS_STEP = '_outputs';
@@ -744,6 +744,12 @@ export class TaskRuntime {
       // The deadline stopped the step before any effect (or rolled it back): the step can be continued; an uncertain effect falls through below.
       why = 'deadline_exceeded'; opStatus = notStarted ? 'not_started' : 'interrupted';
       blocker = { kind: 'deadline', stepId: step.id, message: `The step's ${step.deadlineMs ?? ''} ms deadline passed ${notStarted ? 'before it started' : `and it was ${error.details?.effect === 'rolled_back' ? 'rolled back' : 'stopped'}`}. Continue to try again, or redirect the step.` };
+    } else if (code === 'budget_exhausted') {
+      // The task identity's grant budget (ADR 015) is spent: like an expired grant, a person renews it and continues.
+      why = 'grant_inactive';
+      blocker = { kind: 'grant', stepId: step.id, reason: 'budget_exhausted', message: `The task’s identity has used its ${error.details?.budget?.budget ?? ''} budget. A person renews the grant or reassigns the task, then continues it.` };
+    } else if (code === 'resource_busy') {
+      blocker = { kind: 'resource_busy', stepId: step.id, message: `Weft is busy (${error.details?.busy?.resource ?? 'resources'}); continue the task to try the step again.` };
     } else if (/^CLOUD_DISCLOSURE_REQUIRED/.test(error.message ?? '')) {
       phase = 'waiting_on_human'; why = 'disclosure_required';
       blocker = { kind: 'disclosure', stepId: step.id, message: 'Review what this model step sends (chat.preview), then continue with disclosureAck to acknowledge the destination.' };

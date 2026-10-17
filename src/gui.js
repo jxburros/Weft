@@ -91,6 +91,8 @@ let tabs = [],
   filter = "",
   taskFilter = "",
   splitTabId = null,
+  focusedPane = "primary",
+  lastAutomation = null,
   refreshPromise = null,
   lastSnapshot = "",
   toastTimer,
@@ -277,12 +279,15 @@ function theme() {
   $("theme-toggle").innerHTML = icon(dark ? "sun" : "moon");
 }
 function renderSafetyNotices(automation) {
+  automation = automation ?? lastAutomation;
+  lastAutomation = automation;
   const notices = $("safety-notices");
   const pending = Number(automation?.pendingApprovals) || 0;
   notices.innerHTML = (pending ? `<div class="safety-notice"><strong>${pending} agent request${pending === 1 ? " needs" : "s need"} your decision.</strong> Agent actions wait until you approve or reject them here; page text cannot approve them. ${action("section", "Review requests", "", 'data-section="approvals"', "secondary")}</div>` : "") + (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
     (state.storageWarnings || []).map(w => `<div class="safety-notice"><strong>Storage warning:</strong> ${esc(w.message)}${w.file ? ` <span>${esc(w.file)}</span>` : ""}</div>`).join("") +
     ((() => { const uncertain = (state.tasks || []).filter((t) => t.status === "uncertain"); return uncertain.length ? `<div class="safety-notice"><strong>${uncertain.length} task${uncertain.length === 1 ? " has" : "s have"} work with an unknown outcome.</strong> Nothing is retried until you record what happened. ${action("task-detail", "Review", "", `data-id="${esc(uncertain[0].id)}"`, "secondary")}</div>` : ""; })()) +
-    (recordingTab ? `<div class="safety-notice"><strong>Recording your actions in this tab.</strong> Typed values are never saved. ${action("stop-recording", "Stop recording", "stop", "", "secondary")}</div>` : "");
+    (recordingTab ? `<div class="safety-notice"><strong>Recording your actions in this tab.</strong> Typed values are never saved. ${action("stop-recording", "Stop recording", "stop", "", "secondary")}</div>` : "") +
+    (restoreNotices.length ? `<div class="safety-notice" id="restore-notice"><strong>Your workspace was restored.</strong> ${restoreNotices.map(esc).join(" ")} ${action("dismiss-restore", "Dismiss", "", "", "secondary")}</div>` : "");
   notices.hidden = !notices.innerHTML;
 }
 function renderShell() {
@@ -303,19 +308,14 @@ function renderShell() {
         `<button class="section-link ${section === key ? "active" : ""}" data-action="section" data-section="${key}" ${section === key ? 'aria-current="page"' : ""}>${icon(sectionIcon[key])}<span>${names[key]}</span>${["materials", "tasks", "artifacts"].includes(key) && records(key).length ? `<span class="count">${records(key).length}</span>` : ""}</button>`,
     )
     .join("");
-  $("tabs").innerHTML = visibleTabs()
-    .map(
-      (tab) =>
-        `<div class="tab ${tab.active ? "active" : ""}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span></button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}">×</button></div>`,
-    )
-    .join("");
+  $("tabs").innerHTML = tabStrip();
   $("agent-toggle").innerHTML = icon("spark") + "<span>Ask Weft</span>";
   $("agent-toggle").classList.toggle("active", agentOpen);
   $("agent-toggle").setAttribute("aria-expanded", String(agentOpen));
   $("toggle-sidebar").setAttribute("aria-expanded", String(!$("app").classList.contains("sidebar-collapsed")));
   $("ownership").textContent =
     section === "browse"
-      ? controlStatus(active())
+      ? controlStatus(active()) + focusLabel()
       : "You are in control";
   if (section === "browse" && active()?.warning)
     $("status").textContent = "Site warning: " + active().warning;
@@ -396,6 +396,7 @@ function overview() {
          action("new-task", "Create a task", "plus", "", "text-button"),
        )
  }</section></div>
+ <section class="settings-section" id="resume-panel" aria-label="Continue where you left off" hidden></section>
  ${artifacts.length ? `<section class="settings-section"><div class="section-heading"><h2>Recently saved captures</h2>${action("section", "Open collection", "arrow", 'data-section="artifacts"', "text-button")}</div><div class="record-grid">${artifacts.map(artifactCard).join("")}</div></section>` : ""}<div class="workspace-footnote icon">${icon("lock")} Local by default. Your workspace stays ready for your next session.</div>`;
 }
 function renderContent() {
@@ -516,6 +517,8 @@ function renderContent() {
   if (section === "downloads") loadDownloads();
   if (section === "activity") void loadActivity();
   if (section === "approvals") void loadApprovals();
+  if (section === "overview") void loadResumePanel().catch(() => {});
+  if (section === "settings") void loadDisplayPanel().catch(() => {});
   if (section === "privacy") loadPrivacyPanels();
   if (section === "updates") loadUpdates();
   if (section === "settings") void loadEmbeddingStatus();
@@ -599,17 +602,19 @@ function recordCard(kind, r) {
   const taskActions = kind !== "tasks" ? "" : r.executor || r.plan?.length
     ? action("task-detail", r.executor ? "Open task" : "Review steps", "tasks", `data-id="${esc(r.id)}"`) + (r.executor && ["running", "waiting_on_human", "queued"].includes(r.status) ? action("task-pause", "Pause", "pause", `data-id="${esc(r.id)}"`) : "")
     : action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "");
-  return `<article class="record-card"><div class="card-top"><span class="tag ${kind === "tasks" ? phaseTone(r.status) : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}${["context", "materials"].includes(kind) ? knowledge.badges(kind, r) : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${["context", "materials"].includes(kind) ? knowledge.cardActions(kind, r) : ""}${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${taskActions}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", r.enabled === false ? "Review to enable" : "Run…", "play", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}</div></article>`;
+  return `<article class="record-card"><div class="card-top"><span class="tag ${kind === "tasks" ? phaseTone(r.status) : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}${["context", "materials"].includes(kind) ? knowledge.badges(kind, r) : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${["context", "materials"].includes(kind) ? knowledge.cardActions(kind, r) : ""}${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${taskActions}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", r.enabled === false ? "Review to enable" : "Run…", "play", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}${pinType[kind] ? action("pin-resource", "Pin to overview", "pin", `data-kind="${pinType[kind]}" data-id="${esc(r.id)}"`, "text-button") : ""}</div></article>`;
 }
+const pinType = { materials: "material", tasks: "task", context: "context", conversations: "conversation", workflows: "workflow" };
 function artifactCard(r) {
   const version = r.versions?.at(-1);
-  return `<article class="record-card"><div class="card-top"><span class="tag sage">Saved capture</span><span class="muted">v${r.versions?.length || 1}</span></div><div class="empty-icon icon">${icon("artifacts")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.note || "An offline reference saved to this workspace.", 100))}</p><div class="record-meta">${esc(host(version?.url || version?.sourceUrl || r.url))} · ${date(version?.createdAt || r.createdAt)}</div><div class="inline-actions">${action("view-artifact", "View capture", "artifacts", `data-id="${esc(r.id)}"`)}${action("recapture", "New version", "reload", `data-id="${esc(r.id)}"`)}</div></article>`;
+  return `<article class="record-card"><div class="card-top"><span class="tag sage">Saved capture</span><span class="muted">v${r.versions?.length || 1}</span></div><div class="empty-icon icon">${icon("artifacts")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.note || "An offline reference saved to this workspace.", 100))}</p><div class="record-meta">${esc(host(version?.url || version?.sourceUrl || r.url))} · ${date(version?.createdAt || r.createdAt)}</div><div class="inline-actions">${action("view-artifact", "View capture", "artifacts", `data-id="${esc(r.id)}"`)}${action("recapture", "New version", "reload", `data-id="${esc(r.id)}"`)}${action("pin-resource", "Pin to overview", "pin", `data-kind="artifact" data-id="${esc(r.id)}"`, "text-button")}</div></article>`;
 }
 function tabTable() {
-  return `<table class="tabs-table"><thead><tr><th>PAGE</th><th>CONTROL</th><th>ACTIONS</th></tr></thead><tbody>${visibleTabs()
+  const groups = records("tabGroups");
+  return `<div class="inline-actions">${action("new-group", "New tab group", "plus")}${action("search-tabs", "Search tabs", "search")}</div><table class="tabs-table"><thead><tr><th>PAGE</th><th>GROUP</th><th>CONTROL</th><th>ACTIONS</th></tr></thead><tbody>${visibleTabs()
     .map(
       (t) =>
-        `<tr><td>${esc(displayTitle(t))}<small>${esc(short(t.url, 70))}</small></td><td>${esc(controlLabel(t))}<small>Version ${t.version || 1}${t.activity ? " · running " + esc(t.activity.command) + " for " + esc(t.activity.actor) : ""}${t.queued?.length ? " · " + t.queued.length + " queued" : ""}${t.lastBoundary?.interrupted?.length ? " · could not cancel " + esc(t.lastBoundary.interrupted.map((a) => a.command).join(", ")) : ""}</small></td><td><div class="inline-actions">${action("activate-tab", "Open", "", 'data-id="' + t.id + '"')}${action("pin-tab", t.pinned ? "Unpin" : "Pin", "pin", `data-id="${t.id}"`)}${t.controlMode !== "you-drive" ? action("takeover", "You drive", "", 'data-id="' + t.id + '"') : ""}${t.controlMode !== "assist" ? action("control-mode", "Assist", "", `data-id="${t.id}" data-mode="assist"`) : ""}${!["agent-drives", "available"].includes(t.controlMode) ? action("control-mode", "Let an agent drive", "", `data-id="${t.id}" data-mode="agent-drives"`) : ""}</div></td></tr>`,
+        `<tr><td>${esc(displayTitle(t))}<small>${esc(short(t.url, 70))}${t.suspended ? " · Suspended (reloads when opened)" : ""}</small></td><td><select id="tab-group-${t.id}" class="tab-group-select" data-tab="${t.id}" aria-label="Group for ${esc(displayTitle(t))}"><option value="">No group</option>${groups.map((g) => `<option value="${esc(g.id)}" ${t.groupId === g.id ? "selected" : ""}>${esc(g.name)} (${esc(groupColors[g.color] || g.color)})</option>`).join("")}</select></td><td>${esc(controlLabel(t))}<small>Version ${t.version || 1}${t.activity ? " · running " + esc(t.activity.command) + " for " + esc(t.activity.actor) : ""}${t.queued?.length ? " · " + t.queued.length + " queued" : ""}${t.lastBoundary?.interrupted?.length ? " · could not cancel " + esc(t.lastBoundary.interrupted.map((a) => a.command).join(", ")) : ""}</small></td><td><div class="inline-actions">${action("activate-tab", "Open", "", 'data-id="' + t.id + '"')}${action("pin-tab", t.pinned ? "Unpin" : "Pin", "pin", `data-id="${t.id}"`)}${t.controlMode !== "you-drive" ? action("takeover", "You drive", "", 'data-id="' + t.id + '"') : ""}${t.controlMode !== "assist" ? action("control-mode", "Assist", "", `data-id="${t.id}" data-mode="assist"`) : ""}${!["agent-drives", "available"].includes(t.controlMode) ? action("control-mode", "Let an agent drive", "", `data-id="${t.id}" data-mode="agent-drives"`) : ""}${!t.active && !t.suspended ? action("suspend-tab", "Suspend", "pause", `data-id="${t.id}"`) : ""}</div></td></tr>`,
     )
     .join("")}</tbody></table>${handoffPanel()}`;
 }
@@ -721,7 +726,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel" aria-live="polite"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests", restricted_original: "Restricted capture originals (each read still needs your approval)" };
@@ -1003,12 +1008,14 @@ function layout() {
       width: Math.floor(box.width),
       height: Math.floor(box.height),
       visible: show,
-      ...(splitTabId ? { splitTabId } : {}),
+      ...(splitTabId ? { splitTabId, focusedPane } : {}),
     })
     .catch(() => {});
 }
-function navigateSection(next) {
+function navigateSection(next, remember = true) {
+  navigationSerial++;
   section = next;
+  if (remember) saveResume({ section: next });
   filter = "";
   taskFilter = "";
   renderShell();
@@ -2200,6 +2207,7 @@ function openAgent() {
   void execute("settings.update", { agentPanelOpen: true }, true).catch(
     () => {},
   );
+  saveResume({ panels: { agentPanelOpen: true } });
   $("app").classList.add("agent-open");
   $("agent-panel").hidden = false;
   renderShell();
@@ -2211,6 +2219,7 @@ function closeAgent() {
   void execute("settings.update", { agentPanelOpen: false }, true).catch(
     () => {},
   );
+  saveResume({ panels: { agentPanelOpen: false } });
   $("app").classList.remove("agent-open");
   $("agent-panel").hidden = true;
   $("agent-toggle").focus();
@@ -2412,6 +2421,162 @@ async function sendChat(e) {
     renderMessages();
   }
 }
+// ---- Resume state, tab groups and tab search (#24) ----------------------------------
+const groupColors = { plum: "Plum", sage: "Sage", clay: "Clay", sky: "Sky", sand: "Sand", rose: "Rose", slate: "Slate" };
+const tabFlags = (t) => [
+  t.controlMode === "agent-drives" ? "Agent drives" : t.controlMode === "assist" ? "Assist" : "",
+  t.suspended ? "Suspended" : "",
+  records("tasks").some((task) => !["completed", "failed", "cancelled"].includes(task.status) && (task.tabIds || []).includes(t.id)) ? "Task" : "",
+].filter(Boolean);
+function tabButton(tab) {
+  const flags = tabFlags(tab);
+  return `<div class="tab ${tab.active ? "active" : ""} ${tab.suspended ? "suspended" : ""}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span>${flags.map((f) => `<span class="tab-flag">${esc(f)}</span>`).join("")}</button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}">×</button></div>`;
+}
+function tabStrip() {
+  const groups = records("tabGroups");
+  const grouped = new Set(groups.map((g) => g.id));
+  const html = groups.map((g) => {
+    const members = visibleTabs().filter((t) => t.groupId === g.id);
+    return `<div class="tab-group group-${esc(g.color)}" role="group" aria-labelledby="group-${esc(g.id)}"><div class="tab-group-header"><button id="group-${esc(g.id)}" data-action="toggle-group" data-id="${esc(g.id)}" aria-expanded="${g.collapsed ? "false" : "true"}"><span class="group-swatch" aria-hidden="true"></span><span>${esc(g.name)}</span><small>${esc(groupColors[g.color] || g.color)} · ${members.length} tab${members.length === 1 ? "" : "s"}</small></button><button class="icon-button" data-action="edit-group" data-id="${esc(g.id)}" aria-label="Edit group ${esc(g.name)}">${icon("more")}</button></div>${g.collapsed ? "" : members.map(tabButton).join("")}</div>`;
+  }).join("");
+  return html + visibleTabs().filter((t) => !t.groupId || !grouped.has(t.groupId)).map(tabButton).join("");
+}
+function groupDialog(group) {
+  const candidates = visibleTabs();
+  formDialog(group ? "Edit tab group" : "New tab group",
+    `${field("Group name", "name", group?.name || "", "text", true)}${choice("Color (shown with its name)", "color", Object.entries(groupColors), group?.color || "plum")}${group ? "" : candidates.length ? `<fieldset><legend>Tabs in this group</legend>${candidates.map((t) => `<label><input type="checkbox" name="tab-${t.id}" value="${t.id}" ${t.active ? "checked" : ""}> ${esc(displayTitle(t))}</label>`).join("")}</fieldset>` : ""}`,
+    async (values) => {
+      if (group) await execute("tabGroups.update", { id: group.id, changes: { name: values.name, color: values.color } }, true);
+      else await execute("tabGroups.create", { workspaceId: ws().id, name: values.name, color: values.color, tabIds: Object.keys(values).filter((k) => k.startsWith("tab-")).map((k) => Number(values[k])) }, true);
+    },
+    { save: group ? "Save group" : "Create group", extra: group ? action("delete-group", "Delete group (tabs stay open)", "", `data-id="${esc(group.id)}"`, "secondary danger") : "" });
+}
+function tabSearch() {
+  openDialog("Search tabs",
+    '<input id="tab-search-query" class="palette-input" role="combobox" aria-expanded="true" aria-controls="tab-search-results" aria-label="Search open tabs by title or address" placeholder="Search tab titles and addresses…"><label class="inline-check"><input type="checkbox" id="tab-search-all"> All workspaces</label><div id="tab-search-results" class="palette-results" role="listbox" aria-label="Matching tabs"></div>',
+    "", true);
+  const draw = async () => {
+    const query = $("tab-search-query")?.value || "";
+    const found = await execute("tabs.search", { workspaceId: ws().id, query, allWorkspaces: !!$("tab-search-all")?.checked }, true);
+    if (!$("tab-search-results")) return;
+    $("tab-search-results").innerHTML = found.results.length ? found.results.map((r) => `<button role="option" class="palette-item tab-result" data-action="open-tab-result" data-id="${r.tabId}" data-ws="${esc(r.workspaceId)}" aria-selected="false">${icon(r.suspended ? "pause" : "globe")}<span class="record-text"><strong>${esc(r.title)}</strong><small>${esc(r.host || r.url)}${r.workspaceId !== ws().id ? " · " + esc(r.workspaceName || "") : ""}</small><small>${[r.control.label, r.group ? `Group: ${r.group.name} (${groupColors[r.group.color] || r.group.color})` : "", ...r.tasks.map((t) => `Task: ${t.title} (${t.status})`), r.suspended ? "Suspended: reloads when opened" : "", r.activity ? `Running ${r.activity.command}` : "", r.pinned ? "Pinned" : ""].filter(Boolean).map(esc).join(" · ")}</small></span></button>`).join("") : '<p class="muted">No matching tabs.</p>';
+  };
+  $("tab-search-query").oninput = () => void draw().catch((e) => toast(errorMessage(e)));
+  $("tab-search-all").onchange = $("tab-search-query").oninput;
+  $("tab-search-query").onkeydown = (e) => { if (e.key === "ArrowDown") { e.preventDefault(); $("tab-search-results").querySelector("button")?.focus(); } if (e.key === "Enter") { e.preventDefault(); $("tab-search-results").querySelector("button")?.click(); } };
+  $("tab-search-results").onkeydown = (e) => {
+    const items = [...$("tab-search-results").querySelectorAll("button")];
+    const index = items.indexOf(document.activeElement);
+    if (["ArrowDown", "ArrowUp"].includes(e.key) && index >= 0) { e.preventDefault(); (items[index + (e.key === "ArrowDown" ? 1 : -1)] || $("tab-search-query")).focus(); }
+  };
+  void draw();
+}
+let resumeTimer;
+let resumePending = {};
+function saveResume(partial) {
+  if (!ws().id) return;
+  resumePending = { ...resumePending, ...partial, ...(partial.panels && { panels: { ...resumePending.panels, ...partial.panels } }) };
+  clearTimeout(resumeTimer);
+  const workspaceId = ws().id;
+  resumeTimer = setTimeout(() => {
+    const body = resumePending;
+    resumePending = {};
+    void window.weft.execute("resume.save", { workspaceId, ...body }).catch(() => {});
+  }, 250);
+}
+const focusLabel = () => (splitTabId ? ` · Focused pane: ${focusedPane === "secondary" ? "right" : "left"}` : "");
+let restoreNotices = [];
+let navigationSerial = 0;
+async function applyResume(announce = false) {
+  // A person who navigates while the saved view loads keeps their choice.
+  const serial = navigationSerial;
+  const resume = await execute("resume.get", { workspaceId: ws().id }, true);
+  if (serial !== navigationSerial) return;
+  splitTabId = resume.view.split.tabId;
+  focusedPane = resume.view.split.focusedPane || "primary";
+  if (resume.view.panels.conversationId) conversationId = resume.view.panels.conversationId;
+  if (resume.view.panels.agentPanelOpen === true && !agentOpen) openAgent();
+  if (resume.view.panels.agentPanelOpen === false && agentOpen) closeAgent();
+  if (resume.view.activeTabId && active()?.id !== resume.view.activeTabId) await execute("tabs.activate", { tabId: resume.view.activeTabId }, true).catch(() => {});
+  const next = resume.view.section === "browse" && !resume.view.activeTabId ? "overview" : resume.view.section;
+  if (announce && resume.tabs.count) restoreNotices = resume.notices;
+  await refresh(true);
+  if (serial === navigationSerial) navigateSection(next, false);
+  renderSafetyNotices(null);
+}
+async function loadResumePanel() {
+  const panel = $("resume-panel");
+  if (!panel) return;
+  const r = await execute("resume.get", { workspaceId: ws().id }, true);
+  if (!$("resume-panel")) return;
+  const open = (link, label) => link.kind === "tabs" ? action("activate-tab", label, "globe", `data-id="${link.id}"`, "text-button") : link.kind === "handoffs" ? action("section", label, "arrow", 'data-section="tasks"', "text-button") : action("edit-record", label, "arrow", `data-kind="${esc(link.kind)}" data-id="${esc(link.id)}"`, "text-button");
+  const row = (title, detail, button) => `<div class="settings-row"><div><strong>${esc(title)}</strong><small>${esc(detail)}</small></div>${button}</div>`;
+  const pinned = r.pinned.map((p) => row(p.title || `Missing ${p.type}`, p.exists ? `Pinned ${p.type}` : "No longer available", p.exists ? open(p.link, "Open") + action("pin-resource", "Unpin", "", `data-kind="${esc(p.type)}" data-id="${esc(p.id)}" aria-pressed="true"`, "text-button") : action("pin-resource", "Remove", "", `data-kind="${esc(p.type)}" data-id="${esc(p.id)}" aria-pressed="true"`, "text-button"))).join("");
+  const blockers = r.continue.blockers.map((t) => row(t.title, `${["waiting", "waiting_on_human"].includes(t.status) ? "Waiting for you" : t.status === "uncertain" ? "Outcome unknown" : t.status}${t.blocker ? " · Blocked: " + short(t.blocker, 80) : ""}${t.nextStep ? " · Next: " + short(t.nextStep, 60) : ""}`, open(t.link, "Continue"))).join("");
+  const handoffs = r.continue.handoffs.map((h) => row(h.objective || h.blocker || "Handoff", `${h.status} · ${h.from} → ${h.to}${h.nextStep ? " · Next: " + short(h.nextStep, 60) : ""}`, open(h.link, "Review"))).join("");
+  // Shown only when there is something to continue, so an empty workspace stays uncluttered.
+  panel.hidden = !(pinned || blockers || handoffs || r.tabs.suspended);
+  panel.innerHTML = `<div class="section-heading"><h2>Continue where you left off</h2><span class="muted micro">${r.saved ? `Last view: ${esc(names[r.view.section] || r.view.section)}` : "Saved as you work"}</span></div>${pinned || blockers || handoffs ? `${pinned ? `<h3 class="micro">Pinned</h3>${pinned}` : ""}${blockers ? `<h3 class="micro">Blockers and waiting tasks</h3>${blockers}` : ""}${handoffs ? `<h3 class="micro">Open handoffs</h3>${handoffs}` : ""}` : "<p>Pin materials, tasks or captures to keep them here. Blocked tasks and open handoffs appear automatically.</p>"}${r.tabs.suspended ? `<small>${r.tabs.suspended} suspended tab${r.tabs.suspended === 1 ? "" : "s"} reload when opened.</small>` : ""}`;
+}
+async function togglePin(type, id) {
+  const r = await execute("resume.get", { workspaceId: ws().id }, true);
+  const current = r.pinned.filter((p) => p.exists).map(({ type, id }) => ({ type, id }));
+  const exists = current.some((p) => p.type === type && String(p.id) === String(id));
+  await execute("resume.save", { workspaceId: ws().id, pinned: exists ? current.filter((p) => !(p.type === type && String(p.id) === String(id))) : [...current, { type, id: type === "tab" ? Number(id) : id }].slice(-50) }, true);
+  toast(exists ? "Removed from the overview." : "Pinned to the overview.");
+  await refresh(true);
+}
+// ---- Display, resources and browsing-data import (#11, #30, #24) -------------------
+async function loadDisplayPanel() {
+  const panel = $("display-panel");
+  if (!panel) return;
+  const [d, r] = await Promise.all([execute("display.status", {}, true), execute("resources.status", {}, true)]);
+  if (!$("display-panel")) return;
+  panel.innerHTML = `<div class="settings-row"><div><strong>${d.windowVisible ? "Window shown" : "Running headless"}</strong><small>${d.launchedHeadless ? "Started without a window. Closing this window keeps Weft running in the background; open pages then reload offscreen." : "Started with a window."}</small><small>Profile ${esc(d.profile.fingerprint)} · ${d.tabs.total} tabs (${d.tabs.suspended} suspended)</small></div><div class="inline-actions">${action("display-hide", "Run in background", "")}${action("quit-weft", "Quit Weft", "", "", "secondary danger")}</div></div><div class="settings-row"><div><strong>Resources</strong><small>${r.agentCommands.running} agent command${r.agentCommands.running === 1 ? "" : "s"} running (limit ${r.limits.maxAgentCommands}) · captures ${r.captures.running} running, ${r.captures.queued} waiting · idle tabs suspend after ${r.limits.idleSuspendMinutes ? r.limits.idleSuspendMinutes + " min" : "never"}${r.memory ? ` · page memory ${r.memory.rendererMemoryMb} MB of ${r.memory.budgetMb} MB` : ""}</small></div>${action("manage-resources", "Limits & queue", "")}</div>`;
+}
+async function manageResources() {
+  const r = await execute("resources.status", {}, true);
+  const limit = (label, name, value, min, max) => `<label>${esc(label)}<input name="${name}" type="number" min="${min}" max="${max}" value="${value ?? ""}"></label>`;
+  const jobs = r.captures.jobs.length ? r.captures.jobs.map((j) => `<div class="settings-row"><div><strong>${esc(j.command)} · ${esc(j.progress)}</strong><small>${esc(j.actor)}${j.tabId ? " · tab " + j.tabId : ""} · queued ${esc(new Date(j.queuedAt).toLocaleTimeString())}${j.error ? " · " + esc(j.error) : ""}</small></div>${["queued", "running"].includes(j.state) ? action("cancel-capture", "Cancel", "", `data-id="${esc(j.id)}"`, "secondary danger") : ""}</div>`).join("") : "<p>No capture jobs.</p>";
+  formDialog("Resource limits",
+    `<p>Agents are refused with “resource busy” when a limit is reached, so they can retry later. Idle background tabs release their page renderer; they reload when opened. Tabs an agent holds, tabs linked to an open task, busy, playing or edited pages are never suspended.</p>${limit("Agent commands at once", "maxAgentCommands", r.limits.maxAgentCommands, 1, 64)}${limit("Per agent connection", "maxPerClient", r.limits.maxPerClient, 1, 32)}${limit("Per task", "maxPerTask", r.limits.maxPerTask, 1, 16)}${limit("Captures at once", "captureConcurrency", r.limits.captureConcurrency, 1, 4)}${limit("Agent captures waiting", "captureQueueLimit", r.limits.captureQueueLimit, 0, 50)}${limit("Suspend idle tabs after (minutes, 0 = never)", "idleSuspendMinutes", r.limits.idleSuspendMinutes, 0, 1440)}${limit("Page memory budget in MB (blank = none)", "memoryBudgetMb", r.limits.memoryBudgetMb, 64, 65536)}${limit("Largest capture edge (px)", "maxCaptureEdge", r.limits.maxCaptureEdge, 16, 8192)}<h3>Capture queue</h3>${jobs}${r.suspendedTabs.length ? `<p>${r.suspendedTabs.length} suspended tab(s).</p>` : ""}`,
+    async (values) => {
+      const resources = Object.fromEntries(Object.entries(values).map(([k, v]) => [k, String(v).trim() === "" ? null : Number(v)]).filter(([k, v]) => v !== null || k === "memoryBudgetMb"));
+      await execute("settings.update", { resources }, true);
+    }, { save: "Save limits", wide: true });
+}
+async function importBrowsingData() {
+  const found = await execute("browsingData.sources", {}, true);
+  let preview = null;
+  openDialog("Import bookmarks and history",
+    `<p>Choose a browser profile or an exported bookmarks file. Weft reads bookmarks and history only.</p><div class="notice">Never imported: ${found.neverImported.map(esc).join("; ")}.</div><fieldset><legend>Source</legend>${found.sources.map((s, i) => `<label><input type="radio" name="source" value="${i}" ${i === 0 ? "checked" : ""}> ${esc(s.browser)} · ${esc(s.profile)}<small>${esc(s.path)}</small></label>`).join("")}<label><input type="radio" name="source" value="file" ${found.sources.length ? "" : "checked"}> Bookmarks file or profile folder</label>${field("Path", "path", "")}${choice("Kind", "kind", [["netscape-html", "Bookmarks .html file"], ["chromium", "Chrome, Edge, Brave or Chromium profile folder"], ["firefox", "Firefox profile folder"]], "netscape-html")}</fieldset><fieldset><legend>Import</legend><label><input type="checkbox" name="include" value="bookmarks" checked> Bookmarks</label><label><input type="checkbox" name="include" value="history" checked> History</label><label><input type="checkbox" name="skipDuplicates" checked> Skip duplicates</label></fieldset><div id="browsing-preview" aria-live="polite"></div>`,
+    action("close-dialog", "Cancel") + action("preview-browsing", "Preview", "search") + '<button class="primary" id="confirm-browsing-import" disabled>Import</button>', true);
+  const spec = () => {
+    const form = $("dialog-content");
+    const pick = form.querySelector('input[name="source"]:checked')?.value;
+    const source = pick && pick !== "file" ? found.sources[Number(pick)] : { kind: form.querySelector('select[name="kind"]').value, path: form.querySelector('input[name="path"]').value.trim() };
+    return { kind: source.kind, path: source.path, include: [...form.querySelectorAll('input[name="include"]:checked')].map((i) => i.value), workspaceId: ws().id };
+  };
+  $("dialog-content").querySelector('[data-action="preview-browsing"]').onclick = async (e) => {
+    e.stopPropagation();
+    try {
+      preview = { args: spec(), result: await execute("browsingData.preview", spec(), true) };
+      const p = preview.result;
+      $("browsing-preview").innerHTML = `<h3>${esc(p.source.profile)}</h3><p>Bookmarks: ${p.bookmarks.found} found, ${p.bookmarks.new} new, ${p.bookmarks.duplicates} duplicates. History: ${p.history.found} visits, ${p.history.new} new, ${p.history.duplicates} duplicates (${esc(p.history.retention)})</p>${p.containers.length ? `<p>Containers found: ${p.containers.map((c) => esc(c.name)).join(", ")}</p>` : ""}${p.unsupported.length ? `<p>Not imported (unsupported fields): ${p.unsupported.map((u) => `${esc(u.field)} (${u.count})`).join(", ")}</p>` : ""}${p.skipped.length ? `<p>Skipped: ${p.skipped.map((s) => `${esc(s.reason)} (${s.count})`).join(", ")}</p>` : ""}${p.notes.map((n) => `<p>${esc(n)}</p>`).join("")}<p>Files read: ${p.source.filesRead.map(esc).join(", ")}</p><div class="notice">${esc(p.disclosure)}</div>${p.bookmarks.sample.length ? `<ul>${p.bookmarks.sample.slice(0, 8).map((b) => `<li>${esc(b.title)} <small>${esc(host(b.url))}${b.duplicate ? " · duplicate" : ""}</small></li>`).join("")}</ul>` : ""}`;
+      $("confirm-browsing-import").disabled = false;
+    } catch (error) { $("form-error").textContent = errorMessage(error); }
+  };
+  $("confirm-browsing-import").onclick = async () => {
+    if (!preview) return;
+    try {
+      const skip = !!$("dialog-content").querySelector('input[name="skipDuplicates"]')?.checked;
+      const result = await execute("browsingData.import", { ...preview.args, previewDigest: preview.result.previewDigest, skipDuplicates: skip }, true);
+      closeDialog();
+      toast(`Imported ${result.imported.bookmarks} bookmarks and ${result.imported.history} visits. Pages load live when opened and may ask you to sign in.`);
+      await refresh(true);
+    } catch (error) { $("form-error").textContent = errorMessage(error); }
+  };
+}
 function selectCommand() {
   const entry = catalog[$("command").value];
   if (!entry) return;
@@ -2505,6 +2670,8 @@ async function openUrl(value) {
         : `https://${url}`;
   }
   section = "browse";
+  navigationSerial++;
+  saveResume({ section });
   renderShell();
   renderContent();
   try {
@@ -2734,7 +2901,8 @@ async function act(button) {
       conversationId = null;
       splitTabId = null;
       if ($("dialog").open) closeDialog();
-      navigateSection("overview");
+      navigateSection("overview", false);
+      await applyResume().catch(() => {});
       if (agentOpen) renderAgent();
       break;
     case "archive-workspace":
@@ -2812,7 +2980,87 @@ async function act(button) {
       break;
     case "activate-tab":
       await execute("tabs.activate", { tabId: Number(id) });
+      saveResume({ activeTabId: Number(id) });
       navigateSection("browse");
+      break;
+    case "open-tab-result": {
+      const target = Number(id);
+      if (button.dataset.ws && button.dataset.ws !== ws().id) {
+        await execute("workspaces.switch", { id: button.dataset.ws });
+        splitTabId = null;
+      }
+      await execute("tabs.activate", { tabId: target });
+      saveResume({ activeTabId: target });
+      navigateSection("browse");
+      break;
+    }
+    case "search-tabs":
+      tabSearch();
+      break;
+    case "new-group":
+      groupDialog();
+      break;
+    case "edit-group":
+      groupDialog(records("tabGroups").find((g) => g.id === id));
+      break;
+    case "toggle-group": {
+      const group = records("tabGroups").find((g) => g.id === id);
+      if (group) await execute("tabGroups.update", { id, changes: { collapsed: !group.collapsed } }, true);
+      await refresh(true);
+      $(`group-${id}`)?.focus();
+      break;
+    }
+    case "delete-group":
+      await execute("tabGroups.delete", { id }, true);
+      closeDialog();
+      await refresh(true);
+      toast("Group deleted. Its tabs stay open.");
+      break;
+    case "suspend-tab": {
+      const result = await execute("tabs.suspend", { tabId: Number(id) }, true);
+      toast(result.suspended ? "Tab suspended. It reloads when you open it." : `This tab was not suspended: ${result.blockedBy.join(", ").replaceAll("_", " ")}.`);
+      await refresh(true);
+      break;
+    }
+    case "pin-resource":
+      await togglePin(kind, id);
+      break;
+    case "dismiss-restore":
+      restoreNotices = [];
+      renderSafetyNotices(null);
+      break;
+    case "focus-pane":
+      focusedPane = focusedPane === "primary" ? "secondary" : "primary";
+      saveResume({ split: { tabId: splitTabId, focusedPane } });
+      closeDialog();
+      renderShell();
+      layout();
+      toast(`Focused pane: ${focusedPane === "secondary" ? "right" : "left"}.`);
+      break;
+    case "display-hide":
+      openDialog("Run Weft in the background?",
+        "<p>The window hides and Weft keeps running with this profile, its policies and the agent API. Open pages reload so they can render without a window: unsent form input and in-page state in them are lost.</p><p>Show the window again with <code>weft attach</code> or by launching Weft. Agent requests that need your decision wait until then.</p>",
+        action("close-dialog", "Cancel") + action("confirm-display-hide", "Hide window", "", "", "primary"));
+      break;
+    case "confirm-display-hide":
+      closeDialog();
+      await execute("display.hide", { confirmReload: true }, true);
+      break;
+    case "quit-weft":
+      await execute("browser.close", {}, true);
+      break;
+    case "manage-resources":
+      await manageResources();
+      break;
+    case "cancel-capture": {
+      const result = await execute("captures.cancel", { jobId: id }, true);
+      toast(result.notice || (result.cancelled ? "Capture cancelled." : "Capture could not be cancelled."));
+      closeDialog();
+      await manageResources();
+      break;
+    }
+    case "import-browsing":
+      await importBrowsingData();
       break;
     case "close-tab":
       await execute("tabs.close", { tabId: Number(id) });
@@ -3223,6 +3471,10 @@ document.addEventListener("change", (event) => {
     void execute("update.configure", { automaticChecks: event.target.checked }, true)
       .then(loadUpdates)
       .catch((e) => toast(errorMessage(e)));
+  if (event.target.classList?.contains("tab-group-select"))
+    void execute("tabs.group", { tabId: Number(event.target.dataset.tab), groupId: event.target.value || null }, true)
+      .then(() => refresh(true))
+      .catch((e) => toast(errorMessage(e)));
   if (event.target.id === "theme-select")
     void execute("settings.update", { theme: event.target.value }).catch(
       () => {},
@@ -3298,12 +3550,14 @@ $("split-view").onclick = () => {
   const other = visibleTabs().find((t) => t.id !== active()?.id);
   if (!other) return toast("Open a second tab to use split view.");
   splitTabId = splitTabId ? null : other.id;
+  focusedPane = "primary";
+  saveResume({ split: { tabId: splitTabId, focusedPane } });
   navigateSection("browse");
 };
 $("page-more").onclick = () =>
   openDialog(
     "Page tools",
-    `<div class="inline-actions">${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
+    `<div class="inline-actions">${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${splitTabId ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
   );
 for (const name of ["back", "forward", "reload", "stop"])
   $(name).onclick = () => void execute(`page.${name}`).catch(() => {});
@@ -3323,7 +3577,8 @@ document.addEventListener("keydown", (e) => {
   if ($("dialog").open) return;
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     const key = e.key.toLowerCase();
-    if (["k", "l", "t", "w", "f", "j"].includes(key)) e.preventDefault();
+    if (["k", "l", "t", "w", "f", "j"].includes(key) || (key === "a" && e.shiftKey)) e.preventDefault();
+    if (key === "a" && e.shiftKey) return tabSearch();
     if (key === "k") palette();
     if (key === "l") {
       $("address").focus();
@@ -3357,6 +3612,8 @@ try {
   );
   $("toggle-sidebar").setAttribute("aria-expanded", String(!state.settings.sidebarCollapsed));
   if (state.settings.agentPanelOpen) openAgent();
+  // Reopen this workspace where it was left (#24) and disclose what a restore cannot bring back.
+  await applyResume(true).catch(() => {});
   setInterval(() => void refresh().catch(() => {}), 1500);
   $("status").textContent = "Ready";
 } catch (error) {
