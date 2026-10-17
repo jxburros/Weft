@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { rejectSecretKeys } from './export-safety.js';
-import { handoffCommandDefinitions } from './handoff-commands.js';
+import { handoffCommandDefinitions, handoffStatuses } from './handoff-commands.js';
 import { sanitizeUrl as sanitize } from './workspace.js';
 
 /**
@@ -48,7 +48,6 @@ export function executeHandoffCommand(service, name, input, context = {}) {
   };
   if (name === 'handoffs.list') return structuredClone(service.data.handoffs.filter(item => item.workspaceId === workspaceId && (!args.status || item.status === args.status)));
   if (name === 'handoffs.get') return structuredClone(find());
-  const before = structuredClone(service.data.handoffs);
   try {
     let record;
     if (name === 'handoffs.create') {
@@ -98,8 +97,10 @@ export function executeHandoffCommand(service, name, input, context = {}) {
     service.log(name, record.workspaceId, record.id, who, `${record.from} → ${record.to}: ${record.status}`);
     service.save();
     return structuredClone(record);
-  } catch (error) { service.data.handoffs = before; throw error; }
+  } catch (error) { rollback(service); throw error; }
 }
+// The workspace store returns to its last committed state, so the handoff and its activity entry roll back together.
+function rollback(service) { if (service.rollback) service.rollback(); }
 
 function sanitizeTabState(state) {
   return { ...state, url: sanitize(state.url) || 'about:blank' };
@@ -139,7 +140,6 @@ export function recordTakeover(service, details) {
     objective: '', completedActions: [], findings: [], evidence: [], blocker: `Control boundary: ${details.reason}`, nextStep: 'Inspect current state; hand back with handoffs.create if the agent should continue.',
     taskId: null, tabs: [sanitizeTabState(details.tab)], interrupted: details.interrupted, cancelledQueue: details.cancelledQueue,
     createdAt: timestamp, updatedAt: timestamp, revision: 1, history: [{ status: 'open', actor: 'system', at: timestamp }] };
-  const before = structuredClone(service.data.handoffs);
   try {
     service.data.handoffs.push(record);
     // Keep the newest 1,000 records per workspace.
@@ -147,6 +147,62 @@ export function recordTakeover(service, details) {
     if (own.length > 1000) { const drop = new Set(own.slice(0, own.length - 1000).map(item => item.id)); service.data.handoffs = service.data.handoffs.filter(item => !drop.has(item.id)); }
     service.log('handoffs.takeover', record.workspaceId, record.id, 'human', details.reason);
     service.save();
-  } catch (error) { service.data.handoffs = before; throw error; }
+  } catch (error) { rollback(service); throw error; }
   return structuredClone(record);
+}
+
+const timestamp = z.string().max(100);
+const importedTab = z.object({ tabId: z.number().int().nullable().optional(), url: z.string().max(16384).optional(), title: z.string().max(1000).optional(),
+  navigationVersion: z.number().int().nullable().optional(), stateEpoch: z.number().int().optional(), controller: z.string().max(200).optional(),
+  controlMode: z.string().max(100).optional(), latestSnapshotId: z.string().max(128).nullable().optional() });
+const importedEvidence = z.object({ type: z.enum(['artifact', 'material', 'context', 'task', 'snapshot', 'capture', 'url']), id: z.string().min(1).max(16384),
+  versionId: z.string().max(128).optional(), ref: z.string().max(64).optional(), note: z.string().max(2000).optional(), tabId: z.number().int().optional(),
+  navigationVersion: z.number().int().nullable().optional(), observedAt: timestamp.optional(), versionNumber: z.number().int().optional(),
+  sha256: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(10).optional(), revision: z.number().int().optional() });
+const importedHandoff = z.object({ kind: z.enum(['handoff', 'takeover']).default('handoff'), status: z.enum(handoffStatuses), from: z.string().min(1).max(200), to: z.string().min(1).max(200),
+  objective: z.string().max(20000).default(''), completedActions: z.array(z.string().max(2000)).max(100).default([]), findings: z.array(z.string().max(2000)).max(100).default([]),
+  evidence: z.array(importedEvidence).max(100).default([]), blocker: z.string().max(20000).default(''), nextStep: z.string().max(20000).default(''),
+  taskId: z.string().max(128).nullable().optional(), tabs: z.array(importedTab).max(20).default([]),
+  interrupted: z.array(z.record(z.string().max(100), z.unknown())).max(100).default([]), cancelledQueue: z.array(z.record(z.string().max(100), z.unknown())).max(100).optional(),
+  history: z.array(z.object({ status: z.string().max(30), actor: z.string().max(200), at: timestamp })).max(1000).default([]),
+  acceptedBy: z.string().max(200).optional(), acceptedAt: timestamp.optional(), completedBy: z.string().max(200).optional(), completedAt: timestamp.optional(),
+  note: z.string().max(20000).optional(), createdAt: timestamp.optional(), updatedAt: timestamp.optional(), revision: z.number().int().min(1).optional() });
+const RECORD_EVIDENCE = new Set(['artifact', 'material', 'context', 'task']);
+
+/**
+ * Import handoff history from a format 2 export into a new workspace. Records get
+ * new IDs and remapped references. Tabs and browser observations belong to the
+ * exporting session, so a handoff that was still open or accepted is imported as
+ * cancelled history: its tab IDs must never steer input in the new profile.
+ */
+export function importHandoffs(items, { workspaceId, mapping, actor, loss }) {
+  if (items === undefined) return [];
+  if (!Array.isArray(items) || items.length > 10000) throw new Error('Invalid imported handoffs collection');
+  return items.map(item => {
+    if (!item || typeof item !== 'object' || typeof item.id !== 'string') throw new Error('Invalid imported handoff');
+    if (Buffer.byteLength(JSON.stringify(item)) > 1024 * 1024) throw new Error('Imported handoff exceeds 1 MiB');
+    const fields = importedHandoff.parse(item);
+    rejectSecretKeys(fields);
+    rejectSecretValues(fields, 'imported handoff');
+    const at = now();
+    const evidence = fields.evidence.map(entry => {
+      const copy = { ...entry };
+      if (entry.type === 'url') { copy.id = sanitize(entry.id) || 'about:blank'; return copy; }
+      if (!RECORD_EVIDENCE.has(entry.type)) return copy; // Browser observations are historical references.
+      if (mapping.has(entry.id)) copy.id = mapping.get(entry.id);
+      else { copy.unresolved = true; loss('handoffs', 'evidence', 'referenced record not in export; kept as an unresolved reference'); }
+      if (entry.versionId) { if (mapping.has(entry.versionId)) copy.versionId = mapping.get(entry.versionId); else copy.unresolved = true; }
+      return copy;
+    });
+    let taskId = fields.taskId ?? null;
+    if (taskId && !mapping.has(taskId)) { loss('handoffs', 'taskId', 'related task not in export; link removed'); taskId = null; } else if (taskId) taskId = mapping.get(taskId);
+    const record = { ...fields, id: mapping.get(item.id), workspaceId, evidence, taskId, tabs: fields.tabs.map(tab => ({ ...tab, url: sanitize(tab.url ?? '') || 'about:blank', imported: true })),
+      createdAt: fields.createdAt ?? at, updatedAt: fields.updatedAt ?? at, revision: fields.revision ?? 1, imported: { at, by: actor } };
+    if (['open', 'accepted'].includes(record.status)) {
+      loss('handoffs', 'status', 'open or accepted handoffs are imported as cancelled history; their tabs belong to the exporting session');
+      Object.assign(record, { importedStatus: record.status, status: 'cancelled', completedBy: actor, completedAt: at, updatedAt: at, revision: record.revision + 1 });
+      record.history = [...record.history, { status: 'cancelled', actor, at }].slice(-1000);
+    }
+    return record;
+  });
 }

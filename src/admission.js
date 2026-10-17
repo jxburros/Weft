@@ -20,7 +20,8 @@ export class AutomationAdmission {
 /** Resolve once, before awaiting work, so human focus changes cannot retarget a call. */
 export function resolveCommandTargets(name, input, context, { workspace, browser, commands }) {
   const args = { ...input };
-  const state = workspace.snapshot();
+  // Read-only lookup: the live state avoids copying every record per command.
+  const state = workspace.data ?? workspace.snapshot();
   const candidates = state.workspaces.filter(value => !value.archived).map(value => value.id);
   const visible = id => !context.workspaceIds || context.workspaceIds.includes(id);
   const human = ['human', 'admin'].includes(context.actor);

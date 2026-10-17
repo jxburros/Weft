@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
+import { DatabaseSync } from '../src/sqlite.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
@@ -140,7 +141,10 @@ test('takeover during an in-flight action reports what could not be cancelled an
   assert.equal(record.tabs[0].url, 'https://example.test/form', 'secret query parameters are not stored');
   assert.equal(record.tabs[0].title, 'Fixture evil title', 'page-sourced bidi controls are stripped');
   // Ownership and the takeover record persist with the workspace store.
-  const stored = JSON.parse(readFileSync(join(f.directory, 'workspace-state.json'), 'utf8'));
+  const db = new DatabaseSync(join(f.directory, 'workspace.sqlite'), { readOnly: true });
+  const stored = { browserSession: JSON.parse(db.prepare("SELECT value FROM state_meta WHERE key = 'browserSession'").get().value),
+    handoffs: db.prepare("SELECT doc FROM records WHERE collection = 'handoffs' ORDER BY seq").all().map(row => JSON.parse(row.doc)) };
+  db.close();
   assert.equal(stored.browserSession.tabs[0].controller, 'human');
   assert.equal(stored.handoffs.find(item => item.kind === 'takeover').interrupted[0].cancellable, false);
   assert.equal((await f.as(second, 'tabs.claim')).error.code, 'lease_conflict');

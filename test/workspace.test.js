@@ -26,7 +26,8 @@ test('empty workspace persists notes, revisions, conversations and theme across 
   assert.equal(saved.history.length, 2);
   assert.equal(reopened.getConversation(conversation.id).messages[0].content, 'Read the notes');
   assert.equal(reopened.snapshot().settings.theme, 'dark');
-  assert.deepEqual(readdirSync(directory), ['.workspace.lock', 'workspace-state.json']);
+  assert.ok(readdirSync(directory).includes('workspace.sqlite'));
+  assert.equal(readdirSync(directory).includes('workspace-state.json'), false);
 });
 
 test('stale updates fail without changing durable state', async t => {
@@ -126,7 +127,8 @@ test('export/import excludes sessions, secrets and global policy; rekeys related
 });
 
 test('corrupt and unsupported storage fails explicitly without replacing the original file', t => {
-  const { directory } = fixture(t);
+  const directory = mkdtempSync(join(tmpdir(), 'weft-corrupt-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, 'workspace-state.json');
   writeFileSync(path, '{broken');
   assert.throws(() => new WorkspaceService({ directory }), /unreadable/);
@@ -134,6 +136,7 @@ test('corrupt and unsupported storage fails explicitly without replacing the ori
   writeFileSync(path, '{"schemaVersion":99}');
   assert.throws(() => new WorkspaceService({ directory }), /Unsupported/);
   assert.equal(readFileSync(path, 'utf8'), '{"schemaVersion":99}');
+  assert.deepEqual(readdirSync(directory), ['workspace-state.json']);
 });
 
 test('imported policies and workflows remain inactive until a human reviews them', async t => {

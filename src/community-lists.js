@@ -135,7 +135,6 @@ export class CommunityLists {
       for (const rule of version.rules) this.workspace.validateRule(rule);
     }
 
-    const before = structuredClone(this.workspace.data);
     try {
       const previous = current ? this.version(current) : null;
       const subscription = { ...version, id: args.id, workspaceId, enabled: false, previous };
@@ -154,7 +153,7 @@ export class CommunityLists {
       this.workspace.log(name, workspaceId, args.id, 'human', `${subscription.sourceRepo}@${subscription.commit} ${subscription.sha256}; rules disabled for review`);
       this.workspace.save();
       return this.summary(subscription);
-    } catch (error) { this.workspace.data = before; throw error; }
+    } catch (error) { this.workspace.rollback(); throw error; }
   }
 
   version(subscription) {
@@ -248,7 +247,6 @@ export class CommunityLists {
       return this.describePrepared(args.id, sub, this.prepare({ sub, data, publicKey: args.publicKey, allowOlder: args.allowOlder, mode: args.mode, minReviewers: args.minReviewers }));
     }
     const lists = this.workspace.data.siteLists || [];
-    const before = structuredClone(this.workspace.data);
     const now = new Date(this.clock()).toISOString();
     try {
       let sub;
@@ -326,7 +324,7 @@ export class CommunityLists {
       this.workspace.log(name, workspaceId, args.id, 'human', detail);
       this.workspace.save();
       return this.signedSummary(sub);
-    } catch (error) { this.workspace.data = before; throw error; }
+    } catch (error) { this.workspace.rollback(); throw error; }
   }
 
   /** Replace this subscription's rules with those its current release enforces under the chosen mode and exceptions. */
@@ -415,7 +413,6 @@ export class CommunityLists {
     const run = this.workspace.queue.then(() => {
       const live = this.signedSubs(workspaceId).find(item => item.id === id);
       if (!live) return null;
-      const before = structuredClone(this.workspace.data);
       try {
         const at = new Date(this.clock()).toISOString();
         let outcome; let detail = '';
@@ -431,7 +428,7 @@ export class CommunityLists {
         this.workspace.log('lists.check', workspaceId, id, trigger === 'human' ? 'human' : 'scheduler', `${outcome}${detail ? `: ${detail}` : ''}; GET only, no workspace data sent`);
         this.workspace.save();
         return { ...this.signedSummary(live), checked: outcome };
-      } catch (error) { this.workspace.data = before; throw error; }
+      } catch (error) { this.workspace.rollback(); throw error; }
     });
     this.workspace.queue = run.catch(() => {});
     return run;

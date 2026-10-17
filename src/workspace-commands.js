@@ -61,4 +61,24 @@ for (const [collection, shape] of Object.entries(recordShapes)) {
   commandDefinitions[`${collection}.update`] = [`Update ${collection} with optional revision check`, { id, changes: z.strictObject(Object.fromEntries(Object.entries(shape).map(([key, field]) => [key, field.removeDefault ? field.removeDefault().optional() : field.optional()]))), expectedRevision: z.number().int().positive().optional() }];
   commandDefinitions[`${collection}.delete`] = [`Delete ${collection} record`, { id }];
 }
+const packageName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/, 'Use 1-100 letters, digits, dots, dashes or underscores; no paths').refine(value => !value.includes('..'), 'Package names cannot contain ..');
+const backupId = z.string().regex(/^\d{8}T\d{6}Z-(?:manual|automatic)-[0-9a-f]{8}$/, 'Expected a backup identifier from backups.list');
+Object.assign(commandDefinitions, {
+  'workspaces.exportPackage': ['Write a large-project package folder (records, exact components, manifest) under the profile transfers folder', { id, name: packageName, sensitiveTerms: z.array(z.string().min(1).max(200)).max(100).optional() }],
+  'workspaces.importPackage': ['Verify and import a package folder from the profile transfers folder as a new workspace', { name: packageName }],
+  'batch.execute': ['Apply up to 100 record commands all-or-nothing in one transaction; page, browser and workspace-lifecycle commands are rejected', { commands: z.array(z.strictObject({ command: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()).default({}) })).min(1).max(100) }],
+  'backups.create': ['Create a verified local backup of the database and stored components', { note: z.string().max(500).optional() }],
+  'backups.list': ['List local backups and automatic backup policy', {}],
+  'backups.verify': ['Recompute backup digests, database integrity and component completeness', { id: backupId }],
+  'backups.restore': ['Restore a verified backup; current data is preserved in the profile recovery folder', { id: backupId }],
+  'backups.delete': ['Delete one local backup folder', { id: backupId }],
+});
+// Request identity: a retried mutation with the same requestId replays the
+// original committed result instead of applying twice.
+export const requestIdField = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/, 'Use letters, digits, dots, dashes, colons or underscores');
+export const idempotentCommands = Object.freeze(Object.keys(commandDefinitions).filter(name => /\.(create|update|delete|transition|message|annotate|capture|archive|restore|duplicate|import|importPackage|clear|execute)$/.test(name) && !name.startsWith('backups.')));
+export const dryRunCommands = Object.freeze(Object.keys(commandDefinitions).filter(name => /\.delete$/.test(name) && !name.startsWith('backups.')).concat('history.clear', 'workspaces.import', 'workspaces.importPackage', 'backups.restore', 'batch.execute'));
+// Shapes such as optionalWorkspace are shared between commands: copy before extending.
+for (const name of idempotentCommands) commandDefinitions[name][1] = { ...commandDefinitions[name][1], requestId: requestIdField.optional() };
+for (const name of dryRunCommands) commandDefinitions[name][1] = { ...commandDefinitions[name][1], dryRun: z.boolean().optional() };
 export const workspaceSchemas = Object.fromEntries(Object.entries(commandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));

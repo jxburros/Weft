@@ -48,6 +48,9 @@ add('administration', 'siteRules.review storage.setSiteMode storage.setDefaultMo
 // Verified stable-only updates (#33, #54, #60): status is a read; network checks, install, rollback and settings are human-only.
 add('local_read', 'update.status');
 add('administration', 'update.check update.install update.rollback update.configure');
+// Transactional record batches (#39) and local backups/large-project transfer (#27).
+add('local_write', 'batch.execute');
+add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -127,7 +130,7 @@ export function effectForCommand(name) {
   const actionClass = actionClassForCommand(name);
   if (['local_read', 'external_read'].includes(actionClass)) return 'none';
   if (EXTERNAL_CLASSES.includes(actionClass) || actionClass === 'unclassified') return 'external';
-  if (/\.(delete|clear|close|revoke|remove)$/.test(name) || name === 'workspaces.import') return 'irreversible';
+  if (/\.(delete|clear|close|revoke|remove)$/.test(name) || ['workspaces.import', 'workspaces.importPackage'].includes(name)) return 'irreversible';
   return 'local';
 }
 

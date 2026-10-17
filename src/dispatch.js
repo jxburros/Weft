@@ -1,4 +1,5 @@
-import { commands, executeOutcome, validateCommand, CommandError } from './commands.js';
+import { commands, executeOutcome, normalizeCommand, validateCommand, CommandError } from './commands.js';
+import { BATCHABLE } from './workspace.js';
 import { commandDefinitions as workspaceCommands } from './workspace-commands.js';
 import { resolveCommandTargets } from './admission.js';
 import { getGuidance } from './guidance.js';
@@ -25,6 +26,44 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       dataClasses: [...new Set([...(spec.dataClasses ?? []), ...classified.dataClasses])] };
   };
 
+  /**
+   * Prepare an atomic batch: every contained command gets the same normalization, schema
+   * validation, admission and target resolution as a standalone call. A "$N.id" placeholder
+   * targets the record created by earlier command N, so it inherits that command's workspace.
+   */
+  const prepareBatch = (validated, context) => {
+    const subs = validated.commands.map(({ command: name, args: input }, index) => {
+      try {
+        const prepared = normalizeCommand(name, input);
+        if (!BATCHABLE.has(prepared.command)) throw new CommandError({ code: 'invalid_arguments', message: 'Only record commands can run in an atomic batch; page, browser, capture, import, backup and workspace-lifecycle commands cannot be rolled back.', field: 'command', allowed: [...BATCHABLE] });
+        if (Object.hasOwn(prepared.args, 'requestId') || Object.hasOwn(prepared.args, 'dryRun')) throw new CommandError({ code: 'invalid_arguments', message: 'requestId and dryRun apply to the whole batch', field: Object.hasOwn(prepared.args, 'requestId') ? 'requestId' : 'dryRun' });
+        admission.assertAutomationAdmitted(context.actor, prepared.command);
+        const args = validateCommand(prepared.command, prepared.args);
+        if (context.workspaceIds?.length === 1 && commands[prepared.command]?.inputSchema?.properties?.workspaceId && args.workspaceId == null) args.workspaceId = context.workspaceIds[0];
+        const placeholder = JSON.stringify(args).match(/"\$(\d+)\.id"/);
+        const resolved = resolveCommandTargets(prepared.command, args, context, { workspace, browser, commands });
+        return { index, command: prepared.command, args: resolved.args, target: resolved.target, spec: specFor(prepared.command, resolved.args), placeholder: placeholder ? Number(placeholder[1]) : null };
+      } catch (error) {
+        const details = error instanceof CommandError ? error.toJSON() : null;
+        if (details) throw new CommandError({ ...details, message: `batch command ${index} (${name}): ${details.message}`, field: `commands.${index}.${details.field === 'command' ? 'command' : `args.${details.field}`}` });
+        error.message = `batch command ${index} (${name}): ${error.message}`;
+        throw error;
+      }
+    });
+    for (const sub of subs) if (!sub.target.workspaceId && sub.placeholder !== null && sub.placeholder < sub.index) sub.target.workspaceId = subs[sub.placeholder].target.workspaceId;
+    const workspaces = [...new Set(subs.map(sub => sub.target.workspaceId).filter(Boolean))];
+    const scoped = !['human', 'admin'].includes(context.actor) && Boolean(context.workspaceIds || context.clientId);
+    if (scoped) {
+      for (const sub of subs) if (!sub.target.workspaceId) sub.target.workspaceId = workspaces.length === 1 ? workspaces[0] : context.workspaceIds?.length === 1 ? context.workspaceIds[0] : null;
+      if (subs.some(sub => !sub.target.workspaceId)) throw Object.assign(new Error('Specify the workspace for every command in this batch'), { code: 'ambiguous_target' });
+    }
+    const batchArgs = { commands: subs.map(({ command, args }) => ({ command, args })) };
+    if (validated.dryRun !== undefined) batchArgs.dryRun = validated.dryRun;
+    if (validated.requestId !== undefined) batchArgs.requestId = validated.requestId;
+    const all = [...new Set(subs.map(sub => sub.target.workspaceId).filter(Boolean))];
+    return { subs, args: batchArgs, scoped, workspaces: all, target: { workspaceId: all.length === 1 ? all[0] : null, tabId: null } };
+  };
+
   // Authorize and route one validated command. Plugin capabilities and hook commands re-enter
   // through `call`, so every nested read passes the same gate with the caller's own authority.
   const run = async (command, validated, context, target, state) => {
@@ -38,6 +77,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (context.workspaceIds?.length === 1 && commands[command]?.inputSchema?.properties?.workspaceId && validated.workspaceId == null) {
       validated.workspaceId = context.workspaceIds[0];
     }
+    if (command === 'batch.execute') return runBatch(validated, context, target, state);
     const resolved = resolveCommandTargets(command, validated, context, { workspace, browser, commands });
     const args = resolved.args;
     Object.assign(target, resolved.target);
@@ -61,6 +101,35 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     };
     if (command === 'workspaces.list' && context.workspaceIds) return workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
     authority.recordAttempt({ command, args, context, target, decision });
+    return route(command, args, context, target);
+  };
+
+  /** Batch path: per-command authority with the caller's identity, one transaction in the workspace store. */
+  const runBatch = async (validated, context, target, state) => {
+    const batch = prepareBatch(validated, context);
+    state.args = batch.args;
+    state.batch = batch.subs.map(sub => ({ command: sub.command, args: sub.args, workspaceId: sub.target.workspaceId }));
+    Object.assign(target, batch.target);
+    const spec = commands['batch.execute'];
+    state.spec = spec;
+    const decision = authority.authorizeBatch(batch.subs, batch.args, context, target);
+    // After each command was authorized (so an out-of-scope command is reported as a denial), an agent batch stays in one workspace.
+    if (batch.scoped && batch.workspaces.length !== 1) throw Object.assign(new Error('An agent batch must target exactly one workspace'), { code: 'ambiguous_target', notStarted: true });
+    state.decision = decision;
+    context.authorityDecision = decision;
+    if (target.workspaceId && context.workspaceIds) context.workspaceId = target.workspaceId;
+    // Rechecked before commit: admission, client liveness and scope for every contained command.
+    context.assertAuthorized = () => {
+      admission.assertAutomationAdmitted(context.actor, 'batch.execute');
+      for (const sub of batch.subs) {
+        admission.assertAutomationAdmitted(context.actor, sub.command);
+        clients?.assertAllowed(sub.command, context, { workspaceId: sub.target.workspaceId, actionClass: sub.spec.actionClass, ...(sub.spec.dataClasses ? { dataClasses: sub.spec.dataClasses } : {}), recheck: true });
+      }
+    };
+    return workspace.execute('batch.execute', batch.args, context);
+  };
+
+  const route = async (command, args, context, target) => {
     const call = async (nested, input) => {
       const nestedContext = { ...context };
       const value = await execute(nested, input, nestedContext);
@@ -110,7 +179,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     const state = {};
     const outcome = await executeOutcome((command, validated) => run(command, validated, context, target, state), name, input);
     authority.recordOutcome({ command: outcome.command, args: state.args ?? {}, context, outcome: { ...outcome, workspaceId: target.workspaceId ?? outcome.workspaceId, tabId: target.tabId ?? outcome.tabId },
-      decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {} });
+      decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {}, batch: state.batch });
     if (outcome.error) throw new CommandError(outcome.error);
     return outcome.result;
   };
@@ -126,7 +195,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       outcome.workspaceId = null;
       outcome.tabId = null;
     }
-    authority.recordOutcome({ command: outcome.command, args: state.args ?? {}, context, outcome, decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {} });
+    authority.recordOutcome({ command: outcome.command, args: state.args ?? {}, context, outcome, decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {}, batch: state.batch });
     const event = { type: 'command', command: outcome.command, actor: context.actor,
       status: outcome.execution === 'succeeded' ? 'success' : outcome.error?.code === 'approval_required' || outcome.error?.details?.authority ? 'blocked' : 'failure',
       workspaceId: outcome.workspaceId, tabId: outcome.tabId, createdAt: new Date().toISOString() };

@@ -92,12 +92,13 @@ export function storageWarnings(directory, environment = process.env) {
     return normalized === root || normalized.startsWith(`${root}/`);
   });
   const warnings = [];
-  if (knownFolder || configuredFolder) warnings.push({ code: 'SYNC_FOLDER', message: 'This profile appears to be in a cloud-synced folder. Chromium sessions and the JSON workspace store are not sync-safe. Move the profile to a local folder with Weft closed.' });
+  if (knownFolder || configuredFolder) warnings.push({ code: 'SYNC_FOLDER', message: 'This profile appears to be in a cloud-synced folder. Chromium sessions, the SQLite workspace database and its component files are not sync-safe. Move the profile to a local folder with Weft closed.' });
   if (existsSync(directory)) {
     for (const name of readdirSync(directory)) {
       // OneDrive can append only a device name, without the word "conflict".
-      if (name !== 'workspace-state.json' && /^workspace-state.*\.json$/i.test(name)) warnings.push({ code: 'SYNC_CONFLICT_COPY', file: name, message: `Possible conflicted workspace copy requires human review: ${name}. It has been preserved; Weft will not merge or overwrite it.` });
-      if (/workspace-state/i.test(name) && /\.(icloud|placeholder)$/i.test(name)) warnings.push({ code: 'SYNC_PLACEHOLDER', file: name, message: `Workspace placeholder requires download and human review: ${name}.` });
+      const databaseCopy = /^workspace.*\.sqlite/i.test(name) && !/\.(icloud|placeholder)$/i.test(name) && !/^workspace\.sqlite(?:-wal|-shm|-journal)?$/.test(name) && !/^workspace\.sqlite\.(?:creating|migrating)-[0-9a-f-]{36}(?:-wal|-shm|-journal)?$/.test(name);
+      if ((name !== 'workspace-state.json' && /^workspace-state.*\.json$/i.test(name)) || databaseCopy) warnings.push({ code: 'SYNC_CONFLICT_COPY', file: name, message: `Possible conflicted workspace copy requires human review: ${name}. It has been preserved; Weft will not merge or overwrite it.` });
+      if (/workspace-state|workspace.*\.sqlite/i.test(name) && /\.(icloud|placeholder)$/i.test(name)) warnings.push({ code: 'SYNC_PLACEHOLDER', file: name, message: `Workspace placeholder requires download and human review: ${name}.` });
     }
   }
   return warnings;

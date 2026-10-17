@@ -19,9 +19,10 @@ Performance budgets are regression thresholds, not a throughput guarantee.
 
 Hostile-input tests use fixed random seeds, compare record operations against a
 shadow model, and verify invalid imports leave both memory and disk unchanged.
-Import filenames are reduced to basenames and their bytes stay inside the JSON
-store: imports never write a caller-supplied path. This does not claim arbitrary
-archive extraction support. Loopback URL tests deliberately reject DNS names even
+Import filenames are reduced to basenames and their bytes are stored only as
+content-addressed component files named by digest: imports never write a
+caller-supplied path. Package imports reject links, malformed manifest paths and
+digest mismatches. This does not claim arbitrary archive extraction support. Loopback URL tests deliberately reject DNS names even
 if they might currently resolve to loopback; control-plane authorization never
 relies on mutable DNS answers.
 

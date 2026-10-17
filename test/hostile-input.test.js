@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkspaceService } from '../src/workspace.js';
@@ -38,9 +38,9 @@ test('seeded record mutations agree with a shadow model and rejected revisions p
       await service.execute('materials.delete', { id });
       records.delete(id);
     } else {
-      const before = readFileSync(service.path, 'utf8');
+      const before = service.storage.contentDigest();
       await assert.rejects(service.execute('materials.update', { id, expectedRevision: 99999, changes: { content: 'must not commit' } }));
-      assert.equal(readFileSync(service.path, 'utf8'), before);
+      assert.equal(service.storage.contentDigest(), before);
     }
     const actual = await service.execute('materials.list');
     assert.equal(actual.length, records.size);
@@ -65,11 +65,11 @@ test('malformed and seeded hostile imports fail atomically without changing proj
     bad.push(copy);
   }
   for (const data of bad) {
-    const before = readFileSync(service.path, 'utf8');
+    const before = service.storage.contentDigest();
     const snapshot = service.snapshot();
     await assert.rejects(service.execute('workspaces.import', { data }));
     assert.deepEqual(service.snapshot(), snapshot);
-    assert.equal(readFileSync(service.path, 'utf8'), before);
+    assert.equal(service.storage.contentDigest(), before);
   }
 });
 

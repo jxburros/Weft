@@ -174,11 +174,51 @@ alone is not a shipped capability.
   durable activity. Extension-originated requests are also subject to security
   intelligence. ADRs renumbered to 008 (storage modes) and 009 (destination
   intelligence and downloads).
+- Replaced the whole-file JSON store with transactional SQLite metadata
+  (built-in `node:sqlite`, WAL, append-only schema migrations, external-writer
+  detection) and verified content-addressed component files for captures and
+  stored files; metadata edits no longer rewrite capture bytes (#25, ADR 011).
+  Existing JSON stores migrate losslessly on first start with the original kept
+  under `recovery/`; interrupted migrations recover and damaged or newer stores
+  are preserved unchanged. The minimum Node.js version is now 22.13.
+- Added a local FTS5 index with BM25 ranking for materials, context, task,
+  workflow and capture text, scoped to the workspace in SQL, injection-safe
+  query compilation and results that cite record revisions and exact capture
+  versions (#67). Embedding/hybrid retrieval remains deferred.
+- Added optional `requestId` idempotency to record mutations (replay or
+  `idempotency_conflict`, bounded retention), atomic `batch.execute` with
+  `$N.id` placeholders, and `dryRun` previews for deletions, imports, restores
+  and batches across GUI/REST/CLI/MCP (#39).
+- Added verified automatic and manual backups, journaled restore with preserved
+  originals, offline `weft store` recovery, lossless format-2 export/import with
+  lossy-mapping reports and GUI previews, and verified package folders for
+  projects beyond the REST/JSON limits (#27).
+- Storage integration: handoff and takeover records, site-rule provenance,
+  storage modes, community subscriptions, turn manifests and activity retention
+  now commit through the SQLite store; a failed change in any of them rolls back
+  every collection it touched, including its activity entries. Format-2 exports
+  carry site-rule provenance (creator, revision history, review state) and
+  handoff history; imported handoffs that were still open become cancelled
+  history because their tabs belong to the exporting session. Storage modes and
+  community subscriptions are listed as excluded. Handoffs are searchable (index
+  version 2 rebuilds on open). ADR renumbered to 011.
+- `batch.execute` passes the authority gate for every contained command with the
+  caller's identity; a batch that needs approval needs one exact one-time
+  approval of the whole batch (standing approvals never cover a batch; at most
+  20 commands), client usage/rate limits count every contained command, and an
+  agent batch stays in one workspace. Request IDs are scoped per client, replays
+  are re-authorized, and activity records batches, each applied command, replays
+  and dry runs.
+- Backups contain the workspace database and its components only; approvals,
+  grants, autonomy policy, the activity log, browser security state, plugin and
+  extension state and updater state are deliberately not restored (see
+  `docs/STORAGE-SAFETY.md`). A restore appends to the activity hash chain and
+  never rewinds it.
 
 ### Not completed
 
-- See [all 67 issue dispositions](docs/ISSUE-STATUS.md) for the 26 completed
-  scopes and 41 broader/partial items left open.
+- See [all 67 issue dispositions](docs/ISSUE-STATUS.md) for the 43 completed
+  scopes and 24 broader/partial items left open.
 
 - Workspace encryption, key lifecycle/recovery, extension compatibility testing,
   native plugin isolation/permissions and plugin loading remain unimplemented.

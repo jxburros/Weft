@@ -78,22 +78,23 @@ export class ApprovalQueue {
   /**
    * Consume matching approval evidence. Exact one-time approvals are consumed atomically;
    * standing approvals cover the same actor, command, workspace and destination origin until expiry.
+   * `allowStanding: false` accepts only an exact one-time approval (atomic batches).
    */
-  match({ fingerprint, actor, command, workspaceId, destination, taskId, actionClass }, isTaskOpen = () => true) {
+  match({ fingerprint, actor, command, workspaceId, destination, taskId, actionClass, allowStanding = true }, isTaskOpen = () => true) {
     this.expire();
     const exact = this.items.find(item => item.status === 'approved' && item.mode === 'once' && item.fingerprint === fingerprint && item.actor === actor);
     if (exact) {
       exact.status = 'consumed'; exact.consumedAt = new Date(this.clock()).toISOString(); this.save(); this.onChange();
       return { approvedOnce: true, approvalId: exact.id };
     }
-    if (!standingAllowed(actionClass)) return {};
+    if (!allowStanding || !standingAllowed(actionClass)) return {};
     const standing = this.items.find(item => item.status === 'approved' && item.mode === 'standing' && item.actor === actor && item.command === command
       && item.workspaceId === (workspaceId ?? null) && item.destinationOrigin === (origin(destination) ?? null)
       && (!item.taskId || (item.taskId === taskId && isTaskOpen(item.taskId))));
     if (standing) { standing.uses = (standing.uses ?? 0) + 1; this.save(); return { standing: true, approvalId: standing.id }; }
     return {};
   }
-  request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level }) {
+  request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level, preview: shown }) {
     this.expire();
     const existing = this.items.find(item => item.status === 'pending' && item.fingerprint === fingerprint && item.actor === actor);
     if (existing) return structuredClone(existing);
@@ -104,7 +105,7 @@ export class ApprovalQueue {
     const now = this.clock();
     const item = { id: `appr_${randomUUID()}`, status: 'pending', fingerprint, actor, clientId: clientId ?? null, command, actionClass, categories: categories ?? [], level: level ?? null,
       workspaceId: workspaceId ?? null, tabId: tabId ?? null, taskId: taskId ?? null, destinationOrigin: origin(destination), destination: destination ? minimizeUrl(destination) : null,
-      reason, summary: summarizeArgs(args), preview: preview(args), createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null };
+      reason, summary: summarizeArgs(args), preview: shown ?? preview(args), createdAt: new Date(now).toISOString(), expiresAt: now + PENDING_MS, mode: null };
     this.items.push(item);
     this.save();
     this.onChange();

@@ -10,7 +10,20 @@ Connects to the running Weft browser using WEFT_TOKEN.
 WEFT_API_URL defaults to http://127.0.0.1:9222.
 Examples:
   weft tabs.new '{"url":"https://example.com"}'
-  weft page.screenshot '{"tabId":1}'`);
+  weft page.screenshot '{"tabId":1}'
+
+Offline backup maintenance (Weft closed): weft store backups|verify|restore <directory> [backup id]`);
+} else if (command === 'store') {
+  // Local maintenance does not use the API: a damaged database cannot serve one.
+  try {
+    const { runStoreCommand } = await import('../src/store-cli.js');
+    const result = runStoreCommand(process.argv.slice(3));
+    console.log(JSON.stringify(result, null, 2));
+    if (result.status === 'failed') process.exitCode = 1;
+  } catch (error) {
+    console.error(error.code === 'invalid_arguments' ? error.message : `${error.code || 'store_error'}: ${error.message}`);
+    process.exitCode = error.code === 'invalid_arguments' ? 2 : error.code === 'STORE_LOCKED' ? 4 : 1;
+  }
 } else {
   try {
     if (extra.length) throw Object.assign(new Error('Pass command arguments as one JSON object'), { code: 'invalid_arguments' });

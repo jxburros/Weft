@@ -99,7 +99,7 @@ export class WorkspaceExtensions {
   }
 
   activity(action, record, detail) {
-    const run = this.workspace.queue.then(() => { this.workspace.log(action, record.workspaceId, record.id, 'human', detail); this.workspace.save(); });
+    const run = this.workspace.queue.then(() => this.workspace.commitChange(() => this.workspace.log(action, record.workspaceId, record.id, 'human', detail)));
     this.workspace.queue = run.catch(() => {});
     return run;
   }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -49,12 +49,12 @@ test('subscribing pins the key, needs the previewed digest, defaults to label an
   const { lists, workspace, calls } = fixture(t);
   const group = newGroup();
   const { data } = release(group, acceptEntry(group.state, factualDomain('bad.example')).state);
-  const before = readFileSync(workspace.path, 'utf8');
+  const before = workspace.storage.contentDigest();
   const reviewed = await preview(lists, group, data);
   assert.equal(reviewed.isNew, true);
   assert.equal(reviewed.added.length, 1);
   assert.equal(reviewed.publisher.keyId, group.keys.keyId);
-  assert.equal(readFileSync(workspace.path, 'utf8'), before, 'preview must not change stored state');
+  assert.equal(workspace.storage.contentDigest(), before, 'preview must not change stored state');
   // The wrong key cannot be pinned: the release is not signed by it.
   const stranger = generateKeyPair();
   await assert.rejects(preview(lists, { keys: stranger }, data), /LIST_KEY_UNPINNED/);
@@ -102,7 +102,7 @@ test('unsigned, tampered, replayed, equivocating and expired updates are refused
   await subscribe(lists, group, v1.data, { mode: 'block' });
   const second = acceptEntry(v1.state, factualDomain('two.example'), later(2));
   const v2 = release(group, second.state, later(2));
-  const store = () => readFileSync(workspace.path, 'utf8');
+  const store = () => workspace.storage.contentDigest();
   const stored = store();
   const confirm = async data => (await lists.execute('lists.preview', { id: 'grp', data }, human)).to.payloadSha256;
   const tampered = JSON.parse(v2.data); tampered.payload = tampered.payload.replace('two.example', 'evil.example');

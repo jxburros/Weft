@@ -264,7 +264,6 @@ export class SiteStoragePolicy {
     service.workspace(workspace);
     if (name === 'storage.policy') return this.policy(workspace);
     if (!['human', 'admin'].includes(context.actor ?? 'human')) throw new Error('PERMISSION_REQUIRED: storage policy changes require the trusted browser interface');
-    const before = structuredClone(service.data);
     const timestamp = new Date().toISOString();
     try {
       service.data.storagePolicies ??= [];
@@ -300,6 +299,6 @@ export class SiteStoragePolicy {
           : effect.mode === 'block' ? 'Sites without an exception can no longer read or write supported storage after reload. Data already stored stays on disk, unused, until you clear workspace storage.'
           : effect.mode === 'session' ? 'Data for matching sites will be erased at clean exit or at the next startup after a crash.'
             : 'Site data is kept in this workspace container until you clear it.' };
-    } catch (error) { service.data = before; throw error; }
+    } catch (error) { service.rollback(); throw error; }
   }
 }

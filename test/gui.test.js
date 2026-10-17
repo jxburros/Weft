@@ -305,6 +305,13 @@ if (process.argv.includes("--gui-workflows")) {
       'document.getElementById("palette-results").textContent.includes("Research notes")',
     );
     await click('[data-action="close-dialog"]');
+    await click("#settings-button");
+    await until('document.querySelector("[data-action=backup-now]")!==null');
+    await click('[data-action="backup-now"]');
+    await until('document.getElementById("toast").textContent.includes("Backup created and verified")');
+    await click('[data-action="manage-backups"]');
+    await until('document.getElementById("dialog-content").textContent.includes("Manual backup")');
+    await click('[data-action="close-dialog"]');
     // An agent request waits in the single approval queue until the human decides in browser-owned UI.
     await click("#settings-button");
     await click('[data-action="manage-clients"]');

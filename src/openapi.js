@@ -50,6 +50,7 @@ export function createOpenApiDocument(catalog = commands) {
           validation: { enum: ['passed', 'failed', 'not_run'] }, review: { enum: ['not_required', 'required'] },
           workspaceId: { type: ['string', 'null'] }, tabId: { type: ['integer', 'null'] },
           normalized: { type: 'array', items: { type: 'object', required: ['from', 'to'], properties: { from: { type: 'string' }, to: { type: 'string' } } } },
+          idempotency: { type: 'object', required: ['requestId', 'replayed'], description: 'Present when the command was called with requestId; replayed is true when the stored result of an earlier identical request was returned instead of applying again.', properties: { requestId: { type: 'string' }, replayed: { type: 'boolean' } } },
           result: {}, error: { anyOf: [{ type: 'null' }, { $ref: '#/components/schemas/CommandError' }] },
         } },
         ApiError: { $ref: '#/components/schemas/CommandOutcome' },

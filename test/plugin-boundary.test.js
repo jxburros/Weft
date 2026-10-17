@@ -9,6 +9,7 @@ const src = join(root, 'src');
 // Reviewed exceptions: [from, to, reason]. A stale entry fails so the list only shrinks.
 const KNOWN_COUPLINGS = [
   ['src/preload.cjs', 'electron', 'Electron preload scripts must use CommonJS require; not a plugin path'],
+  ['src/sqlite.js', 'node:sqlite', 'Constant built-in specifier loaded dynamically only to filter its load-time ExperimentalWarning; not a plugin path'],
 ];
 // The one door from core into the plugin layer.
 const BOUNDARY = new Set(['src/plugins/registry.js']);

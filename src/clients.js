@@ -158,6 +158,16 @@ export class ClientGrants {
   }
   /** The live grant, so scope changes and revocation apply to the next command even for long-lived contexts. */
   current(clientId) { const grant = this.grants.find(item => item.clientId === clientId); return this.live(grant) ? grant : null; }
+  /** An atomic batch counts every contained command: refuse it whole when it would exceed the usage or rate limit. */
+  assertBudget(clientId, count) {
+    const grant = this.current(clientId);
+    if (!grant) throw denied('Client grant expired or revoked', 'grant_inactive');
+    if (grant.maxCommands !== null && grant.usage.count + count > grant.maxCommands) throw denied(`Client usage limit would be exceeded by this ${count}-command batch; a human can raise it or create a new connection`, 'usage_limit');
+    if (grant.maxPerMinute !== null) {
+      const window = (this.rate.get(grant.clientId) || []).filter(time => time > this.clock() - 60000);
+      if (window.length + count > grant.maxPerMinute) throw denied(`Client rate limit would be exceeded by this ${count}-command batch; retry later or split it`, 'rate_limit');
+    }
+  }
   /** Count an admitted command against usage limits. Persisted only for limited grants to avoid a write per call. */
   recordUse(clientId) {
     const grant = this.grants.find(item => item.clientId === clientId);

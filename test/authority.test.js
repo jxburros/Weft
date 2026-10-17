@@ -333,3 +333,65 @@ test('workspace autonomy ceilings bind bootstrap automation; only the GUI human 
   assert.equal(approval.error.code, 'approval_required');
   assert.equal(approval.error.details.authority.level, 'assist');
 });
+
+test('atomic batches pass the gate per contained command; one exact approval covers exactly that batch', { timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  const assist = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'assist' });
+  const batch = { commands: [{ command: 'materials.create', args: { title: 'Batch note' } }, { command: 'tasks.create', args: { title: 'Follow up', materialIds: ['$0.id'] } }], requestId: 'batch-approval-1' };
+  const pending = await f.rest('batch.execute', batch, assist.token);
+  assert.equal(pending.error.code, 'approval_required');
+  assert.equal(pending.execution, 'not_started');
+  const { approvalId } = pending.error.details.authority;
+  const request = (await f.dispatch('approvals.list', {}, human)).result.find(item => item.id === approvalId);
+  assert.equal(request.command, 'batch.execute');
+  assert.deepEqual(Object.keys(request.preview).filter(key => /^\d+\./.test(key)), ['1. materials.create', '2. tasks.create'], 'the human sees every contained command');
+  // A standing approval is refused coverage of a batch; only an exact one-time approval of this batch admits it.
+  assert.equal((await f.dispatch('approvals.approve', { id: approvalId, mode: 'once' }, human)).error, null);
+  const changed = await f.rest('batch.execute', { ...batch, commands: [batch.commands[0]] }, assist.token);
+  assert.equal(changed.error.code, 'approval_required', 'a different batch is not covered');
+  const applied = await f.rest('batch.execute', batch, assist.token);
+  assert.equal(applied.error, null, JSON.stringify(applied.error));
+  assert.equal(applied.result.count, 2);
+  assert.equal(applied.idempotency.replayed, false);
+  // A replay is authorized again: the consumed approval does not let a retry through.
+  assert.equal((await f.rest('batch.execute', batch, assist.token)).error.code, 'approval_required');
+  assert.equal((await f.workspace.execute('materials.list', { workspaceId: f.firstId })).filter(item => item.title === 'Batch note').length, 1);
+
+  // Hard floors, workspace scope and usage limits apply to each contained command.
+  const scoped = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'scoped' });
+  const floor = await f.rest('batch.execute', { commands: [{ command: 'context.create', args: { title: 'ok' } }, { command: 'siteRules.create', args: { hostname: 'example.com' } }] }, scoped.token);
+  assert.equal(floor.error.code, 'permission_required');
+  assert.equal(floor.error.details.authority.reason, 'human_only');
+  assert.match(floor.error.message, /batch command 1 \(siteRules\.create\)/);
+  const outside = await f.rest('batch.execute', { commands: [{ command: 'context.create', args: { title: 'Mine' } }, { command: 'context.create', args: { title: 'Theirs', workspaceId: f.other.id } }] }, scoped.token);
+  assert.equal(outside.error.code, 'permission_required');
+  assert.equal((await f.workspace.execute('context.list', { workspaceId: f.firstId })).length, 0, 'a denied batch applied nothing');
+  const limited = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'scoped', maxCommands: 2 });
+  const tooMany = await f.rest('batch.execute', { commands: [1, 2, 3].map(index => ({ command: 'context.create', args: { title: `n${index}` } })) }, limited.token);
+  assert.equal(tooMany.error.details.authority.reason, 'usage_limit', 'every contained command counts against the grant');
+
+  // Replays are re-authorized against current policy and recorded as replays.
+  const first = await f.rest('batch.execute', { commands: [{ command: 'context.create', args: { title: 'Replayed' } }], requestId: 'scoped-1' }, scoped.token);
+  assert.equal(first.error, null, JSON.stringify(first.error));
+  const replay = await f.rest('batch.execute', { commands: [{ command: 'context.create', args: { title: 'Replayed' } }], requestId: 'scoped-1' }, scoped.token);
+  assert.equal(replay.idempotency.replayed, true);
+  const other = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'scoped' });
+  const foreign = await f.rest('batch.execute', { commands: [{ command: 'context.create', args: { title: 'Replayed' } }], requestId: 'scoped-1' }, other.token);
+  assert.equal(foreign.idempotency.replayed, false, 'request identities are private to one client');
+  assert.equal((await f.dispatch('autonomy.update', { workspaceId: f.firstId, level: 'observe' }, human)).error, null);
+  const lowered = await f.rest('batch.execute', { commands: [{ command: 'context.create', args: { title: 'Replayed' } }], requestId: 'scoped-1' }, scoped.token);
+  assert.equal(lowered.error.code, 'permission_required', 'a lowered ceiling stops replays too');
+
+  const history = (await f.dispatch('activity.list', { scope: 'all', limit: 200 }, human)).result.items;
+  const batchEntry = history.find(entry => entry.command === 'batch.execute' && entry.outcome === 'completed' && entry.summary?.requestId === 'batch-approval-1');
+  assert.deepEqual(batchEntry.summary.commands, ['materials.create', 'tasks.create']);
+  assert.equal(batchEntry.approvalId, approvalId);
+  const parts = history.filter(entry => entry.type === 'record' && entry.summary?.requestId === 'batch-approval-1');
+  assert.deepEqual(parts.map(entry => entry.command).sort(), ['materials.create', 'tasks.create']);
+  assert.ok(parts.every(entry => /^(mate|task)_/.test(entry.targetId)));
+  const replayEntry = history.find(entry => entry.command === 'batch.execute' && entry.summary?.replayed === true);
+  assert.equal(replayEntry.outcome, 'recorded');
+  assert.match(replayEntry.detail, /nothing was applied again/);
+  assert.ok(history.some(entry => entry.command === 'siteRules.create' && entry.outcome === 'denied'));
+  assert.equal((await f.dispatch('activity.verify', {}, human)).result.status, 'intact');
+});

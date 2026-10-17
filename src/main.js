@@ -82,7 +82,8 @@ app.whenReady().then(async () => {
     catch (error) { console.error('Weft automatic rollback failed:', error.message); }
   }
   const directory = join(app.getPath('userData'), 'workspace-data');
-  workspace = new WorkspaceService({ directory });
+  // Verified automatic backups at startup and then daily, keeping the latest five.
+  workspace = new WorkspaceService({ directory, backups: { automatic: true, intervalHours: 24, keep: 5 } });
   const activity = new ActivityLog({ directory, onPrune: options => { workspace.pruneActivity(options).catch(error => console.warn(`Weft activity retention: ${error.message}`)); } });
   // Update checks, downloads, installs and rollbacks are attributable activity (hosts, versions and outcomes only).
   if (updates) updates.audit = entry => activity.append(entry);

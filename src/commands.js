@@ -132,10 +132,11 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'approvals.approve', 'approvals.reject', 'autonomy.update', 'activity.configure',
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
-  'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure']);
+  'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
-  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
+  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
@@ -143,7 +144,11 @@ const descriptions = {
   expectedRevision: 'Last read record revision; rejects concurrent changes.',
   id: 'Identifier of the existing record.', url: 'HTTP(S) destination without credentials; about:blank only where supported.',
   changes: 'Fields to update; omitted fields remain unchanged.',
+  requestId: 'Optional client-chosen idempotency key. Retrying the same command and arguments with it returns the original result (marked replayed) instead of applying twice; reusing it for different arguments fails with idempotency_conflict.',
+  dryRun: 'When true, validate and compute the result and record changes without committing anything.',
+  commands: 'Ordered record commands, each {command, args}; a string "$N.id" in args is replaced by the id returned by earlier command N.',
 };
+export const REPLAYED = Symbol.for('weft.replayed');
 function describeShape(shape) {
   return Object.fromEntries(Object.entries(shape).map(([key, field]) => [key,
     field.describe(field.description || descriptions[key] || `${key.replace(/([A-Z])/g, ' $1')} value.`)]));
@@ -166,7 +171,7 @@ export const commands = Object.freeze(Object.fromEntries(
     return [name, { description, inputSchema: describeNested(z.toJSONSchema(schemas[name])),
       humanOnly: humanOnly.has(name), actionClass: actionClassForCommand(name), resource: resourceForCommand(name),
       dataClasses: dataClassesForCommand(name), effect: effectForCommand(name), sensitiveCategories: sensitiveCategoriesForCommand(name),
-      readOnly: read, destructive: /\.(delete|clear|close|remove)$/.test(name) }];
+      readOnly: read, destructive: /\.(delete|clear|close|remove)$/.test(name) || name === 'backups.restore' }];
   }),
 ));
 
@@ -207,7 +212,7 @@ export function toCommandError(error, commandName, input) {
   }
   const message = error?.message || 'Command failed';
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
-    unknown_command: 400, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
+    unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
     command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 };
   let code = error?.code === 'SITE_BLOCKED' ? 'site_blocked' : Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
@@ -291,7 +296,7 @@ export function normalizeCommand(name, args = {}) {
   return { command, args: output, normalized };
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
-  stale_state: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
+  stale_state: 3, idempotency_conflict: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
   emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;
@@ -313,6 +318,6 @@ export async function executeOutcome(execute, name, input = {}, { returnsOutcome
     }
     return { schemaVersion: 1, command: prepared.command, execution: 'succeeded', validation: 'passed', review: 'not_required',
       workspaceId: args.workspaceId ?? (prepared.command !== 'page.evaluate' ? result?.workspaceId : null) ?? null, tabId: args.tabId ?? (prepared.command.startsWith('tabs.') ? result?.id : result?.tabId) ?? null,
-      normalized: prepared.normalized, result: result ?? null, error: null };
+      normalized: prepared.normalized, ...(typeof args.requestId === 'string' && { idempotency: { requestId: args.requestId, replayed: result?.[REPLAYED] === true } }), result: result ?? null, error: null };
   } catch (error) { return errorOutcome(error, prepared.command, args, prepared.normalized); }
 }
