@@ -53,6 +53,8 @@ if (process.argv.includes('--archive-smoke')) {
     const origin = await listen(source);
     const workspace = new WorkspaceService({ directory: join(process.env.WEFT_TEST_PROFILE, 'records') });
     const window = new BrowserWindow({ show: true, width: 1200, height: 900 });
+    // Capture only once the window is mapped, as in the app; an unmapped window has no compositor surface yet.
+    if (!window.isVisible()) await new Promise(resolve => window.once('show', resolve));
     const browser = new Browser({ window, workspaceService: workspace });
     workspace.attachBrowser(browser);
     const beaconHits = [];

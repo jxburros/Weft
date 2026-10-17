@@ -236,12 +236,23 @@ export class MetadataStore {
     try { pending = JSON.parse(this.info('searchIndexRebuild') || 'null'); } catch { pending = null; }
     if (exists && pending?.version === SEARCH_INDEX_VERSION) { this.beginIndexing(pending.reason ?? 'version_change', Array.isArray(pending.cursor) ? pending.cursor : null); return; }
     const reason = exists || this.info('searchIndexVersion') ? 'version_change' : 'new_index';
-    this.transaction(() => {
-      this.db.exec('DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs;');
-      this.db.exec(MetadataStore.searchSchema('main'));
-      this.db.prepare("DELETE FROM store_info WHERE key = 'searchIndexVersion'").run();
-      this.setInfo('searchIndexRebuild', JSON.stringify({ version: SEARCH_INDEX_VERSION, reason, cursor: null }));
-    });
+    // Dropping a stale index happens while opening, so it must not cost time proportional to the index: with
+    // secure_delete=ON SQLite rewrites every freed page with zeros (megabytes of synced WAL, then a checkpoint),
+    // which takes seconds on slower disks. FAST frees the pages without that I/O, but they keep old index text, and
+    // text can later leave the database (restriction, purge, deletion). So the same transaction records a durable
+    // scrub marker; the freed pages are scrubbed (VACUUM) in the background after the rebuild, or at once when content
+    // is restricted or purged, and the marker is cleared only after a successful scrub (see scrubIfNeeded).
+    const priorSecureDelete = Number(this.db.prepare('PRAGMA secure_delete').get().secure_delete);
+    this.db.exec('PRAGMA secure_delete = FAST');
+    try {
+      this.transaction(() => {
+        if (exists) this.setInfo('searchIndexNeedsScrub', '1');
+        this.db.exec('DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs;');
+        this.db.exec(MetadataStore.searchSchema('main'));
+        this.db.prepare("DELETE FROM store_info WHERE key = 'searchIndexVersion'").run();
+        this.setInfo('searchIndexRebuild', JSON.stringify({ version: SEARCH_INDEX_VERSION, reason, cursor: null }));
+      });
+    } finally { this.db.exec(`PRAGMA secure_delete = ${[0, 1, 2].includes(priorSecureDelete) ? priorSecureDelete : 1}`); }
     this.beginIndexing(reason, null);
   }
   beginIndexing(reason, cursor) {
@@ -293,7 +304,7 @@ export class MetadataStore {
     return { complete: exhausted, processed, done: state.done, total: state.total };
   }
   /** Finish any pending rebuild synchronously (tests, tools and benchmarks). */
-  finishIndexing() { while (this.indexing) this.indexStep({ maxRecords: 5000, budgetMs: Infinity }); }
+  finishIndexing() { while (this.indexing) this.indexStep({ maxRecords: 5000, budgetMs: Infinity }); this.scrubIfNeeded(); }
   /** Lexical coverage of one workspace: complete, or how many of its records the background rebuild has not reached. */
   lexicalCoverage(workspaceId) {
     const documents = this.documentCount(workspaceId);
@@ -617,7 +628,24 @@ export class MetadataStore {
   secureCompact() {
     this.assertOpen();
     this.db.exec("INSERT INTO search_fts(search_fts) VALUES('optimize')");
+    // Pages freed by a stale-index drop may still hold the text just removed: scrub them now.
+    if (this.scrubIfNeeded()) return;
     this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  }
+  /** Whether pages freed by a stale-index drop (secure_delete=FAST) still await scrubbing. */
+  get needsScrub() { return Boolean(this.db) && this.info('searchIndexNeedsScrub') === '1'; }
+  /**
+   * Scrub pages freed by a stale-index drop: VACUUM rewrites the file without its freelist, then the WAL is
+   * truncated. The marker is removed only after that succeeds, so an interrupted scrub runs again later.
+   * Returns whether a scrub ran.
+   */
+  scrubIfNeeded() {
+    this.assertOpen();
+    if (!this.needsScrub) return false;
+    this.compact();
+    this.db.prepare("DELETE FROM store_info WHERE key = 'searchIndexNeedsScrub'").run();
+    this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    return true;
   }
   checkpoint() { return { meta: new Map(this.meta), docs: new Map([...this.docs].map(([name, docs]) => [name, new Map(docs)])), layout: [...this.layout] }; }
   stateFrom(checkpoint) {

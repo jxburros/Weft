@@ -601,6 +601,21 @@ alone is not a shipped capability.
 
 ### Fixed
 
+- Opening a workspace whose search index has an older version no longer zeroes
+  every page of the old index first (seconds of synced writes on Windows CI; the
+  open blocked longer than a full rebuild). The stale index is dropped with
+  `secure_delete=FAST` and a durable scrub marker in the same transaction; the
+  freed pages are scrubbed with `VACUUM` in the background once the rebuild
+  finishes, or at once when content is restricted or purged, and the marker is
+  cleared only after a successful scrub. Regression tests reset first and
+  restrict, purge or delete afterwards, then check the database and WAL bytes
+  (`test/index-reset-privacy.test.js`); the prior `secure_delete` value is
+  restored on every path.
+- Screenshots wait for a painted frame and treat Chromium's transient
+  `UnknownVizError` (no compositor surface yet) like an empty frame within the
+  bounded retry; new collections keep the workspace they were created in when
+  the GUI's active workspace changes meanwhile.
+
 - Windows CI: tests close every store, server, broker and child they open before
   removing their temporary profile (shared `test/temp-profile.js`, which on Linux
   fails a test that removes a directory with a file still open). The failing

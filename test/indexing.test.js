@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { performance } from 'node:perf_hooks';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -56,6 +56,9 @@ test('a search-index version change rebuilds in the background: open is fast, se
   service = new WorkspaceService({ directory, onWarning() {} });
   const openPendingMs = performance.now() - pendingStart;
   assert.ok(service.storage.indexing, 'the rebuild is still pending after open');
+  // Opening may not write in proportion to the old index (zeroing every freed page made opening take seconds on Windows).
+  const walBytes = (() => { try { return statSync(join(directory, 'workspace.sqlite-wal')).size; } catch (error) { if (error.code === 'ENOENT') return 0; throw error; } })();
+  assert.ok(walBytes < 2 * 1024 * 1024, `opening with a stale index wrote ${walBytes} WAL bytes`);
   const syncStart = performance.now();
   service.storage.finishIndexing();
   const rebuildMs = performance.now() - syncStart;
@@ -160,4 +163,27 @@ test('an encrypted profile rebuilds its in-memory index in the background after 
   // Locking stops the rebuild with the store; nothing runs while locked.
   await service.executeEncryption('encryption.lock', {}, human);
   assert.equal(service.storage, null);
+});
+
+test('dropping a stale index at open keeps deleted text off disk and restores secure_delete', { timeout: 60000 }, async t => {
+  const directory = profile(t);
+  let service = new WorkspaceService({ directory, onWarning() {} });
+  closeAfter(t, { close: () => closeQuietly(service) }); // closes whichever instance is current
+  await seed(service, 500);
+  const secret = await service.execute('materials.create', { title: 'Vendor quote', content: 'quoted price zebrafinch7741 per unit' });
+  assert.equal((await service.execute('search.query', { query: 'zebrafinch7741' }, human))[0].id, secret.id);
+  await service.execute('materials.delete', { id: secret.id });
+  service.close();
+  staleIndex(directory);
+  // Open drops the stale index with secure_delete=FAST, then rebuilds; the deleted text must not reappear anywhere.
+  service = new WorkspaceService({ directory, onWarning() {} });
+  assert.equal(Number(service.storage.db.prepare('PRAGMA secure_delete').get().secure_delete), 1, 'secure_delete is ON again after the drop');
+  service.storage.finishIndexing();
+  assert.deepEqual(await service.execute('search.query', { query: 'zebrafinch7741' }, human), []);
+  service.close();
+  for (const name of ['workspace.sqlite', 'workspace.sqlite-wal']) {
+    let bytes;
+    try { bytes = readFileSync(join(directory, name)); } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    assert.equal(bytes.includes('zebrafinch7741'), false, `${name} still contains deleted text`);
+  }
 });

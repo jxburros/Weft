@@ -292,14 +292,28 @@ export class WorkspaceService {
    */
   startIndexing() {
     const storage = this.storage;
-    if (!storage?.indexing) return;
+    if (!storage?.indexing) { this.scheduleScrub(); return; }
     if (this.indexingPaused) storage.indexing.paused = true;
     else {
       try { storage.indexStep({ maxRecords: 2000, budgetMs: 30 }); } catch (error) { this.indexingFailed(storage, error); return; }
-      if (!storage.indexing) return;
+      if (!storage.indexing) { this.scheduleScrub(); return; }
     }
     this.emitIndexing(storage.indexing.paused ? 'paused' : 'started', storage);
     this.scheduleIndexing();
+  }
+  /**
+   * After a stale-index drop, scrub the freed pages (storage.scrubIfNeeded: VACUUM) on a later tick, never while
+   * opening or inside a command. Runs again at the next open if interrupted (the marker is durable).
+   */
+  scheduleScrub() {
+    const storage = this.storage;
+    if (this.scrubTimer || this.closed || this.locked || !storage?.needsScrub || storage.indexing) return;
+    this.scrubTimer = setTimeout(() => {
+      this.scrubTimer = null;
+      if (this.storage !== storage || !storage.db || this.closed || this.locked || storage.indexing) return;
+      try { storage.scrubIfNeeded(); } catch (error) { this.onWarning({ code: 'SCRUB_FAILED', message: `Scrubbing pages freed by the old search index failed and will be retried: ${error.message}` }); }
+    }, 0);
+    this.scrubTimer.unref?.();
   }
   scheduleIndexing() {
     const storage = this.storage;
@@ -309,7 +323,7 @@ export class WorkspaceService {
       if (this.storage !== storage || !storage.db || this.locked || !storage.indexing || storage.indexing.paused) return;
       let step;
       try { step = storage.indexStep(); } catch (error) { this.indexingFailed(storage, error); return; }
-      if (step.complete) { this.emitIndexing('completed', storage, { processed: step.total, total: step.total }); return; }
+      if (step.complete) { this.emitIndexing('completed', storage, { processed: step.total, total: step.total }); this.scheduleScrub(); return; }
       const percent = Math.floor((step.done / Math.max(1, step.total)) * 10);
       if (percent > (storage.indexing.reported ?? 0)) { storage.indexing.reported = percent; this.emitIndexing('progress', storage); }
       this.scheduleIndexing();
@@ -384,6 +398,7 @@ export class WorkspaceService {
     this.closed = true;
     clearInterval(this.backupTimer);
     clearTimeout(this.indexTimer);
+    clearTimeout(this.scrubTimer);
     this.storage?.close();
     this.encryption.forget();
     this.lock.release();

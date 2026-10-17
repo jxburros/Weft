@@ -1977,14 +1977,17 @@ export class Browser {
       if (mode === 'viewport') {
         // Let the page produce a frame first (bounded: frames never arrive for an occluded window), as offscreen captures do.
         await bounded(this.observe(contents, null, {}, 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))'), 1000).catch(() => {});
-        let image = await bounded(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
+        // UnknownVizError means the compositor has no surface yet (e.g. a window still being mapped): transient, like an empty frame.
+        const grab = () => bounded(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }))
+          .catch(error => { if (/UnknownVizError/.test(String(error?.message ?? error))) return null; throw error; });
+        let image = await grab();
         // Right after a navigation or reload Chromium may not have painted a frame yet: ask for one and retry briefly.
-        for (let attempt = 1; image.isEmpty() && attempt <= 5; attempt++) {
+        for (let attempt = 1; (!image || image.isEmpty()) && attempt <= 5; attempt++) {
           contents.invalidate();
           await delay(100 * attempt);
-          image = await bounded(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
+          image = await grab();
         }
-        if (image.isEmpty()) throw new Error('The page has no rendered image yet; show the tab and try again');
+        if (!image || image.isEmpty()) throw new Error('The page has no rendered image yet; show the tab and try again');
         const size = image.getSize();
         scale = Math.min(requestedScale, maxWidth / size.width, maxHeight / size.height);
         if (scale < requestedScale) limitations.push('Viewport image downscaled to the resolution limit.');

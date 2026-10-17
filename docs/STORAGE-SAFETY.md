@@ -95,6 +95,14 @@ component files and freed database pages are overwritten (`secure_delete`,
 a truncated WAL can keep earlier blocks: overwriting is never called secure
 erasure.
 
+One exception keeps opening fast: when the full-text index format changes, the
+old index is dropped while opening with `secure_delete=FAST`, which frees its
+pages without rewriting them. A durable `searchIndexNeedsScrub` marker is
+written in the same transaction; the freed pages are scrubbed with `VACUUM` in
+the background after the rebuild, or immediately when content is restricted or
+purged, and the marker is removed only after the scrub succeeds (an interrupted
+scrub runs again after the next open, never during it).
+
 Exports (`workspaces.export`, `workspaces.exportPackage`, `workspaces.exportAs`)
 from an encrypted profile require `acknowledgePlaintext: true` and say they are
 plaintext. Restoring an encrypted backup needs the recovery key or passphrase
