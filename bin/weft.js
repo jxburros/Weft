@@ -13,8 +13,10 @@ Examples:
   weft page.screenshot '{"tabId":1}'`);
 } else {
   try {
-    if (extra.length) throw new Error('Pass command arguments as one JSON object');
-    const client = createClient();
+    if (extra.length) throw Object.assign(new Error('Pass command arguments as one JSON object'), { code: 'invalid_arguments' });
+    let client;
+    try { client = createClient(); }
+    catch (error) { error.code = 'invalid_arguments'; throw error; }
     if (command === 'mcp') {
       const { startMcp } = await import('../src/mcp.js');
       await startMcp(client);
@@ -27,8 +29,9 @@ Examples:
     }
   } catch (error) {
     if (error instanceof SyntaxError) error.message = 'Invalid JSON arguments. Supply one JSON object.';
-    const outcome = errorOutcome(Object.assign(error, { code: error instanceof SyntaxError ? 'invalid_json' : 'invalid_arguments' }), command, {}, [], 'failed');
-    console.log(JSON.stringify(outcome, null, 2));
+    const outcome = errorOutcome(Object.assign(error, { code: error instanceof SyntaxError ? 'invalid_json' : error.code || 'transport_error' }), command, {}, [], error instanceof SyntaxError || error.code === 'invalid_arguments' ? 'failed' : 'not_run');
+    const write = command === 'mcp' ? console.error : console.log;
+    write(JSON.stringify(outcome, null, 2));
     process.exitCode = resultExitCode(outcome);
   }
 }
