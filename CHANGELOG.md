@@ -38,7 +38,9 @@ alone is not a shipped capability.
 
 ### Notes
 
-Validation: offline MCP reference scenarios passed (3/3); performance budgets
+Validation: Linux Chromium/GUI/golden checks, transport/security regressions and
+syntax checks passed locally; CI additionally verifies Node 22/24 on Windows,
+macOS and Linux. Offline MCP reference scenarios passed (3/3); performance budgets
 passed for 10k materials and 1k captures. Integrated documentation, grouped MCP eval and performance checks passed
 (6 tests, no skips; 11 documented command examples). These checks do not
 establish cross-platform hardware/account support.
