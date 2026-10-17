@@ -331,6 +331,8 @@ test('in-process, REST, CLI and MCP return identical outcomes', async t => {
     catch (error) { output = error; }
     assert.deepEqual(JSON.parse(output.stdout), expected);
   }
+  const alias = await client.callTool({ name: 'weft_tabs', arguments: { action: 'tabs.open', args: { href: 'about:blank' } } });
+  assert.deepEqual(alias.structuredContent, await executeOutcome((command, args) => ({ command, args }), 'tabs.open', { href: 'about:blank' }));
   const reference = await client.callTool({ name: 'weft_reference', arguments: { command: 'tabs.new' } });
   assert.deepEqual(reference.structuredContent.result.inputSchema, commands['tabs.new'].inputSchema);
 });
@@ -363,4 +365,20 @@ test('per-client authentication reaches dispatch and scopes/revokes SSE', { time
   assert.equal((await reader.read()).done, true);
   assert.equal(events.listenerCount('event'), 0);
   assert.equal((await fetch(`${url}/v1/commands`, { headers })).status, 401);
+});
+
+
+test('safe admission diagnostics survive outcomes without copying arbitrary details', async () => {
+  const workspaceId = 'ws_12345678-1234-1234-1234-123456789abc';
+  const outcome = await executeOutcome(() => { throw Object.assign(new Error('Choose a target'), { code: 'ambiguous_target', details: {
+    workspaceIds: [workspaceId, 'secret'], tabs: [{ tabId: 1, workspaceId, title: 'secret' }], secret: 'private',
+  } }); }, 'tabs.list');
+  assert.deepEqual(outcome.error.details, { workspaceIds: [workspaceId], tabs: [{ tabId: 1, workspaceId }] });
+  assert.doesNotMatch(JSON.stringify(outcome), /secret|private/);
+  for (const [code, exit] of [['tab_busy', 3], ['action_interrupted', 7]]) {
+    const failed = await executeOutcome(() => { throw Object.assign(new Error('Interrupted'), { code }); }, 'tabs.list');
+    assert.equal(failed.error.code, code);
+    assert.equal(failed.error.httpStatus, 409);
+    assert.equal(resultExitCode(failed), exit);
+  }
 });

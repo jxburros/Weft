@@ -1,7 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { commands, executeOutcome, errorOutcome, CommandError } from './commands.js';
+import { commands, executeOutcome, errorOutcome, CommandError, normalizeCommand } from './commands.js';
 
 const groups = {
   tabs: ['tabs'], page: ['page'],
@@ -44,7 +44,7 @@ export function createMcpServer(client) {
         let command; let args;
         if (tool) {
           const input = params.arguments ?? {};
-          if (Object.keys(input).some(key => !['action', 'args'].includes(key)) || !tool.inputSchema.properties.action.enum.includes(input.action)) {
+          if (Object.keys(input).some(key => !['action', 'args'].includes(key)) || !tool.inputSchema.properties.action.enum.includes(normalizeCommand(input.action, input.args).command)) {
             throw new CommandError({ code: 'invalid_arguments', message: 'Choose an action from this tool and supply its args.', field: 'action', allowed: tool.inputSchema.properties.action.enum, schema: 'weft_reference' });
           }
           command = input.action; args = input.args;

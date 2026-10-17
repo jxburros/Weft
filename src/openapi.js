@@ -35,7 +35,7 @@ export function createOpenApiDocument(catalog = commands) {
           code: { type: 'string', description: 'Stable machine-readable error code; see docs/COMMANDS.md.' },
           message: { type: 'string' }, field: { type: ['string', 'null'] },
           allowed: { type: 'array', items: {} }, suggestions: { type: 'array', items: { type: 'string' } },
-          schema: { type: 'string' }, issues: { type: 'array', items: { type: 'object' } }, httpStatus: { type: 'integer' },
+          schema: { type: 'string' }, details: { type: 'object', description: 'Allowlisted state diagnostics such as visible target candidates or emergency stop time.' }, issues: { type: 'array', items: { type: 'object' } }, httpStatus: { type: 'integer' },
         } },
         CommandOutcome: { type: 'object', required: ['schemaVersion', 'command', 'execution', 'validation', 'review', 'workspaceId', 'tabId', 'normalized', 'result', 'error'], properties: {
           schemaVersion: { const: 1 }, command: { type: ['string', 'null'] },
