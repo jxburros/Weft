@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { electronEnv } from "../scripts/electron-env.js";
 const root = fileURLToPath(new URL("../", import.meta.url));
 const goldenDir = join(root, "test/visual/golden");
 const failureDir = join(root, "test/visual/_failures");
@@ -239,7 +240,7 @@ if (process.argv.includes("--visual-child")) {
     // machine-local override such as forced unhinted text or a preferred UI font cannot shift goldens.
     const fontconfig=join(profile,"fonts.conf");
     writeFileSync(fontconfig,`<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include><match target="pattern"><test name="family"><string>sans-serif</string></test><edit name="family" mode="prepend_first" binding="strong"><string>DejaVu Sans</string></edit></match><match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit><edit name="hinting" mode="assign"><bool>true</bool></edit><edit name="hintstyle" mode="assign"><const>hintslight</const></edit><edit name="autohint" mode="assign"><bool>false</bool></edit><edit name="rgba" mode="assign"><const>none</const></edit><edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match></fontconfig>`);
-    const child=spawn(electron,["--no-sandbox","--disable-gpu",fileURLToPath(import.meta.url),"--visual-child"],{env:{...process.env,ELECTRON_RUN_AS_NODE:"",WEFT_VISUAL_PROFILE:profile,FONTCONFIG_FILE:fontconfig,TZ:"UTC",LANG:"en_US.UTF-8"},stdio:["ignore","pipe","pipe"]});
+    const child=spawn(electron,["--no-sandbox","--disable-gpu",fileURLToPath(import.meta.url),"--visual-child"],{env:electronEnv({ WEFT_VISUAL_PROFILE:profile,FONTCONFIG_FILE:fontconfig,TZ:"UTC",LANG:"en_US.UTF-8" }),stdio:["ignore","pipe","pipe"]});
     let output=""; child.stdout.on("data",x=>output+=x);child.stderr.on("data",x=>output+=x);
     const timer=setTimeout(()=>child.kill("SIGKILL"),80000);
     try { const code=await new Promise((resolve,reject)=>{child.on("exit",resolve);child.on("error",reject);}); assert.equal(code,0,output); assert.match(output,/WEFT_VISUAL_OK/); }

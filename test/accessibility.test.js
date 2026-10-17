@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import electron from "electron";
 import { installChecks } from "./a11y-checks.js";
+import { electronEnv } from "../scripts/electron-env.js";
 
 /**
  * Accessibility audit of the real GUI renderer in real Electron (#31): axe-core over every main
@@ -415,7 +416,7 @@ if (process.argv.includes("--a11y-child")) {
     const port = reservation.address().port;
     await new Promise((r) => reservation.close(r));
     const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--a11y-child"], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "", WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: TOKEN, LANG: "en_US.UTF-8" },
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: TOKEN, LANG: "en_US.UTF-8" }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

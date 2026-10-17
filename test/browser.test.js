@@ -13,6 +13,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Browser, safeUrl } from '../src/browser.js';
 import electron from 'electron';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const smoke = process.argv.includes('--weft-browser-smoke');
 const mainSmoke = process.argv.includes('--weft-main-smoke');
@@ -288,7 +289,7 @@ if (mainSmoke) {
     // CI lacks a configured setuid sandbox helper; production startup never uses these flags.
     const testFlags = ['--no-sandbox', '--disable-gpu'];
     const child = spawn(electron, [...testFlags, fileURLToPath(import.meta.url), '--weft-browser-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile },
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -305,7 +306,7 @@ if (mainSmoke) {
       await new Promise(resolve => portReservation.close(resolve));
       const token = 'browser-integration-test-token';
       const main = spawn(electron, [...testFlags, `--user-data-dir=${profile}/main`, fileURLToPath(import.meta.url), '--weft-main-smoke'], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile },
+        env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let mainOutput = '';
@@ -356,7 +357,7 @@ if (mainSmoke) {
         assert.equal((await request('browser.close')).status, 200);
         await new Promise(resolve => main.once('exit', resolve));
         const lifecycle = spawn(electron, [...testFlags, `--user-data-dir=${profile}/gui-close`, fileURLToPath(import.meta.url), '--weft-main-smoke', '--weft-close-gui'], {
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile },
+          env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile }),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let lifecycleOutput = '';

@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { electronEnv } from '../electron-env.js';
 
 const [executable, expectedKind] = process.argv.slice(2);
 if (!executable) { console.error('Usage: smoke-packaged.js <executable> [expected-install-kind]'); process.exit(2); }
@@ -19,7 +20,7 @@ const args = [`--user-data-dir=${profile}`];
 // CI Linux runners lack the setuid sandbox helper and FUSE; production launches never pass these flags
 // (APPIMAGE_EXTRACT_AND_RUN only affects AppImages).
 if (process.platform === 'linux') args.push('--no-sandbox', '--disable-gpu');
-const child = spawn(executable, args, { env: { ...process.env, WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_DISABLE_UPDATES: '1', ELECTRON_RUN_AS_NODE: '', APPIMAGE_EXTRACT_AND_RUN: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn(executable, args, { env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_DISABLE_UPDATES: '1', APPIMAGE_EXTRACT_AND_RUN: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
 let output = '';
 child.stdout.on('data', chunk => { output += chunk; });
 child.stderr.on('data', chunk => { output += chunk; });

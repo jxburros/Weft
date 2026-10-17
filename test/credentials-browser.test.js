@@ -13,6 +13,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { CredentialService } from '../src/credentials.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const SECRET = 'Tr0ub4dor-and-3-staples';
 const USERNAME = 'ada.lovelace@example.com';
@@ -267,7 +268,7 @@ if (process.argv.includes('--credentials-smoke')) {
     const profile = mkdtempSync(join(tmpdir(), 'weft-credentials-browser-'));
     mkdirSync(profile, { recursive: true });
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', '--force-device-scale-factor=1', fileURLToPath(import.meta.url), '--credentials-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

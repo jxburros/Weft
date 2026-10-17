@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const PASSPHRASE = 'gui encryption passphrase';
 const TOKEN = 'encryption-gui-token';
@@ -112,7 +113,7 @@ if (phase) {
     const port = reservation.address().port;
     await new Promise(resolve => reservation.close(resolve));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), `--encryption-gui=${flag}`], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: TOKEN, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: TOKEN, ...env }), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => (output += chunk));
     child.stderr.on('data', chunk => (output += chunk));

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { opticalFiles } from "../scripts/logo-optical.js";
+import { electronEnv } from "../scripts/electron-env.js";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, root));
@@ -33,7 +34,7 @@ test("rendered measurements: the supplied mark loses its crossing at favicon siz
   timeout: 120000,
   skip: process.platform !== "linux" ? "Measured with the Linux Chromium job" : !process.env.DISPLAY ? "Requires DISPLAY or xvfb-run" : false,
 }, async () => {
-  const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(new URL("scripts/validate-logo.js", root))], { env: { ...process.env, ELECTRON_RUN_AS_NODE: "" }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(new URL("scripts/validate-logo.js", root))], { env: electronEnv(), stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (x) => (output += x));
   child.stderr.on("data", (x) => (output += x));

@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const harness = process.argv.includes('--responsiveness-harness');
 const percentile = (values, p) => { const sorted = [...values].sort((a, b) => a - b); return sorted.length ? Math.round(sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]) : null; };
@@ -51,8 +52,8 @@ export async function runResponsiveness({ records = 5000, workspaces = 3, agents
     const port = reservation.address().port;
     await new Promise(resolve => reservation.close(resolve));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), '--responsiveness-harness'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: 'responsiveness-token',
-        WEFT_BENCH: JSON.stringify({ agents, rounds, probes }) }, stdio: ['ignore', 'pipe', 'pipe'] });
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: 'responsiveness-token',
+        WEFT_BENCH: JSON.stringify({ agents, rounds, probes }) }), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
     child.stderr.on('data', chunk => { output += chunk; });

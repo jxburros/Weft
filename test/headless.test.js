@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { createClient } from '../src/client.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 /*
  * Real Electron headless lifecycle (#11): the shipped main process started with --headless, driven
@@ -45,7 +46,7 @@ if (process.argv.includes('--headless-harness')) {
   }
   function launch({ profile, port, token, headless }) {
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', harness, '--headless-harness', ...(headless ? ['--headless'] : [])], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: token }, stdio: ['pipe', 'pipe', 'pipe'] });
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: token }), stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '';
     const waiters = new Map();
     let next = 1;

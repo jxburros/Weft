@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { electronEnv } from "../scripts/electron-env.js";
 
 // Real Electron GUI: proposals and promotion, conflicts, citation status, linked-source status and shared collections.
 if (process.argv.includes("--gui-knowledge")) {
@@ -140,7 +141,7 @@ if (process.argv.includes("--gui-knowledge")) {
     const port = reservation.address().port;
     await new Promise((r) => reservation.close(r));
     const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--gui-knowledge"], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "", WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-knowledge-token", WEFT_LINK_FOLDER: folder },
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-knowledge-token", WEFT_LINK_FOLDER: folder }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

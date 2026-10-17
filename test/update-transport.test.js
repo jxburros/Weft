@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import electron from 'electron';
+import { electronEnv } from '../scripts/electron-env.js';
 
 // Exercises the real Electron net transport against a loopback fixture (no internet):
 // redirects are surfaced to UpdateService instead of followed, bodies stream, and
@@ -49,7 +50,7 @@ if (process.argv.includes('--weft-update-transport')) {
     skip: process.platform === 'linux' && !process.env.DISPLAY ? 'Requires a display; run xvfb-run -a npm test on headless Linux' : false,
   }, async () => {
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), '--weft-update-transport'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv(), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

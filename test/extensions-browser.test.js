@@ -12,6 +12,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { WorkspaceExtensions } from '../src/extensions.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 // Compatibility evidence for docs/decisions/007-extension-compatibility.md:
 // a real Electron/Chromium run of a fixture MV3 extension in workspace sessions.
@@ -110,7 +111,7 @@ if (smoke) {
   test('real Chromium: MV3 extension support, workspace isolation, egress limits and revocation', { timeout: 60000 }, async () => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-extension-integration-'));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', ...(!process.env.DISPLAY && process.platform === 'linux' ? ['--ozone-platform=headless'] : []), fileURLToPath(import.meta.url), '--extension-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

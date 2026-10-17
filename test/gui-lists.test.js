@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { electronEnv } from "../scripts/electron-env.js";
 
 /**
  * The human screens for community site lists (#28) and agent input serialization (#9), driven in the
@@ -156,7 +157,7 @@ if (process.argv.includes("--gui-lists")) {
     const port = reservation.address().port;
     await new Promise((r) => reservation.close(r));
     const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--gui-lists"], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: "", WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-lists-token" },
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-lists-token" }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

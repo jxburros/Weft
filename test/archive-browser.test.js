@@ -11,6 +11,7 @@ import electron from 'electron';
 import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { encodePng } from '../src/png.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 async function until(check, message = 'Archive condition timed out', attempts = 250) {
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -164,7 +165,7 @@ if (process.argv.includes('--archive-smoke')) {
   }, async () => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-archive-browser-'));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', '--force-device-scale-factor=1', fileURLToPath(import.meta.url), '--archive-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

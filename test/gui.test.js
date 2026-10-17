@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
 import { netscapeFile } from "./fixtures/browsing-data.mjs";
+import { electronEnv } from "../scripts/electron-env.js";
 
 if (process.argv.includes("--gui-workflows")) {
   const { app, BrowserWindow } = electron;
@@ -606,13 +607,11 @@ if (process.argv.includes("--gui-workflows")) {
           "--gui-workflows",
         ],
         {
-          env: {
-            ...process.env,
-            ELECTRON_RUN_AS_NODE: "",
+          env: electronEnv({
             WEFT_TEST_PROFILE: profile,
             WEFT_PORT: String(port),
             WEFT_TOKEN: "gui-fixture-token",
-          },
+          }),
           stdio: ["ignore", "pipe", "pipe"],
         },
       );

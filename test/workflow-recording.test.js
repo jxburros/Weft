@@ -11,6 +11,7 @@ import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const secrets = ['my private query', 'hunter2-pass'];
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -103,7 +104,7 @@ if (process.argv.includes('--recording-smoke')) {
   }, async () => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-recording-'));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', '--force-device-scale-factor=1', fileURLToPath(import.meta.url), '--recording-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

@@ -14,6 +14,7 @@ import { createDispatcher } from '../src/dispatch.js';
 import { CredentialService } from '../src/credentials.js';
 import { PaymentService } from '../src/payments.js';
 import { testProtector, PAN, CVC } from './fixtures/payment-fixture.mjs';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)).then(() => `http://127.0.0.1:${server.address().port}`);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -241,7 +242,7 @@ if (process.argv.includes('--payments-smoke')) {
     const profile = mkdtempSync(join(tmpdir(), 'weft-payments-browser-'));
     mkdirSync(profile, { recursive: true });
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', '--force-device-scale-factor=1', fileURLToPath(import.meta.url), '--payments-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

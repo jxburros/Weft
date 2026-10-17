@@ -11,6 +11,7 @@ import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 /*
  * Real Chromium idle-tab suspension and restoration (#30): eligibility, scroll restoration on use,
@@ -137,7 +138,8 @@ if (harness) {
       // Workload: repeated suspend/restore cycles release every renderer they create.
       const baseline = renderers();
       for (let i = 0; i < 20; i++) {
-        assert.equal((await dispatch('tabs.suspend', { tabId: tasked.id }, human)).result.suspended, true);
+        const cycle = (await dispatch('tabs.suspend', { tabId: tasked.id }, human)).result;
+        assert.equal(cycle.suspended, true, `suspend/restore cycle ${i} refused: ${JSON.stringify(cycle.blockedBy)}`);
         await dispatch('page.readable', { tabId: tasked.id }, agent);
       }
       await until(() => renderers() <= baseline, 'no leaked renderers');
@@ -157,7 +159,7 @@ if (harness) {
     const profile = mkdtempSync(join(tmpdir(), 'weft-suspension-'));
     mkdirSync(profile, { recursive: true });
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), '--suspension-harness'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'] });
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
     child.stderr.on('data', chunk => { output += chunk; });

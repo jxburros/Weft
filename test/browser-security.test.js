@@ -12,6 +12,7 @@ import { Browser, applyEngineHardening } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { CommunityLists } from '../src/community-lists.js';
 import { executeOutcome } from '../src/commands.js';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const mode = ['--security-smoke', '--security-crash', '--security-recover'].find(flag => process.argv.includes(flag));
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -451,7 +452,7 @@ if (mode) {
 } else {
   const skip = process.platform === 'linux' && !process.env.DISPLAY ? 'Requires a display; run xvfb-run -a npm test on headless Linux' : false;
   const launch = (flag, profile, port = 0) => {
-    const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), flag], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile, WEFT_FIXTURE_PORT: String(port) }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), flag], { env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_FIXTURE_PORT: String(port) }), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
     child.stderr.on('data', chunk => { output += chunk; });
