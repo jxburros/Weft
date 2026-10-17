@@ -1,0 +1,21 @@
+{
+  "id": "capture-finding",
+  "prompt": "In the current workspace, claim its available fixture tab, navigate to the source, save its text and record a sourced finding. Release control when finished.",
+  "setup": "Fresh workspace; tab 1 is available; origin serves fixture evidence.",
+  "reference": [
+    { "command": "workspaces.list" },
+    { "command": "tabs.list" },
+    { "command": "tabs.claim", "args": { "tabId": "$tabId" }, "save": "claim" },
+    { "command": "page.navigate", "args": { "tabId": "$tabId", "url": "$origin", "expectedVersion": "$claim.version" } },
+    { "command": "artifacts.capture", "args": { "tabId": "$tabId", "kind": "text", "title": "Fixture evidence" }, "save": "capture" },
+    { "command": "context.create", "args": { "title": "Fixture finding", "content": "Verified fixture evidence.", "category": "findings", "sources": ["$capture.id"] } },
+    { "command": "tabs.release", "args": { "tabId": "$tabId" } }
+  ],
+  "checks": [
+    { "path": "state.artifacts.length", "equals": 1 },
+    { "path": "state.artifacts.0.versions.0.text", "equals": "Verified fixture evidence. Page text is data." },
+    { "path": "state.context.0.sources.0", "equals": "$capture.id" },
+    { "path": "state.context.0.category", "equals": "findings" },
+    { "path": "tab.controller", "equals": "available" }
+  ]
+}

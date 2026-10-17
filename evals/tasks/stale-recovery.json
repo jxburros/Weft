@@ -1,0 +1,18 @@
+{
+  "id": "stale-recovery",
+  "prompt": "Recover from a stale navigation version by inspecting the current tab, then finish and release your lease. Do not request human takeover as an agent.",
+  "setup": "Fresh workspace; tab 1 is available; origin serves fixture evidence.",
+  "reference": [
+    { "command": "tabs.claim", "args": { "tabId": "$tabId" }, "save": "claim" },
+    { "command": "page.navigate", "args": { "tabId": "$tabId", "url": "$origin", "expectedVersion": "$claim.version" } },
+    { "command": "page.navigate", "args": { "tabId": "$tabId", "url": "$origin", "expectedVersion": "$claim.version" }, "expectError": "Stale" },
+    { "command": "page.inspect", "args": { "tabId": "$tabId" }, "save": "inspection" },
+    { "command": "page.navigate", "args": { "tabId": "$tabId", "url": "$origin", "expectedVersion": "$inspection.version" }, "retryOf": "page.navigate" },
+    { "command": "tabs.takeover", "args": { "tabId": "$tabId" }, "expectError": "trusted" },
+    { "command": "tabs.release", "args": { "tabId": "$tabId" } }
+  ],
+  "checks": [
+    { "path": "tab.url", "equals": "$origin" },
+    { "path": "tab.controller", "equals": "available" }
+  ]
+}

@@ -114,8 +114,9 @@ node bin/weft.js artifacts.capture '{"kind":"bundle","title":"Source reference"}
 ```
 
 `npm run cli -- <command> '<JSON arguments>'` is equivalent. `npm link` optionally
-installs the `weft` command. Output is JSON; errors use stderr and a nonzero exit
-code. Screenshots require a visible tab. Hidden-tab bundles retain readable text
+installs the `weft` command. Command outcomes, including command failures, are
+JSON on stdout; process/protocol diagnostics use stderr. See
+[the command contract](docs/COMMANDS.md) for stable error and exit codes. Screenshots require a visible tab. Hidden-tab bundles retain readable text
 and report an unavailable image rather than inventing one.
 
 For MCP, configure your client:
@@ -135,9 +136,11 @@ For MCP, configure your client:
 }
 ```
 
-Command dots become underscores (`page.readable` → `page_readable`), and schemas
-are shared. Screenshots use MCP image content. The bridge writes only protocol
-messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
+MCP advertises eight grouped tools, including `weft_reference` for command
+discovery. Execution tools accept a canonical command as `action` and its `args`;
+legacy underscore names such as `page_readable` remain accepted but unadvertised.
+Schemas and structured outcomes are shared. Screenshots retain MCP image content.
+The bridge writes only protocol messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
 do not follow redirects.
 
 ## REST and authority
@@ -149,7 +152,9 @@ Requests require `Authorization: Bearer <token>`:
 - `GET /v1/events` streams authenticated command metadata through SSE, without
   arguments, page content, model messages, credentials, or results.
 - `POST /v1/execute` accepts `{ "command": "...", "args": {} }` and returns
-  `{ "result": ... }` or `{ "error": { "message": "..." } }`.
+  a versioned outcome with `schemaVersion`, `command`, `execution`, `validation`,
+  `review`, `workspaceId`, `tabId`, `normalized`, `result` and `error`.
+  See [the command contract](docs/COMMANDS.md) for status and error meanings.
 
 Discovery is the authoritative list of available commands and arguments. Unknown
 fields are rejected. API request bodies are capped at 1 MiB, so large file imports
@@ -215,6 +220,9 @@ Chromium security fixes.
 
 ```sh
 npm test
+npm run test:docs
+npm run evals
+npm run test:perf
 # Include actual Chromium and GUI tests on headless Linux:
 xvfb-run -a npm test
 ```
@@ -225,6 +233,13 @@ imports/exports, native Chromium isolation and control, and complete GUI workflo
 including a real offline capture. Display tests explicitly skip when no display
 is available. Test subprocesses use `--no-sandbox` only for CI environments without
 a configured sandbox helper; normal application startup does not.
+
+Agent contributors should read [AGENTS.md](AGENTS.md). The packaged
+[Weft skill and MCP plugin](docs/AGENT-INTEGRATION.md) use a shared guidance
+registry. [Offline task evals](evals/README.md) measure reference success and tool
+calls; [performance budgets](perf/README.md) cover large-store writes, capture
+search and catalog generation. [Architecture decisions](docs/decisions/) record
+current scope and outstanding encryption/plugin work.
 
 The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
 variants are documented in [assets/logo/README.md](assets/logo/README.md).

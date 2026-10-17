@@ -1,0 +1,9 @@
+{
+  "name": "weft",
+  "version": "1.0.0",
+  "description": "Workspace browsing, evidence capture and explicit human-agent handoff through Weft's local MCP server.",
+  "author": { "name": "Weft contributors" },
+  "homepage": "https://github.com/jxburros/Weft",
+  "repository": "https://github.com/jxburros/Weft",
+  "license": "MIT"
+}
