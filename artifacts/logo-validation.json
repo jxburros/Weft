@@ -1,0 +1,602 @@
+{
+  "generatedBy": "scripts/validate-logo.js",
+  "sizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "smallSizes": [
+    16,
+    24,
+    32
+  ],
+  "decision": "adopt-optical-variant-for-16-32",
+  "opticalOk": true,
+  "suppliedLost": true,
+  "results": [
+    {
+      "id": "app-icon-light",
+      "label": "App icon, light (supplied)",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16, 24, 32, 48 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 1,
+          "bandPx": 3.56,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": 1,
+          "bandPx": 2.1,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 32,
+          "pieces": 1,
+          "bandPx": 2.81,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 48,
+          "pieces": 2,
+          "bandPx": 4.22,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 5.62,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 11.19,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 22.44,
+          "peakContrast": 6.01,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "app-icon-dark",
+      "label": "App icon, dark (supplied)",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16, 24, 32, 48 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 1,
+          "bandPx": 2.94,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": 1,
+          "bandPx": 2.09,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 32,
+          "pieces": 1,
+          "bandPx": 2.79,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 48,
+          "pieces": 2,
+          "bandPx": 4.2,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 5.61,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 11.17,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 22.43,
+          "peakContrast": 7.31,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "app-icon-plum",
+      "label": "App icon, plum (supplied)",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16, 24, 32 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 2,
+          "bandPx": 2.85,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": 1,
+          "bandPx": 2.09,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 32,
+          "pieces": 1,
+          "bandPx": 2.8,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 4.2,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 5.61,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 11.18,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 22.43,
+          "peakContrast": 6.01,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "mark-full-color",
+      "label": "Mark on ivory (supplied)",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16, 24, 32 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 1,
+          "bandPx": 1.74,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": 1,
+          "bandPx": 2.64,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 32,
+          "pieces": 2,
+          "bandPx": 3.45,
+          "peakContrast": 6.01,
+          "legible": false
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 5.21,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 6.91,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 13.87,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 27.81,
+          "peakContrast": 6.01,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "mark-mono-black",
+      "label": "Mark, one colour (supplied)",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16, 24, 32 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 1,
+          "bandPx": 1.75,
+          "peakContrast": 18.62,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": 1,
+          "bandPx": 2.64,
+          "peakContrast": 18.62,
+          "legible": false
+        },
+        {
+          "size": 32,
+          "pieces": 1,
+          "bandPx": 3.47,
+          "peakContrast": 18.62,
+          "legible": false
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 5.22,
+          "peakContrast": 18.62,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 6.94,
+          "peakContrast": 18.62,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 13.91,
+          "peakContrast": 18.62,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 27.82,
+          "peakContrast": 18.62,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "mark-dark",
+      "label": "Mark on charcoal (supplied)",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16, 24, 32 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 1,
+          "bandPx": 1.94,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": 1,
+          "bandPx": 2.88,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 32,
+          "pieces": 2,
+          "bandPx": 3.85,
+          "peakContrast": 7.31,
+          "legible": false
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 5.77,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 7.75,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 15.46,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 31.01,
+          "peakContrast": 7.31,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "png-app-icon-light",
+      "label": "Supplied PNG exports",
+      "optical": false,
+      "reference": 3,
+      "verdict": "Crossing or bands lost at 16 px",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 1,
+          "bandPx": 2.47,
+          "peakContrast": 8.86,
+          "legible": false
+        },
+        {
+          "size": 24,
+          "pieces": null,
+          "bandPx": null,
+          "peakContrast": null,
+          "legible": null
+        },
+        {
+          "size": 32,
+          "pieces": 3,
+          "bandPx": 2.7,
+          "peakContrast": 7.43,
+          "legible": true
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 3.78,
+          "peakContrast": 8.23,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 5.16,
+          "peakContrast": 7.55,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 10.15,
+          "peakContrast": 7.66,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 20.31,
+          "peakContrast": 7.66,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "optical-light",
+      "label": "Optical small variant, light",
+      "optical": true,
+      "reference": 3,
+      "verdict": "Legible at every rendered size",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 3,
+          "bandPx": 1.75,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 24,
+          "pieces": 3,
+          "bandPx": 2.59,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 32,
+          "pieces": 3,
+          "bandPx": 3.51,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 5.22,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 7,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 13.97,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 28,
+          "peakContrast": 6.01,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "optical-dark",
+      "label": "Optical small variant, dark",
+      "optical": true,
+      "reference": 3,
+      "verdict": "Legible at every rendered size",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 3,
+          "bandPx": 1.73,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 24,
+          "pieces": 3,
+          "bandPx": 2.58,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 32,
+          "pieces": 3,
+          "bandPx": 3.49,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 5.2,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 6.99,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 13.97,
+          "peakContrast": 7.31,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 27.99,
+          "peakContrast": 7.31,
+          "legible": true
+        }
+      ]
+    },
+    {
+      "id": "optical-plum",
+      "label": "Optical small variant, plum",
+      "optical": true,
+      "reference": 3,
+      "verdict": "Legible at every rendered size",
+      "cells": [
+        {
+          "size": 16,
+          "pieces": 3,
+          "bandPx": 1.74,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 24,
+          "pieces": 3,
+          "bandPx": 2.58,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 32,
+          "pieces": 3,
+          "bandPx": 3.5,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 48,
+          "pieces": 3,
+          "bandPx": 5.2,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 64,
+          "pieces": 3,
+          "bandPx": 6.99,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 128,
+          "pieces": 3,
+          "bandPx": 13.96,
+          "peakContrast": 6.01,
+          "legible": true
+        },
+        {
+          "size": 256,
+          "pieces": 3,
+          "bandPx": 27.99,
+          "peakContrast": 6.01,
+          "legible": true
+        }
+      ]
+    }
+  ]
+}

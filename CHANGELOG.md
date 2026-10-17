@@ -50,6 +50,43 @@ alone is not a shipped capability.
   approval used first, task closed, cancelled, not saved, not clicked) instead
   of a bare "invalidated"; a regression test pins that a click refused with
   `inspection_required` leaves its one-time approval usable after inspecting.
+- Audited GUI accessibility (#31) in real Electron: `test/accessibility.test.js`
+  runs axe-core 4.13.0 (new pinned dev dependency) and rendered checks over
+  every view, dialog, stop page, split view, agent panel and lock screen in both
+  themes (state and focus contrast, 24 px targets, 11 px text floor, Tab
+  reachability, focus restoration, 200% zoom/text at the minimum window,
+  reduced motion, quiet polling). Fixes: F6/Shift+F6, Ctrl+L and Ctrl+K now
+  leave a website for Weft's chrome (the page never sees them and leaving is
+  not a takeover); polling no longer replaces the focused control; one status
+  and one alert announcer replace noisy live regions (status bar, streamed
+  tokens, approval/activity lists); landmarks, headings and names; muted and
+  disabled contrast; keyboard entry for redaction areas; the app is inert
+  behind the lock screen; outcome codes now survive the preload bridge, so a
+  lock made outside the window shows the lock screen. Real screen readers,
+  magnifiers and Windows/macOS were not run; see `docs/ACCESSIBILITY.md`.
+- Finalized the implemented design system (#36): spacing, radius and type
+  scales consolidated (11 px floor), disabled/focus/trusted-surface tokens, a
+  persistent ownership badge and page frame with a reduced-motion-safe handoff
+  pulse, state badges with distinct marker shapes, split-view pane headers and
+  focused-pane frame, and one "Weft browser control" band for browser-owned
+  decisions (including the credential entry window, which now bundles Source
+  Sans 3). `npm run logo:validate` measures every logo variant at 16–256 px;
+  the supplied mark loses its crossing at 16–32 px, so a generated optical
+  variant now supplies the 16/24/32 px favicon images
+  (`artifacts/logo-contact-sheet.png`). Final brand approval remains a human
+  decision (`docs/DESIGN-SYSTEM.md`).
+- Added a Community site lists screen (#28) under Settings and Privacy:
+  subscribe with the publisher key fingerprint and full change preview,
+  digest-confirmed updates, mode/reviewer/source/scheduled-check changes,
+  exceptions, matches for an address, rollback and unsubscribe. Added Agent
+  input settings (#9) for shared/exclusive input and the per-tab queue limit
+  and wait.
+- Visual goldens now pin fontconfig rendering (slight hinting, greyscale,
+  DejaVu fallback), so machine-local font settings no longer fail them on
+  unchanged code; all twelve were regenerated and reviewed.
+- Split view pairs the active page with another live page (not a blank or
+  blocked tab).
+
 - Added resource archives (#16, ADR-012): `artifacts.capture` with
   `kind: "archive"` stores Chromium's MHTML serialization as content-addressed
   resource components with a manifest (URL, MIME, size, SHA-256, status) that

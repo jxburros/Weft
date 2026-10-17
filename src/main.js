@@ -160,6 +160,8 @@ if (primary) app.whenReady().then(async () => {
   browser = new Browser({ window, workspaceService: workspace, admission });
   browser.onAudit = entry => activity.append(entry);
   browser.onEvent = event => events.emit('event', event);
+  // Browser-owned keys pressed inside a page return keyboard focus to the trusted chrome (#31).
+  browser.onChromeShortcut = ({ shortcut }) => { if (!window.isDestroyed()) { window.webContents.focus(); window.webContents.send('weft:chrome', shortcut); } };
   // A hidden window renders pages offscreen so captures keep working without a display (ADR 015).
   if (launchHeadless) { browser.hidden = true; browser.offscreen = true; }
   // Page renderer memory (the GUI renderer excluded) drives memory-pressure suspension when a budget is set (#30).
@@ -241,6 +243,7 @@ if (primary) app.whenReady().then(async () => {
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
+  ipcMain.handle('weft:focusPage', event => { trusted(event); return browser.focusPage(); });
   // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
   ipcMain.handle('weft:pickPath', async (event, kind) => {
     trusted(event);

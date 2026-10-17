@@ -1,6 +1,21 @@
 import { icon } from "./icons.js";
 import { knowledgeUI } from "./gui-knowledge.js";
+import { announce, focusView, keyboardScrollable, stateBadge, trustedBand } from "./gui-a11y.js";
+import { listsUI } from "./gui-lists.js";
 const $ = (id) => document.getElementById(id);
+// Errors thrown across the preload bridge keep only their message, so the outcome is unwrapped here:
+// the shared outcome code ("locked", "approval_required", …) and status stay available to the GUI.
+/** Replace markup only when it changed, so polling never destroys the control a person is on (#31). */
+function setHTML(element, html) {
+  if (!element || (element.__weftHTML === html && element.isConnected)) return;
+  element.innerHTML = html;
+  element.__weftHTML = html;
+}
+async function weftExecute(name, args = {}) {
+  const outcome = await window.weft.executeOutcome(name, args);
+  if (outcome?.error) throw Object.assign(new Error(outcome.error.message), outcome.error, { status: outcome.status });
+  return outcome?.result;
+}
 const esc = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -43,6 +58,7 @@ const names = {
   settings: "Settings",
   updates: "Updates",
   privacy: "Privacy & site rules",
+  lists: "Community site lists",
   downloads: "Downloads",
   history: "History",
   bookmarks: "Bookmarks",
@@ -137,15 +153,23 @@ const action = (name, label, ico = "", attrs = "", cls = "secondary") =>
 const knowledge = knowledgeUI({ $: (id) => $(id), esc, short, date, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a),
   closeDialog: () => closeDialog(), field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e),
   refresh: (f) => refresh(f), state: () => state, ws: () => ws(), records: (k) => records(k) });
+// Community site list subscriptions (#28, src/gui-lists.js).
+const lists = listsUI({ esc, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a), closeDialog: () => closeDialog(),
+  field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e), ws: () => ws() });
 // Polling replaces controls. Keep keyboard focus on the equivalent new control.
 function rememberFocus() {
   const element = document.activeElement;
-  const attributes = ["data-action", "data-id", "data-section", "data-kind"];
+  const attributes = ["data-action", "data-id", "data-section", "data-kind", "data-mode", "data-pane", "data-version", "data-host", "name"];
   const selector = element?.id ? `#${CSS.escape(element.id)}` :
-    element?.hasAttribute("data-action") ? element.tagName.toLowerCase() + attributes.filter(a => element.hasAttribute(a)).map(a => `[${a}="${CSS.escape(element.getAttribute(a))}"]`).join("") : null;
+    element && element !== document.body && attributes.some((a) => element.hasAttribute(a)) ? element.tagName.toLowerCase() + attributes.filter(a => element.hasAttribute(a)).map(a => `[${a}="${CSS.escape(element.getAttribute(a))}"]`).join("") : null;
+  // The same selector can match in several places (sidebar and content): remember the region and position.
+  const region = element?.parentElement?.closest("[id]");
+  const index = selector && region ? [...region.querySelectorAll(selector)].indexOf(element) : -1;
   return () => {
-    const target = element?.isConnected ? element : selector && document.querySelector(selector);
-    if (target && !target.closest("[hidden]")) target.focus({ preventScroll: true });
+    const root = region?.id ? document.getElementById(region.id) : null;
+    const candidates = selector ? [...(root || document).querySelectorAll(selector)] : [];
+    const target = element?.isConnected ? element : candidates[index] || candidates[0] || null;
+    if (target && !target.closest("[hidden],[inert]")) target.focus({ preventScroll: true });
     else $("content").focus({ preventScroll: true });
   };
 }
@@ -165,18 +189,18 @@ function errorMessage(e) {
 async function loadEmbeddingStatus() {
   const status = await execute("search.status", { workspaceId: ws().id }, true).catch(() => null);
   if (!$("embedding-status")) return;
-  if (!status) { $("embedding-status").innerHTML = "<p>Search status is unavailable.</p>"; return; }
+  if (!status) { setHTML($("embedding-status"), "<p>Search status is unavailable.</p>"); return; }
   const v = status.vector;
-  $("embedding-status").innerHTML = v.enabled
+  setHTML($("embedding-status"), v.enabled
     ? `<div class="settings-row"><div><strong>On · ${esc(v.model)} at ${esc(v.endpoint)}</strong><small>${esc(v.locality)}${v.egressAcknowledged ? " · egress acknowledged" : ""} · ${esc(v.embedded)} of ${esc(status.lexical.documents)} documents embedded${v.pending ? ` · ${esc(v.pending)} waiting` : ""}${v.unembeddedCount ? ` · ${esc(v.unembeddedCount)} lexical-only` : ""}${v.capped ? ` · ${esc(v.maxVectors)} vector limit reached` : ""}</small>${v.lastError ? `<small>${esc(v.lastError)}</small>` : ""}</div></div>`
-    : `<div class="settings-row"><div><strong>Off</strong><small>${esc(status.lexical.documents)} documents searchable by words.</small></div></div>`;
+    : `<div class="settings-row"><div><strong>Off</strong><small>${esc(status.lexical.documents)} documents searchable by words.</small></div></div>`);
 }
 async function execute(name, args = {}, quiet = false) {
   if (!quiet) $("status").textContent = `Running ${name}…`;
   // Leaving the offline archive preview for live browsing closes it first.
   if (previewing && ["page.navigate", "tabs.new", "tabs.activate", "page.back", "page.forward", "page.reload", "workspaces.switch"].includes(name)) await closePreview(true);
   try {
-    const result = await window.weft.execute(name, args);
+    const result = await weftExecute(name, args);
     if (!quiet) {
       showResult(result);
       $("status").textContent = "Done";
@@ -233,10 +257,10 @@ async function refresh(force = false) {
 async function refreshState(force) {
   {
     const [next, nextTabs, browserInfo, nextEncryption] = await Promise.all([
-      window.weft.execute("workspace.snapshot", {}),
-      window.weft.execute("tabs.list", {}),
-      window.weft.execute("browser.info", {}),
-      window.weft.execute("encryption.status", {}),
+      weftExecute("workspace.snapshot", {}),
+      weftExecute("tabs.list", {}),
+      weftExecute("browser.info", {}),
+      weftExecute("encryption.status", {}),
     ]);
     encryption = nextEncryption;
     const snapshot = JSON.stringify([next, nextTabs, browserInfo.automation, nextEncryption]);
@@ -254,6 +278,7 @@ async function refreshState(force) {
       )
         renderContent();
       if (agentOpen && !chatBusy) renderMessages();
+      noticeChanges(browserInfo.automation);
       // An open task detail follows the runtime: phase, blockers and steps update as they change.
       const shown = openTaskDetail && $("dialog").open && (state.tasks || []).find((t) => t.id === openTaskDetail.id);
       if (shown && shown.revision !== openTaskDetail.revision) void taskDetail(shown.id).catch(() => {});
@@ -276,18 +301,46 @@ function theme() {
   document.querySelector(".wordmark img").src = dark
     ? "../assets/logo/dark/horizontal-dark.svg"
     : "../assets/logo/svg/horizontal-full-color.svg";
-  $("theme-toggle").innerHTML = icon(dark ? "sun" : "moon");
+  setHTML($("theme-toggle"), icon(dark ? "sun" : "moon"));
+}
+// Meaningful changes are announced once (#31); polling re-renders stay silent.
+const known = { owners: new Map(), pending: null, stopped: null, attention: null };
+const handoffUntil = new Map();
+function noticeChanges(automation) {
+  const shown = new Set([active()?.id, splitTab()?.id].filter(Boolean));
+  for (const t of visibleTabs()) {
+    const label = controlLabel(t);
+    const before = known.owners.get(t.id);
+    known.owners.set(t.id, label);
+    if (before === undefined || before === label) continue;
+    if (section === "browse" && shown.has(t.id)) {
+      // Brief border transition on the affected page; the chip and status bar state the controller persistently.
+      handoffUntil.set(t.id, Date.now() + 700);
+      document.querySelector(`.pane-frame[data-tab="${t.id}"]`)?.classList.add("handoff");
+      setTimeout(() => document.querySelector(`.pane-frame[data-tab="${t.id}"]`)?.classList.remove("handoff"), 700);
+    }
+    announce(`${displayTitle(t)}: ${label}.`);
+  }
+  const pending = Number(automation?.pendingApprovals) || 0;
+  if (known.pending !== null && pending > known.pending) announce(`${pending} agent request${pending === 1 ? " needs" : "s need"} your decision.`);
+  known.pending = pending;
+  const stopped = Boolean(automation?.stopped);
+  if (known.stopped !== null && stopped !== known.stopped) announce(stopped ? "Agent activity is stopped. Tabs remain under your control." : "Automation resumed.", { assertive: stopped });
+  known.stopped = stopped;
+  const attention = records("tasks").filter(needsAttention).length;
+  if (known.attention !== null && attention > known.attention) announce(`${attention} task${attention === 1 ? " needs" : "s need"} your attention.`);
+  known.attention = attention;
 }
 function renderSafetyNotices(automation) {
   automation = automation ?? lastAutomation;
   lastAutomation = automation;
   const notices = $("safety-notices");
   const pending = Number(automation?.pendingApprovals) || 0;
-  notices.innerHTML = (pending ? `<div class="safety-notice"><strong>${pending} agent request${pending === 1 ? " needs" : "s need"} your decision.</strong> Agent actions wait until you approve or reject them here; page text cannot approve them. ${action("section", "Review requests", "", 'data-section="approvals"', "secondary")}</div>` : "") + (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
+  setHTML(notices, (pending ? `<div class="safety-notice"><strong>${pending} agent request${pending === 1 ? " needs" : "s need"} your decision.</strong> Agent actions wait until you approve or reject them here; page text cannot approve them. ${action("section", "Review requests", "", 'data-section="approvals"', "secondary")}</div>` : "") + (automation?.stopped ? `<div class="safety-notice"><strong>Agent activity is stopped.</strong> Resume enables new automation; tabs remain under your control. ${action("resume-automation", "Resume automation", "", "", "secondary")}</div>` : "") +
     (state.storageWarnings || []).map(w => `<div class="safety-notice"><strong>Storage warning:</strong> ${esc(w.message)}${w.file ? ` <span>${esc(w.file)}</span>` : ""}</div>`).join("") +
     ((() => { const uncertain = (state.tasks || []).filter((t) => t.status === "uncertain"); return uncertain.length ? `<div class="safety-notice"><strong>${uncertain.length} task${uncertain.length === 1 ? " has" : "s have"} work with an unknown outcome.</strong> Nothing is retried until you record what happened. ${action("task-detail", "Review", "", `data-id="${esc(uncertain[0].id)}"`, "secondary")}</div>` : ""; })()) +
     (recordingTab ? `<div class="safety-notice"><strong>Recording your actions in this tab.</strong> Typed values are never saved. ${action("stop-recording", "Stop recording", "stop", "", "secondary")}</div>` : "") +
-    (restoreNotices.length ? `<div class="safety-notice" id="restore-notice"><strong>Your workspace was restored.</strong> ${restoreNotices.map(esc).join(" ")} ${action("dismiss-restore", "Dismiss", "", "", "secondary")}</div>` : "");
+    (restoreNotices.length ? `<div class="safety-notice" id="restore-notice"><strong>Your workspace was restored.</strong> ${restoreNotices.map(esc).join(" ")} ${action("dismiss-restore", "Dismiss", "", "", "secondary")}</div>` : ""));
   notices.hidden = !notices.innerHTML;
 }
 function renderShell() {
@@ -295,21 +348,21 @@ function renderShell() {
   $("workspace-name").textContent = ws().name;
   $("breadcrumb-workspace").textContent = ws().name;
   $("breadcrumb-section").textContent = names[section] || "Workspace";
-  $("workspace-buttons").innerHTML = state.workspaces
+  setHTML($("workspace-buttons"), state.workspaces
     .filter((w) => !w.archived)
     .map(
       (w) =>
         `<button class="rail-button workspace-dot ${w.id === ws().id ? "active" : ""}" data-action="switch-workspace" data-id="${esc(w.id)}" aria-label="${esc(w.name)}" title="${esc(w.name)}" ${w.id === ws().id ? 'aria-current="true"' : ""}>${esc(w.icon && w.icon.length < 4 ? w.icon : w.name.slice(0, 2).toUpperCase())}</button>`,
     )
-    .join("");
-  $("sections").innerHTML = sections
+    .join(""));
+  setHTML($("sections"), sections
     .map(
       (key) =>
         `<button class="section-link ${section === key ? "active" : ""}" data-action="section" data-section="${key}" ${section === key ? 'aria-current="page"' : ""}>${icon(sectionIcon[key])}<span>${names[key]}</span>${["materials", "tasks", "artifacts"].includes(key) && records(key).length ? `<span class="count">${records(key).length}</span>` : ""}</button>`,
     )
-    .join("");
-  $("tabs").innerHTML = tabStrip();
-  $("agent-toggle").innerHTML = icon("spark") + "<span>Ask Weft</span>";
+    .join(""));
+  setHTML($("tabs"), tabStrip());
+  setHTML($("agent-toggle"), icon("spark") + "<span>Ask Weft</span>");
   $("agent-toggle").classList.toggle("active", agentOpen);
   $("agent-toggle").setAttribute("aria-expanded", String(agentOpen));
   $("toggle-sidebar").setAttribute("aria-expanded", String(!$("app").classList.contains("sidebar-collapsed")));
@@ -317,6 +370,13 @@ function renderShell() {
     section === "browse"
       ? controlStatus(active()) + focusLabel()
       : "You are in control";
+  // Persistent, non-color ownership of the shown page beside the address bar (#36).
+  const owned = section === "browse" && active() && active().url !== "about:blank" && !active().blocked ? active() : null;
+  $("page-owner").hidden = !owned;
+  if (owned) {
+    setHTML($("page-owner"), ownerBadge(owned));
+    $("page-owner").title = controlStatus(owned);
+  }
   if (section === "browse" && active()?.warning)
     $("status").textContent = "Site warning: " + active().warning;
   else if (section === "browse" && active()?.communityLabels?.length) {
@@ -401,14 +461,19 @@ function overview() {
 }
 function renderContent() {
   if (section === "browse" && previewing) {
-    $("content").innerHTML = `<div class="preview-banner" role="status"><div><strong>Offline archive preview</strong> · ${esc(previewing.title || "Saved capture")} · version ${esc(String(previewing.number || ""))}<small>Archived content only. Scripts, network requests, navigation, form submission, popups and downloads are disabled. ${esc(String(previewing.unavailable?.length || 0))} damaged and ${esc(String(previewing.notStored || 0))} unarchived resources are not shown.</small></div>${action("close-preview", "Close preview", "close")}</div><div id="preview-area" class="preview-area" aria-label="Archived page (not live)"></div>`;
+    setHTML($("content"), `<div class="preview-banner" role="status"><div><strong>Offline archive preview</strong> · ${esc(previewing.title || "Saved capture")} · version ${esc(String(previewing.number || ""))}<small>Archived content only. Scripts, network requests, navigation, form submission, popups and downloads are disabled. ${esc(String(previewing.unavailable?.length || 0))} damaged and ${esc(String(previewing.notStored || 0))} unarchived resources are not shown.</small></div>${action("close-preview", "Close preview", "close")}</div><div id="preview-area" class="preview-area" aria-label="Archived page (not live)"></div>`);
     layout();
     return;
   }
   if (section === "browse") {
     const tab = active();
-    $("content").innerHTML =
-      `${tab?.loading ? '<div class="loading-line"></div>' : ""}<div class="browser-placeholder"><img src="../assets/logo/svg/mark-full-color.svg" alt="Weft"><h2>${tab?.blocked?.kind === "security" ? "Known harmful destination" : tab?.blocked ? "This destination is restricted" : tab?.url === "about:blank" ? "Where would you like to go?" : "Your live page"}</h2><p>${tab?.blocked ? esc(tab.blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.") : "Enter a website or a search in the address bar above."}</p>${tab?.blocked ? `<p>${esc(tab.blocked.url)}</p>` : ""}${tab?.blocked?.kind === "security" ? `<p>Security intelligence from ${esc(tab.blocked.publisher || tab.blocked.source)}${tab.blocked.stale ? " (stale list)" : ""}. This is not a personal preference rule.</p>` : ""}${tab?.blocked?.provenance ? (tab.blocked.provenance.signed ? `<p>Signed community list (untrusted claim; ${esc(tab.blocked.provenance.claimKind)}): ${esc(tab.blocked.provenance.listName)} sequence ${esc(tab.blocked.provenance.sequence)}, entry ${esc(tab.blocked.provenance.entryId)} revision ${esc(tab.blocked.provenance.entryRevision)}. Review it with lists.matches.</p>` : `<p>Community list provenance (untrusted): ${esc(tab.blocked.provenance.sourceRepo)} @ ${esc(tab.blocked.provenance.commit)}</p>`) : ""}${tab?.blocked ? '<div class="inline-actions">' + action("blocked-back", "Go back", "back") + action("allow-once", tab.blocked.kind === "security" ? "Proceed anyway…" : "Allow this visit", "globe") + action("explain-url", "Why?", "search", `data-url="${esc(tab.blocked.url)}"`) + action("section", "Change rule", "shield", 'data-section="privacy"') + "</div>" : ""}${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+    const blocked = tab?.blocked;
+    const live = Boolean(tab && tab.url !== "about:blank" && !blocked);
+    // The live page is drawn by Chromium over this area: nothing focusable may sit hidden underneath it.
+    const stop = blocked
+      ? `<div class="browser-placeholder stop-page" role="region" aria-labelledby="stop-title">${trustedBand(blocked.kind === "security" ? "Security stop" : "Site rule stop", icon("shield"))}<h1 id="stop-title">${blocked.kind === "security" ? "Known harmful destination" : "This destination is restricted"}</h1><p>${esc(blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.")}</p><p>${esc(blocked.url)}</p>${blocked.kind === "security" ? `<p>Security intelligence from ${esc(blocked.publisher || blocked.source)}${blocked.stale ? " (stale list)" : ""}. This is not a personal preference rule.</p>` : ""}${blocked.provenance ? (blocked.provenance.signed ? `<p>Signed community list (untrusted claim; ${esc(blocked.provenance.claimKind)}): ${esc(blocked.provenance.listName)} sequence ${esc(blocked.provenance.sequence)}, entry ${esc(blocked.provenance.entryId)} revision ${esc(blocked.provenance.entryRevision)}. Review it in Community site lists.</p>` : `<p>Community list provenance (untrusted): ${esc(blocked.provenance.sourceRepo)} @ ${esc(blocked.provenance.commit)}</p>`) : ""}<div class="inline-actions">${action("blocked-back", "Go back", "back")}${action("allow-once", blocked.kind === "security" ? "Proceed anyway…" : "Allow this visit", "globe")}${action("explain-url", "Why?", "search", `data-url="${esc(blocked.url)}"`)}${action("section", "Change rule", "shield", 'data-section="privacy"')}${blocked.provenance?.signed ? action("manage-lists", "Community site lists", "") : ""}</div>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`
+      : `<div class="browser-placeholder" ${live ? "hidden" : ""}><img src="../assets/logo/svg/mark-full-color.svg" alt=""><h1>Where would you like to go?</h1><p>Enter a website or a search in the address bar above.</p>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+    setHTML($("content"), `${tab?.loading ? '<div class="loading-line" aria-hidden="true"></div>' : ""}${live ? `<h1 class="visually-hidden">Live page: ${esc(displayTitle(tab))}</h1>${paneFrames(tab)}` : ""}${stop}`);
     layout();
     return;
   }
@@ -433,7 +498,7 @@ function renderContent() {
         "Saved captures",
         "A lasting reference, even when the live page changes.",
         action("capture", "Save current page", "plus", "", "primary"),
-      ) +
+      ) + '<h2 class="visually-hidden">Collection</h2>' +
       (records("artifacts").length
         ? `<div class="record-grid">${records("artifacts").slice().reverse().map(artifactCard).join("")}</div>`
         : empty(
@@ -455,7 +520,7 @@ function renderContent() {
         "Agent requests",
         "Actions agents asked to take. Nothing here runs until you decide.",
         action("section", "Activity", "activity", 'data-section="activity"'),
-      ) + '<div id="approval-list" aria-live="polite"></div>';
+      ) + '<h2 class="visually-hidden">Requests</h2><div id="approval-list"></div>';
   else if (section === "history")
     html =
       heading(
@@ -486,7 +551,7 @@ function renderContent() {
         "Useful live pages, saved with this project.",
         action("bookmark-page", "Bookmark current page", "bookmark"),
       ) +
-      `<div class="record-grid">${
+      `<h2 class="visually-hidden">Saved bookmarks</h2><div class="record-grid">${
         records("materials")
           .filter((r) => r.kind === "website" && r.pinned)
           .map((r) => recordCard("materials", r))
@@ -498,6 +563,7 @@ function renderContent() {
         )
       }</div>`;
   else if (section === "privacy") html = privacyView();
+  else if (section === "lists") html = lists.view();
   else if (section === "shared") html = knowledge.sharedView();
   else if (section === "settings") html = settingsView();
   else if (section === "updates")
@@ -506,20 +572,21 @@ function renderContent() {
         "Updates",
         "Stable releases from one fixed source, verified before they are kept and installed only when you choose.",
         action("section", "Back to settings", "back", 'data-section="settings"'),
-      ) + '<div id="update-center" aria-live="polite"></div>';
+      ) + '<div id="update-center"></div>';
   else if (section === "downloads")
     html =
       heading(
         "Downloads",
         "Files saved by this browser. Downloaded files are never opened automatically.",
-      ) + '<div id="download-list"></div>';
-  $("content").innerHTML = `<div class="page-wrap">${html}</div>`;
+      ) + '<h2 class="visually-hidden">Files and requests</h2><div id="download-list"></div>';
+  setHTML($("content"), `<div class="page-wrap">${html}</div>`);
   if (section === "downloads") loadDownloads();
   if (section === "activity") void loadActivity();
   if (section === "approvals") void loadApprovals();
   if (section === "overview") void loadResumePanel().catch(() => {});
   if (section === "settings") void loadDisplayPanel().catch(() => {});
   if (section === "privacy") loadPrivacyPanels();
+  if (section === "lists") void lists.load();
   if (section === "updates") loadUpdates();
   if (section === "settings") void loadEmbeddingStatus();
   const search = $("collection-search");
@@ -569,7 +636,7 @@ function collectionView(kind) {
     ) +
     (kind === "tasks" ? handoffPanel() : "") +
     (kind === "context" ? knowledge.contextPanel() : "") +
-    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "context" ? knowledge.contextToolbar() : ""}${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting_on_human">Waiting for you</option><option value="uncertain">Outcome unknown</option><option value="paused">Paused</option><option value="failed">Failed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}${kind === "workflows" && !recordingTab ? action("record-workflow", "Record from current tab", "play", "", "text-button") : ""}</div><div id="record-cards">${cards(kind)}</div>`
+    `<div class="section-toolbar"><input id="collection-search" placeholder="Search ${kind}…" aria-label="Search ${kind}">${kind === "context" ? knowledge.contextToolbar() : ""}${kind === "tasks" ? '<select id="task-filter" aria-label="Filter tasks"><option value="">All states</option><option value="queued">Queued</option><option value="running">Running</option><option value="waiting_on_human">Waiting for you</option><option value="uncertain">Outcome unknown</option><option value="paused">Paused</option><option value="failed">Failed</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select>' : ""}${kind === "tasks" ? action("section", "Workflows", "workflow", 'data-section="workflows"', "text-button") : ""}${kind === "workflows" && !recordingTab ? action("record-workflow", "Record from current tab", "play", "", "text-button") : ""}</div><h2 class="visually-hidden">All ${esc(names[kind].toLowerCase())}</h2><div id="record-cards">${cards(kind)}</div>`
   );
 }
 function cards(kind) {
@@ -602,7 +669,7 @@ function recordCard(kind, r) {
   const taskActions = kind !== "tasks" ? "" : r.executor || r.plan?.length
     ? action("task-detail", r.executor ? "Open task" : "Review steps", "tasks", `data-id="${esc(r.id)}"`) + (r.executor && ["running", "waiting_on_human", "queued"].includes(r.status) ? action("task-pause", "Pause", "pause", `data-id="${esc(r.id)}"`) : "")
     : action("task-state", r.status === "completed" ? "Reopen" : "Complete", "check", `data-id="${esc(r.id)}" data-state="${r.status === "completed" ? "queued" : "completed"}"`) + (!["completed", "cancelled", "paused"].includes(r.status) ? action("task-state", "Pause", "pause", `data-id="${esc(r.id)}" data-state="paused"`) : "");
-  return `<article class="record-card"><div class="card-top"><span class="tag ${kind === "tasks" ? phaseTone(r.status) : ""}">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}${["context", "materials"].includes(kind) ? knowledge.badges(kind, r) : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${["context", "materials"].includes(kind) ? knowledge.cardActions(kind, r) : ""}${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${taskActions}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", r.enabled === false ? "Review to enable" : "Run…", "play", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}${pinType[kind] ? action("pin-resource", "Pin to overview", "pin", `data-kind="${pinType[kind]}" data-id="${esc(r.id)}"`, "text-button") : ""}</div></article>`;
+  return `<article class="record-card"><div class="card-top">${kind === "tasks" ? stateBadge(r.status, esc(tag)) : `<span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(tag)}</span>`}${action("edit-record", "", "more", `data-kind="${kind}" data-id="${esc(r.id)}" aria-label="Edit ${esc(r.title)}"`, "icon-button")}</div><h3>${esc(r.title)}</h3><p>${esc(short(r.content || r.objective || r.description || (kind === "conversations" ? `${r.messages?.length || 0} messages` : ""), 175))}</p>${r.blocker ? `<div class="notice">Waiting: ${esc(short(r.blocker, 100))}</div>` : ""}${["context", "materials"].includes(kind) ? knowledge.badges(kind, r) : ""}<div class="record-meta">${r.url ? esc(host(r.url)) + " · " : ""}${date(r.updatedAt)}${r.assignee ? " · " + esc(r.assignee) : ""}</div><div class="inline-actions">${["context", "materials"].includes(kind) ? knowledge.cardActions(kind, r) : ""}${r.url ? action("open-url", "Open page", "external", `data-url="${esc(r.url)}"`) : ""}${taskActions}${kind === "conversations" ? action("open-chat", "Continue", "chat", `data-id="${esc(r.id)}"`) : ""}${kind === "workflows" ? action("run-workflow", r.enabled === false ? "Review to enable" : "Run…", "play", `data-id="${esc(r.id)}"`) : ""}${kind === "materials" && r.kind === "file" ? action("download-file", "Save file", "download", `data-id="${esc(r.id)}"`) : ""}${pinType[kind] ? action("pin-resource", "Pin to overview", "pin", `data-kind="${pinType[kind]}" data-id="${esc(r.id)}"`, "text-button") : ""}</div></article>`;
 }
 const pinType = { materials: "material", tasks: "task", context: "context", conversations: "conversation", workflows: "workflow" };
 function artifactCard(r) {
@@ -633,7 +700,7 @@ const outcomeLabels = { attempted: "Attempted", completed: "Completed", failed: 
 function activityView() {
   const typeOptions = [["", "All activity"], ["command", "Commands"], ["decision", "Permission decisions"], ["approval", "Approval requests"], ["grant", "Agent access"], ["policy", "Policy"], ["model", "Model destinations"], ["block", "Blocks"], ["override", "Overrides"], ["artifact", "Captures"], ["retention", "Retention"]];
   const outcomeOptions = [["", "All outcomes"], ...Object.entries(outcomeLabels)];
-  return `<div class="section-toolbar"><select id="activity-type" aria-label="Filter activity type">${typeOptions.map(([v, l]) => `<option value="${v}" ${activityState.types === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><select id="activity-outcome" aria-label="Filter activity outcome">${outcomeOptions.map(([v, l]) => `<option value="${v}" ${activityState.outcome === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>${action("activity-settings", "Retention & integrity", "shield", "", "text-button")}</div><div id="activity-entries" aria-live="polite"></div>`;
+  return `<div class="section-toolbar"><select id="activity-type" aria-label="Filter activity type">${typeOptions.map(([v, l]) => `<option value="${v}" ${activityState.types === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><select id="activity-outcome" aria-label="Filter activity outcome">${outcomeOptions.map(([v, l]) => `<option value="${v}" ${activityState.outcome === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>${action("activity-settings", "Retention & integrity", "shield", "", "text-button")}</div><div id="activity-entries"></div>`;
 }
 function activityRow(r) {
   const what = r.command || (r.reason || r.type || "").replaceAll("_", " ");
@@ -649,9 +716,9 @@ async function loadActivity(more = false) {
   activityState.items = more ? [...activityState.items, ...page.items] : page.items;
   activityState.loaded = Math.max(50, activityState.items.length);
   activityState.cursor = page.nextCursor;
-  $("activity-entries").innerHTML = activityState.items.length
+  setHTML($("activity-entries"), activityState.items.length
     ? `<div class="activity-list">${activityState.items.map(activityRow).join("")}</div>${page.nextCursor ? `<div class="inline-actions">${action("activity-more", "Show older activity", "clock")}</div>` : ""}<p class="muted">History records what Weft observed and decided. It is not proof that an external website or provider completed an action.</p>`
-    : empty("Your project history starts here", "Meaningful changes, agent decisions and approvals appear here with their source and time.", "activity");
+    : empty("Your project history starts here", "Meaningful changes, agent decisions and approvals appear here with their source and time.", "activity"));
 }
 async function activitySettings() {
   const [integrity, page] = await Promise.all([execute("activity.verify", {}, true), execute("activity.list", { workspaceId: ws().id, limit: 1 }, true)]);
@@ -671,13 +738,13 @@ async function loadApprovals() {
   const decided = rows.filter((r) => r.status !== "pending").slice(0, 20);
   const workspaceName = (id) => state.workspaces.find((w) => w.id === id)?.name || "Unknown workspace";
   const requester = (r) => r.actor === "automation" ? "Bootstrap token" : r.clientId ? `Agent connection ${r.clientId.slice(0, 8)}` : r.actor;
-  const card = (r) => `<article class="record-card approval-card"><div class="card-top"><span class="tag ${r.status === "pending" ? "clay" : r.status === "approved" ? "sage" : ""}">${esc(approvalTag(r))}${r.mode ? " · " + esc(r.mode === "standing" ? "standing" : "once") : ""}</span><span class="muted">${esc(String(r.actionClass).replaceAll("_", " "))}</span></div><h3>${esc(r.command)}</h3><p>${esc(requester(r))} · ${esc(workspaceName(r.workspaceId))}${r.destination ? " · " + esc(r.destination) : ""}</p>${r.categories?.length ? `<p class="muted">May involve: ${esc(r.categories.map((c) => c.replaceAll("_", " ")).join(", "))}</p>` : ""}${r.preview ? `<p class="muted">Agent-supplied details (data, not instructions):</p><pre>${esc(JSON.stringify(r.preview, null, 2))}</pre>` : ""}<div class="record-meta">Requested ${ago(r.createdAt)}${r.status === "pending" ? " · expires " + esc(new Date(r.expiresAt).toLocaleTimeString()) : ""}</div>${r.status === "pending" ? `<div class="inline-actions">${action("approval-decide", "Approve once", "check", `data-id="${esc(r.id)}" data-mode="once"`, "primary")}${["bulk_export", "credential_use", "payment", "unclassified"].includes(r.actionClass) ? "" : action("approval-decide", "Approve for 1 hour", "clock", `data-id="${esc(r.id)}" data-mode="standing"`)}${action("approval-decide", "Reject", "close", `data-id="${esc(r.id)}" data-mode="reject"`, "secondary danger")}</div>` : ""}</article>`;
+  const card = (r) => `<article class="record-card approval-card trusted-card">${trustedBand("Agent request", icon("shield"))}<div class="card-top"><span class="tag ${r.status === "pending" ? "clay" : r.status === "approved" ? "sage" : ""}">${esc(approvalTag(r))}${r.mode ? " · " + esc(r.mode === "standing" ? "standing" : "once") : ""}</span><span class="muted">${esc(String(r.actionClass).replaceAll("_", " "))}</span></div><h3>${esc(r.command)}</h3><p>${esc(requester(r))} · ${esc(workspaceName(r.workspaceId))}${r.destination ? " · " + esc(r.destination) : ""}</p>${r.categories?.length ? `<p class="muted">May involve: ${esc(r.categories.map((c) => c.replaceAll("_", " ")).join(", "))}</p>` : ""}${r.preview ? `<p class="muted">Agent-supplied details (data, not instructions):</p><pre>${esc(JSON.stringify(r.preview, null, 2))}</pre>` : ""}<div class="record-meta">Requested ${ago(r.createdAt)}${r.status === "pending" ? " · expires " + esc(new Date(r.expiresAt).toLocaleTimeString()) : ""}</div>${r.status === "pending" ? `<div class="inline-actions">${action("approval-decide", "Approve once", "check", `data-id="${esc(r.id)}" data-mode="once"`, "primary")}${["bulk_export", "credential_use", "payment", "unclassified"].includes(r.actionClass) ? "" : action("approval-decide", "Approve for 1 hour", "clock", `data-id="${esc(r.id)}" data-mode="standing"`)}${action("approval-decide", "Reject", "close", `data-id="${esc(r.id)}" data-mode="reject"`, "secondary danger")}</div>` : ""}</article>`;
   // Payment approvals (ADR 019) get a dedicated card built from the browser-owned payment record, not from agent-supplied arguments.
   const paymentIds = [...new Set(rows.filter((r) => r.command === "payments.submit" && /^pay_/.test(r.summary?.id || "")).map((r) => r.summary.id))];
   const payments = Object.fromEntries((await Promise.all(paymentIds.map((id) => execute("payments.get", { id }, true).catch(() => null)))).filter(Boolean).map((p) => [p.id, p]));
   const generic = card;
   const choose = (r) => (r.command === "payments.submit" && payments[r.summary?.id] ? paymentApprovalCard(r, payments[r.summary.id], requester(r), workspaceName(r.workspaceId)) : generic(r));
-  $("approval-list").innerHTML = (pending.length ? `<div class="record-grid">${pending.map(choose).join("")}</div>` : empty("No requests are waiting", "When an agent needs approval for an external or sensitive action, it waits here. Approve once covers exactly the shown action; approve for 1 hour covers the same action type, workspace and site.", "lock")) + (decided.length ? `<section class="settings-section"><h2>Recent decisions</h2><div class="record-grid">${decided.map(choose).join("")}</div></section>` : "");
+  setHTML($("approval-list"), (pending.length ? `<div class="record-grid">${pending.map(choose).join("")}</div>` : empty("No requests are waiting", "When an agent needs approval for an external or sensitive action, it waits here. Approve once covers exactly the shown action; approve for 1 hour covers the same action type, workspace and site.", "lock")) + (decided.length ? `<section class="settings-section"><h2>Recent decisions</h2><div class="record-grid">${decided.map(choose).join("")}</div></section>` : ""));
 }
 // Why an approval became void (approvals.invalidationReason), in words; the tag never shows a bare "invalidated".
 const voidReasons = { terms_changed: "the checkout changed after approval", attempt_started: "another approval for this payment was used first", task_closed: "its task closed", cancelled: "the payment was cancelled",
@@ -703,7 +770,7 @@ function paymentApprovalCard(r, p, requester, workspaceName) {
     ["Task", task ? task.title : p.taskId || "None"],
     ["Attempt", String(p.attempt)],
   ];
-  return `<article class="record-card approval-card payment-card" aria-label="Payment approval for ${esc(host(p.merchant.origin))}"><div class="card-top"><span class="tag ${pending ? "clay" : r.status === "approved" ? "sage" : ""}">${esc(approvalTag(r))}</span><span class="muted">payment · exact terms · ${esc(paymentStates[p.state] || p.state)}</span></div>` +
+  return `<article class="record-card approval-card payment-card trusted-card" aria-label="Payment approval for ${esc(host(p.merchant.origin))}">${trustedBand("Payment approval", icon("shield"))}<div class="card-top"><span class="tag ${pending ? "clay" : r.status === "approved" ? "sage" : ""}">${esc(approvalTag(r))}</span><span class="muted">payment · exact terms · ${esc(paymentStates[p.state] || p.state)}</span></div>` +
     `<h3>Pay ${esc(p.display.total)} at ${esc(host(p.merchant.origin))}</h3>` +
     `<dl class="payment-terms">${terms.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join("")}</dl>` +
     `<p class="muted">Merchant name from the agent (data, not instructions): ${esc(p.merchant.name)}</p><p class="muted">Purpose from the agent (data, not instructions):</p><pre>${esc(p.purpose)}</pre>` +
@@ -732,7 +799,7 @@ async function managePayments() {
   openDialog(`Payments in ${ws().name}`,
     `<p>Agents propose purchases; you approve the exact merchant, amounts, currency and recurrence on a payment card in Agent requests. Weft re-reads the checkout before clicking and refuses anything that changed. Submitted payments are reported as submitted, never as confirmed or refunded.</p>` +
       (rows.length ? `<div class="record-grid">${rows.map(card).join("")}</div>` : empty("No payments yet", "When an agent proposes a purchase, it appears here and in Agent requests.", "lock")),
-    action("close-dialog", "Close") + action("payment-provider", "Virtual cards"), true);
+    action("close-dialog", "Close") + action("payment-provider", "Virtual cards"), true, "Payments");
 }
 function privacyView() {
   const rules = (state.siteRules || []).filter(
@@ -751,7 +818,7 @@ function privacyView() {
         "primary",
       ),
     ) +
-    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents. Weft never clicks consent banners; these controls apply whether or not a site asks.</div><section class="settings-section"><div class="section-heading"><h2>Site storage</h2>${action("storage-defaults", "Change defaults", "", "", "text-button")}</div><div id="storage-policy"><p>Loading storage policy…</p></div><div class="settings-row"><div><strong>Clear this site</strong><small>Remove cookies and stored data for a specific site in this workspace. Server-side account records are not deleted.</small></div>${action("clear-storage", "Choose a site", "trash")}</div></section><div class="settings-section"><div class="section-heading"><h2>Personal site rules</h2>${action("explain-url", "Explain a web address", "search", "", "text-button")}</div><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}${r.provenance?.kind === "community-list" ? " · community list" : ""}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)} · created by ${esc(r.createdBy || "unknown")} · revision ${esc(r.revision)}${r.provenance?.signed ? " · " + esc(r.provenance.claimKind) + " from community list " + esc(r.provenance.listName) + " (entry " + esc(r.provenance.entryId) + ")" : ""}</small>${r.evidence?.length ? `<small>Evidence: ${r.evidence.map((e) => esc(host(e))).join(", ")}</small>` : ""}${r.reviewBy ? `<small>${r.reviewBy < today ? "Review overdue" : "Review by"} ${esc(r.reviewBy)}${r.lastReviewedAt ? " · last reviewed " + esc(new Date(r.lastReviewedAt).toLocaleDateString()) : ""}</small>` : ""}<div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("review-rule", "Mark reviewed", "", 'data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><section class="settings-section"><div class="section-heading"><h2>Security intelligence</h2>${action("install-threats", "Install threat list", "upload", "", "text-button")}</div><p>Known malicious destinations come from lists or a provider you choose. Security findings are kept separate from your personal preferences.</p><div id="threat-status"><p>Loading…</p></div></section><section class="settings-section"><div class="section-heading"><h2>Download scanning</h2>${action("configure-scanner", "Configure scanner", "", "", "text-button")}</div><div id="scanner-status"><p>Loading…</p></div></section><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests are denied, and external application launches wait for your approval in Downloads. Popups need a click in their tab. Model chat cannot interact with pages or change your policy. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Threat lists and scanners reduce exposure to known threats only; they cannot prevent browser exploits or detect new malware. Saved sign-ins and cards are filled only on their exact sites with your approval, and every payment needs your approval of its exact terms. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
+    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents. Weft never clicks consent banners; these controls apply whether or not a site asks.</div><section class="settings-section"><div class="section-heading"><h2>Site storage</h2>${action("storage-defaults", "Change defaults", "", "", "text-button")}</div><div id="storage-policy"><p>Loading storage policy…</p></div><div class="settings-row"><div><strong>Clear this site</strong><small>Remove cookies and stored data for a specific site in this workspace. Server-side account records are not deleted.</small></div>${action("clear-storage", "Choose a site", "trash")}</div></section><div class="settings-section"><div class="section-heading"><h2>Personal site rules</h2><div class="inline-actions">${action("manage-lists", "Community site lists", "", "", "text-button")}${action("explain-url", "Explain a web address", "search", "", "text-button")}</div></div><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}${r.provenance?.kind === "community-list" ? " · community list" : ""}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)} · created by ${esc(r.createdBy || "unknown")} · revision ${esc(r.revision)}${r.provenance?.signed ? " · " + esc(r.provenance.claimKind) + " from community list " + esc(r.provenance.listName) + " (entry " + esc(r.provenance.entryId) + ")" : ""}</small>${r.evidence?.length ? `<small>Evidence: ${r.evidence.map((e) => esc(host(e))).join(", ")}</small>` : ""}${r.reviewBy ? `<small>${r.reviewBy < today ? "Review overdue" : "Review by"} ${esc(r.reviewBy)}${r.lastReviewedAt ? " · last reviewed " + esc(new Date(r.lastReviewedAt).toLocaleDateString()) : ""}</small>` : ""}<div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("review-rule", "Mark reviewed", "", 'data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><section class="settings-section"><div class="section-heading"><h2>Security intelligence</h2>${action("install-threats", "Install threat list", "upload", "", "text-button")}</div><p>Known malicious destinations come from lists or a provider you choose. Security findings are kept separate from your personal preferences.</p><div id="threat-status"><p>Loading…</p></div></section><section class="settings-section"><div class="section-heading"><h2>Download scanning</h2>${action("configure-scanner", "Configure scanner", "", "", "text-button")}</div><div id="scanner-status"><p>Loading…</p></div></section><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests are denied, and external application launches wait for your approval in Downloads. Popups need a click in their tab. Model chat cannot interact with pages or change your policy. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Threat lists and scanners reduce exposure to known threats only; they cannot prevent browser exploits or detect new malware. Saved sign-ins and cards are filled only on their exact sites with your approval, and every payment needs your approval of its exact terms. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
   );
 }
 const storageModeLabel = { block: "Blocked", session: "This session only", remember: "Remembered", default: "Workspace default" };
@@ -759,26 +826,24 @@ async function loadPrivacyPanels() {
   try {
     const policy = await execute("storage.policy", { workspaceId: ws().id }, true);
     if ($("storage-policy"))
-      $("storage-policy").innerHTML =
-        `<div class="settings-row"><div><strong>Workspace default</strong><small>${esc(storageModeLabel[policy.defaults.mode])} · cross-site cookies ${policy.defaults.crossSiteCookies === "block" ? "blocked" : "allowed"}</small><small>${esc(policy.sessionLifetime)}</small></div>${action("storage-coverage", "What is covered", "")}</div>` +
+      setHTML($("storage-policy"), `<div class="settings-row"><div><strong>Workspace default</strong><small>${esc(storageModeLabel[policy.defaults.mode])} · cross-site cookies ${policy.defaults.crossSiteCookies === "block" ? "blocked" : "allowed"}</small><small>${esc(policy.sessionLifetime)}</small></div>${action("storage-coverage", "What is covered", "")}</div>` +
         (policy.exceptions.length
           ? policy.exceptions.map((e) => `<div class="settings-row"><div><strong>${esc(e.hostname)}</strong><small>${esc(storageModeLabel[e.mode])}${e.includeSubdomains ? " · includes subdomains" : ""} · set ${esc(new Date(e.updatedAt).toLocaleDateString())}</small></div>${action("storage-mode", "Revoke exception", "", `data-host="${esc(e.hostname)}" data-mode="default"`, "secondary danger")}</div>`).join("")
           : "<p>No site exceptions. Use the shield in the address bar to set one for the current site.</p>") +
-        (policy.temporaryData.pendingEntries ? `<small>${policy.temporaryData.pendingEntries} temporary site origin(s) will be erased at exit.</small>` : "");
+        (policy.temporaryData.pendingEntries ? `<small>${policy.temporaryData.pendingEntries} temporary site origin(s) will be erased at exit.</small>` : ""));
   } catch (error) {
     if ($("storage-policy")) $("storage-policy").textContent = errorMessage(error);
   }
   try {
     const threats = await execute("threats.status", {}, true);
     if ($("threat-status"))
-      $("threat-status").innerHTML =
-        (threats.lists.length
+      setHTML($("threat-status"), (threats.lists.length
           ? threats.lists.map((l) => `<div class="settings-row"><div><strong>${esc(l.publisher)}</strong><small>${esc(l.entryCount)} entries · generated ${esc(new Date(l.generatedAt).toLocaleString())} · ${l.freshness === "fresh" ? "current" : l.freshness === "stale" ? `stale (${esc(l.ageHours)} h old; newer threats are missed)` : "age unknown"}</small><small>SHA-256 ${esc(l.sha256.slice(0, 16))}… · ${esc(l.source)}</small></div>${action("remove-threats", "Remove", "", `data-id="${esc(l.id)}"`, "secondary danger")}</div>`).join("")
           : "<p>No threat list installed. Security findings are unavailable until you install one.</p>") +
-        `<div class="settings-row"><div><strong>Reputation provider</strong><small>${threats.provider.enabled ? `On · ${esc(threats.provider.endpoint)} · ${esc(threats.provider.freshness)}${threats.provider.lastError ? " · last error: " + esc(threats.provider.lastError) : ""}` : "Off. Nothing is sent to any provider."}</small><small>${esc(threats.provider.egress)}</small></div><div class="inline-actions">${threats.provider.enabled ? action("update-threats", "Update now", "") : ""}${action("configure-provider", threats.provider.enabled ? "Change" : "Set up", "")}</div></div>`;
+        `<div class="settings-row"><div><strong>Reputation provider</strong><small>${threats.provider.enabled ? `On · ${esc(threats.provider.endpoint)} · ${esc(threats.provider.freshness)}${threats.provider.lastError ? " · last error: " + esc(threats.provider.lastError) : ""}` : "Off. Nothing is sent to any provider."}</small><small>${esc(threats.provider.egress)}</small></div><div class="inline-actions">${threats.provider.enabled ? action("update-threats", "Update now", "") : ""}${action("configure-provider", threats.provider.enabled ? "Change" : "Set up", "")}</div></div>`);
     const scanner = threats.downloadScanner?.scanner;
     if ($("scanner-status"))
-      $("scanner-status").innerHTML = `<p>Files are saved to a separate Weft downloads folder, marked with their origin where the operating system supports it, and never opened or run by Weft.</p><div class="settings-row"><div><strong>${scanner ? "Scanner configured" : "No scanner"}</strong><small>${scanner ? esc(scanner.command + " " + scanner.args.join(" ")) : "Completed downloads are shown as not scanned."}</small></div></div>`;
+      setHTML($("scanner-status"), `<p>Files are saved to a separate Weft downloads folder, marked with their origin where the operating system supports it, and never opened or run by Weft.</p><div class="settings-row"><div><strong>${scanner ? "Scanner configured" : "No scanner"}</strong><small>${scanner ? esc(scanner.command + " " + scanner.args.join(" ")) : "Completed downloads are shown as not scanned."}</small></div></div>`);
   } catch (error) {
     if ($("threat-status")) $("threat-status").textContent = errorMessage(error);
   }
@@ -786,7 +851,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel" aria-live="polite"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests", restricted_original: "Restricted capture originals (each read still needs your approval)" };
@@ -802,7 +867,7 @@ async function manageClients() {
   const [grants, autonomy] = await Promise.all([execute("clients.list", {}, true), execute("autonomy.get", { workspaceId: ws().id }, true)]);
   openDialog("Agent connections",
     `<p>Create a separate, expiring token for each agent. Scope each token to the workspace, sites, data and actions it needs. Changes and revocation apply to the agent’s next command.</p><div class="settings-row"><div><strong>Bootstrap token</strong><small>The token printed at startup.</small></div><select id="bootstrap-level" aria-label="Bootstrap token autonomy">${Object.entries(levelLabels).map(([v, l]) => `<option value="${v}" ${autonomy.bootstrapLevel === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div><div class="settings-row"><div><strong>Limit in this workspace</strong><small>Applies to every agent here.</small></div><select id="workspace-level" aria-label="Workspace autonomy limit"><option value="">No extra limit</option>${Object.entries(levelLabels).map(([v, l]) => `<option value="${v}" ${autonomy.workspaceCeiling === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></div>${grants.length ? grants.map(grantCard).join("") : "<p>No scoped agent connections have been created.</p>"}`,
-    action("close-dialog", "Close") + action("new-client", "Create connection", "plus", "", "primary"), true);
+    action("close-dialog", "Close") + action("new-client", "Create connection", "plus", "", "primary"), true, "Agent access");
   $("bootstrap-level").onchange = (e) => void execute("autonomy.update", { bootstrapLevel: e.target.value }, true).then(() => toast("Bootstrap token autonomy updated.")).catch((error) => toast(errorMessage(error)));
   $("workspace-level").onchange = (e) => void execute("autonomy.update", { workspaceId: ws().id, level: e.target.value || null }, true).then(() => toast("Workspace autonomy limit updated.")).catch((error) => toast(errorMessage(error)));
 }
@@ -837,7 +902,7 @@ async function manageCredentials() {
   openDialog(`Saved sign-ins in ${ws().name}`,
     `<p>Agents never receive these secrets. Every use needs your one-time approval or a task grant, and Weft fills only the exact sites listed, never a different site or an embedded frame you did not allow. Weft does not verify whether sign-in succeeded.</p><div class="notice">${esc(protection)} This broker has not had an independent security review, and it cannot protect against malware running as your user.</div>` +
       (rows.length ? `<div class="record-grid">${rows.map(card).join("")}</div>` : empty("No saved sign-ins", "Add one to let an agent sign in on a specific site after you approve.", "lock")),
-    action("close-dialog", "Close") + action("credential-provider", "1Password CLI") + (status.vault === "unprotected" ? "" : action("new-payment-card", "Add payment card", "plus") + action("new-credential", "Add sign-in", "plus", "", "primary")), true);
+    action("close-dialog", "Close") + action("credential-provider", "1Password CLI") + (status.vault === "unprotected" ? "" : action("new-payment-card", "Add payment card", "plus") + action("new-credential", "Add sign-in", "plus", "", "primary")), true, "Protected sign-ins");
 }
 function newPaymentCard() {
   formDialog("Add a payment card",
@@ -850,7 +915,7 @@ function newPaymentCard() {
       const created = await execute("credentials.create", { workspaceId: ws().id, kind: "payment_card", label: v.label, purpose: v.purpose, origins: lines(v.origins), frameOrigins: lines(v.frameOrigins),
         ...(v.expiresAt ? { expiresAt: new Date(v.expiresAt).toISOString() } : {}) });
       toast(`Saved ${created.label}. Agents see it as ${created.account}.`);
-    }, { save: "Continue", wide: true });
+    }, { save: "Continue", wide: true, trusted: "Payment card" });
 }
 function newCredential() {
   formDialog("Add a saved sign-in",
@@ -866,7 +931,7 @@ function newCredential() {
         provider: v.provider, ...(v.expiresAt ? { expiresAt: new Date(v.expiresAt).toISOString() } : {}), ...(v.accountLabel ? { accountLabel: v.accountLabel } : {}),
         ...(v.provider === "onepassword" ? { reference: { password: v.reference.trim(), ...(v.usernameReference.trim() ? { username: v.usernameReference.trim() } : {}) } } : {}) });
       toast(`Saved ${created.label}. Agents see it as ${created.account || "an account without an identifier"}.`);
-    }, { save: "Continue", wide: true });
+    }, { save: "Continue", wide: true, trusted: "Protected sign-in" });
 }
 async function managePlugins() {
   const plugins = await execute("plugins.list", {}, true);
@@ -878,12 +943,12 @@ async function manageExtensions() {
   const rows = await execute("extensions.list", { workspaceId: ws().id }, true);
   openDialog(`Extensions in ${ws().name}`,
     `<p>Unpacked Manifest V3 extensions load only into this workspace’s browser session. Weft refuses native messaging, debugging, request interception, cookie access and hosts you have not granted. An enabled extension still runs code inside matching pages and can read what they show.</p>${rows.length ? rows.map(e => `<article class="record-card"><span class="tag">${e.enabled ? "Enabled" : "Disabled"}${e.loaded ? " · loaded" : ""}</span><h3>${esc(e.name)} ${esc(e.version)}</h3><p>Hosts: ${esc(e.hostGrants.join(", ") || "none")}<br>Permissions: ${esc(e.permissions.join(", ") || "none")}</p>${e.lastError ? `<div class="notice">${esc(e.lastError)}</div>` : ""}<small>sha256 ${esc(e.sha256)}</small><div class="inline-actions">${e.enabled ? action("disable-extension", "Disable", "", `data-id="${esc(e.id)}"`, "secondary danger") : action("enable-extension", "Enable", "", `data-id="${esc(e.id)}"`)}${action("remove-extension", "Remove", "", `data-id="${esc(e.id)}"`, "secondary danger")}</div></article>`).join("") : "<p>No extensions are installed in this workspace.</p>"}`,
-    action("close-dialog", "Close") + action("install-extension", "Install unpacked extension", "plus", "", "primary"), true);
+    action("close-dialog", "Close") + action("install-extension", "Install unpacked extension", "plus", "", "primary"), true, "Extension permissions");
 }
 function installExtension() {
   openDialog("Install unpacked extension",
     `<p>Enter the folder that contains <code>manifest.json</code>. Weft reviews it first; nothing is installed or run until you confirm.</p><form id="extension-form">${field("Extension folder (absolute path)", "path", "", "text", true)}<button class="primary" type="submit">Review extension</button></form><div id="extension-review" aria-live="polite"></div>`,
-    action("close-dialog", "Cancel"), true);
+    action("close-dialog", "Cancel"), true, "Extension permissions");
   $("extension-form").onsubmit = async event => {
     event.preventDefault();
     const path = new FormData(event.currentTarget).get("path");
@@ -910,7 +975,7 @@ function installExtension() {
 function createClient() {
   openDialog("Create agent connection",
     `<p>This token grants access to <strong>${esc(ws().name)}</strong> unless you explicitly add workspaces. Choose the least access this agent needs. External actions wait for your approval unless you grant standing approval.</p><form id="client-form">${field("Agent name", "name", "", "text", true)}${grantFields()}${choice("Expires after", "ttlSeconds", [["3600", "1 hour"], ["86400", "1 day"], ["604800", "7 days"], ["2592000", "30 days"]], "3600")}<button type="submit" hidden></button></form>`,
-    action("close-dialog", "Cancel") + '<button type="submit" form="client-form" class="primary">Create token</button>', true);
+    action("close-dialog", "Cancel") + '<button type="submit" form="client-form" class="primary">Create token</button>', true, "Agent access");
   $("client-form").onsubmit = async event => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -921,7 +986,7 @@ function createClient() {
       const grant = await execute("clients.create", { name: form.get("name"), ...grantValues(form), ttlSeconds: Number(form.get("ttlSeconds")) }, true);
       openDialog("Save your agent token",
         `<p>Copy this token now. It will not be shown again after closing this dialog. If it is lost or exposed, revoke it and create a replacement.</p><p>Connection: ${esc(grant.name)}. Expires: ${esc(new Date(grant.expiresAt).toLocaleString())}.</p><label>Agent token<textarea id="new-client-token" readonly autocomplete="off" spellcheck="false"></textarea></label>`,
-        action("close-dialog", "Done"));
+        action("close-dialog", "Done"), false, "Agent access");
       $("new-client-token").value = grant.token;
       $("new-client-token").focus();
       $("new-client-token").select();
@@ -1009,9 +1074,9 @@ function updateCenter(s) {
 async function loadUpdates() {
   try {
     const status = await execute("update.status", {}, true);
-    if ($("update-center")) $("update-center").innerHTML = updateCenter(status);
+    if ($("update-center")) setHTML($("update-center"), updateCenter(status));
   } catch (e) {
-    if ($("update-center")) $("update-center").innerHTML = `<div class="notice" role="status">${esc(errorMessage(e))}</div>`;
+    if ($("update-center")) setHTML($("update-center"), `<div class="notice" role="status">${esc(errorMessage(e))}</div>`);
   }
 }
 async function loadDownloads() {
@@ -1021,7 +1086,7 @@ async function loadDownloads() {
     if (!$("download-list")) return;
     $("download-list").innerHTML =
       (launches.length
-        ? `<section class="settings-section"><h2>External application requests</h2><p>Pages cannot open other applications on their own. Approve only requests you started and recognize.</p>${launches.map((l) => `<div class="activity-row"><span class="activity-dot icon">${icon("external")}</span><div><strong>${esc(l.scheme)}: link</strong><p>${esc(l.targetUrl.slice(0, 200))}</p><p>From ${esc(l.sourceTitle || host(l.sourceUrl))} (${esc(l.sourceUrl || "unknown page")}) · ${esc(l.frame)} · ${l.recentHumanInput ? "after your input" : "no recent input"} · ${esc(l.state)}${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}</p>${l.state === "refused" ? `<p>${esc(l.reason)}</p>` : ""}</div>${l.state === "pending" ? action("approve-launch", "Open application", "", 'data-id="' + l.id + '"') + action("deny-launch", "Dismiss", "", 'data-id="' + l.id + '"') : ""}</div>`).join("")}</section>`
+        ? `<section class="settings-section trusted-section">${trustedBand("Application launch requests", icon("shield"))}<h2>External application requests</h2><p>Pages cannot open other applications on their own. Approve only requests you started and recognize.</p>${launches.map((l) => `<div class="activity-row"><span class="activity-dot icon">${icon("external")}</span><div><strong>${esc(l.scheme)}: link</strong><p>${esc(l.targetUrl.slice(0, 200))}</p><p>From ${esc(l.sourceTitle || host(l.sourceUrl))} (${esc(l.sourceUrl || "unknown page")}) · ${esc(l.frame)} · ${l.recentHumanInput ? "after your input" : "no recent input"} · ${esc(l.state)}${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}</p>${l.state === "refused" ? `<p>${esc(l.reason)}</p>` : ""}</div>${l.state === "pending" ? action("approve-launch", "Open application", "", 'data-id="' + l.id + '"') + action("deny-launch", "Dismiss", "", 'data-id="' + l.id + '"') : ""}</div>`).join("")}</section>`
         : "") +
       (rows.length
         ? rows
@@ -1049,6 +1114,8 @@ async function siteProtection() {
     `Site controls · ${hostname}`,
     `<p>Storage for this site: <strong>${esc(storageModeLabel[current])}</strong>${current === "default" ? ` (${esc(storageModeLabel[p.storageMode?.mode] || "Remembered")})` : ""}. Changes apply after reload. Sites and agents cannot change this.</p><div class="inline-actions">${["block", "session", "remember", "default"].map((m) => action("storage-mode", m === "block" ? "Block site storage" : m === "session" ? "Allow for this session" : m === "remember" ? "Remember this site" : "Use workspace default", "", `data-host="${esc(hostname)}" data-mode="${m}"`, m === current ? "primary" : "secondary")).join("")}${action("clear-storage", "Clear this site", "trash")}</div><p>On this page: ${blockedCount} cookie or speculative request(s) stopped${activity.documentsSandboxed ? `, ${activity.documentsSandboxed} document(s) loaded without storage` : ""}, ${(p.blockedPopups || []).length} popup(s) blocked, ${Object.values(p.permissionDenials || {}).reduce((a, b) => a + b, 0)} permission request(s) denied, ${p.pendingLaunches || 0} application launch request(s) waiting.</p>${(p.blockedPopups || []).slice(-3).map((b) => `<div class="settings-row"><div><strong>Blocked popup</strong><small>${esc(b.url)}</small></div>${action("open-url", "Open in new tab", "external", `data-url="${esc(b.url)}"`)}</div>`).join("")}${p.securityWarning ? `<div class="notice">${esc(p.securityWarning)}</div>` : ""}${action("explain-url", "Why is this site allowed or blocked?", "search", `data-url="${esc(tab.url)}"`, "text-button")}`,
     action("close-dialog", "Close"),
+    false,
+    "Site controls",
   );
 }
 async function explainUrl(url) {
@@ -1058,11 +1125,45 @@ async function explainUrl(url) {
     `<p><strong>${esc(r.decision === "allow-exception" ? "Allowed for this visit by your exception" : r.decision === "block" ? "Blocked" : r.decision === "warn" ? "Allowed with a warning" : "Allowed")}</strong> · decided by ${esc(r.decidedBy)}</p><p>Address host: ${esc(r.hostname.unicode)}${r.hostname.punycode ? ` (${esc(r.hostname.ascii)})` : ""}</p>${r.hostname.notice ? `<div class="notice">${esc(r.hostname.notice)}${r.hostname.mixedScript ? " This name mixes writing systems." : ""}</div>` : ""}${r.security.map((f) => `<div class="notice"><strong>Security finding</strong>: ${esc(f.category)} from ${esc(f.publisher || f.source)}${f.stale ? " · intelligence is stale" : ""}</div>`).join("")}${r.exception ? `<p>Exception: ${esc(r.exception.expires)}</p>` : ""}${r.matches.length ? r.matches.map((m) => `<article class="record-card"><span class="tag">${m.order}. ${esc(m.precedence)}${m.effective ? " · decides" : ""}${m.applies ? "" : " · not applied"}</span><h3>${esc(m.hostname)}${m.path !== "/" ? esc(m.path) : ""}</h3><p>${esc(m.why)}</p><small>${esc(m.source)} · ${esc(m.reason)} · created by ${esc(m.createdBy)} · revision ${esc(m.revision)}${m.reviewStatus === "due" ? " · review overdue" : ""}</small>${m.evidence.length ? `<small>Evidence: ${m.evidence.map((e) => esc(e)).join(", ")}</small>` : ""}</article>`).join("") : "<p>No site rule matches this address.</p>"}${r.conflicts ? `<div class="notice">${esc(r.conflicts)}</div>` : ""}<details><summary>Precedence order</summary><ol>${r.precedence.map((p) => `<li>${esc(p.description)}</li>`).join("")}</ol></details>`,
     action("close-dialog", "Close"),
     true,
+    "Site rules",
   );
 }
 async function sha256Hex(text) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+// Live pages are native views drawn over #content. Weft keeps a thin margin around them (#36):
+// the frame shows who controls the page, carries the handoff transition and, in split view,
+// a divider and an unmistakable frame on the focused pane. Pages can never draw in this margin.
+const PANE_INSET = 3, PANE_GAP = 6, PANE_HEADER = 32;
+const splitTab = () => (splitTabId && splitTabId !== active()?.id ? visibleTabs().find((t) => t.id === splitTabId && !t.blocked && !t.suspended && t.url !== "about:blank") : null);
+const controlMode = (t) => t?.controlMode || (t?.controller === "human" ? "you-drive" : !t?.controller || t.controller === "available" ? "available" : "agent-drives");
+function ownerBadge(t) {
+  const mode = controlMode(t);
+  const label = mode === "you-drive" ? "You drive" : mode === "assist" ? "Assist: agent observes" : mode === "agent-drives" ? `Agent drives: ${t.controller}` : "Available to agents";
+  const state = t?.activity ? "working" : mode === "you-drive" ? "you" : mode === "assist" ? "assist" : mode === "agent-drives" ? "agent" : "available";
+  return stateBadge(state, `${esc(label)}${t?.activity ? ` · working: ${esc(t.activity.command)}` : ""}`);
+}
+function paneFrames(tab) {
+  const other = splitTab();
+  const panes = other ? [["primary", tab], ["secondary", other]] : [["primary", tab]];
+  const headers = other
+    ? `<div class="pane-headers" role="group" aria-label="Split view panes">${panes.map(([pane, t]) => `<div class="pane-header ${focusedPane === pane ? "focused" : ""}" data-pane="${pane}"><button type="button" data-action="focus-pane-to" data-pane="${pane}" aria-pressed="${focusedPane === pane}">${pane === "primary" ? "Left" : "Right"} pane</button><span class="pane-title">${esc(displayTitle(t))}</span>${ownerBadge(t)}${focusedPane === pane ? '<span class="pane-focus-label">Focused</span>' : ""}</div>`).join("")}</div>`
+    : "";
+  return `${headers}<div class="pane-frames" aria-hidden="true">${panes.map(([pane, t]) => `<div class="pane-frame ${other && focusedPane === pane ? "focused" : ""} ${controlMode(t) === "agent-drives" ? "agent" : ""} ${(handoffUntil.get(t.id) || 0) > Date.now() ? "handoff" : ""}" data-pane="${pane}" data-tab="${t.id}"></div>`).join("")}</div>`;
+}
+/** Position the frames and pane headers to match the rectangles the native views receive. */
+function placeFrames(page, content, split) {
+  const half = split ? Math.floor((page.width - PANE_GAP) / 2) : page.width;
+  const rects = { primary: { x: page.x, width: half }, secondary: { x: page.x + half + PANE_GAP, width: page.width - half - PANE_GAP } };
+  for (const frame of document.querySelectorAll(".pane-frame")) {
+    const r = rects[frame.dataset.pane];
+    Object.assign(frame.style, { left: `${r.x - content.x - PANE_INSET}px`, top: `${page.y - content.y - PANE_INSET}px`, width: `${r.width + 2 * PANE_INSET}px`, height: `${page.height + 2 * PANE_INSET}px` });
+  }
+  for (const header of document.querySelectorAll(".pane-header")) {
+    const r = rects[header.dataset.pane];
+    Object.assign(header.style, { left: `${r.x - content.x}px`, width: `${r.width}px` });
+  }
 }
 function layout() {
   if (!window.weft.layout) return;
@@ -1074,16 +1175,25 @@ function layout() {
     (Boolean(area) || (!!active() &&
     active().url !== "about:blank" &&
     !active().blocked));
+  const split = !area && show && Boolean(splitTab());
+  const inset = area ? 0 : PANE_INSET;
+  const top = split ? PANE_HEADER : 0;
+  const page = { x: Math.round(box.x) + inset, y: Math.round(box.y) + top + inset, width: Math.max(1, Math.floor(box.width) - 2 * inset), height: Math.max(1, Math.floor(box.height) - top - 2 * inset) };
+  if (!area) placeFrames(page, $("content").getBoundingClientRect(), split);
+  $("focus-page").hidden = !show;
   return window.weft
     .layout({
-      x: Math.round(box.x),
-      y: Math.round(box.y),
-      width: Math.floor(box.width),
-      height: Math.floor(box.height),
+      ...page,
       visible: show,
       ...(splitTabId ? { splitTabId, focusedPane } : {}),
     })
     .catch(() => {});
+}
+/** Keyboard path into the page (#31): F6 or the "Move focus into the page" control. */
+async function focusPage() {
+  const result = await window.weft.focusPage?.().catch(() => null);
+  if (result?.focused) announce(`Focus is in the ${splitTab() ? (focusedPane === "secondary" ? "right" : "left") + " pane" : "page"}. Press F6 to return to Weft.`);
+  else announce("No page is shown. Open a website first.");
 }
 function navigateSection(next, remember = true) {
   navigationSerial++;
@@ -1094,9 +1204,11 @@ function navigateSection(next, remember = true) {
   renderShell();
   renderContent();
   $("content").scrollTop = 0;
-  $("content").focus({ preventScroll: true });
+  // Keyboard and screen-reader users land on the new view's heading; a live page offers the way in.
+  if (section === "browse" && !$("focus-page").hidden) $("focus-page").focus({ preventScroll: true });
+  else focusView($("content"));
 }
-function openDialog(title, body, footer = "", wide = false) {
+function openDialog(title, body, footer = "", wide = false, trusted = "") {
   openTaskDetail = null;
   const desk = $("command-desk");
   if (desk?.closest("#dialog")) {
@@ -1105,10 +1217,12 @@ function openDialog(title, body, footer = "", wide = false) {
   }
   if (!$("dialog").open) dialogRestore = rememberFocus();
   $("dialog").classList.toggle("dialog-wide", wide);
+  $("dialog").classList.toggle("trusted", Boolean(trusted));
   $("dialog-content").innerHTML =
-    `<div class="dialog-header"><h2 id="dialog-title">${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div><div class="dialog-body">${body}<div class="form-error" id="form-error" role="alert"></div></div>${footer ? `<div class="dialog-footer">${footer}</div>` : ""}`;
+    `<div class="dialog-header"><h2 id="dialog-title">${esc(title)}</h2><button class="icon-button" data-action="close-dialog" aria-label="Close dialog">${icon("close")}</button></div>${trusted ? trustedBand(esc(trusted), icon("shield")) : ""}<div class="dialog-body">${body}<div class="form-error" id="form-error" role="alert"></div></div>${footer ? `<div class="dialog-footer">${footer}</div>` : ""}`;
   if (!$("dialog").open) $("dialog").showModal();
   layout();
+  requestAnimationFrame(() => keyboardScrollable($("dialog-content"), `${title} details`));
   setTimeout(
     () => $("dialog-content").querySelector("input,textarea,select")?.focus(),
     30,
@@ -1159,7 +1273,7 @@ function formDialog(
   title,
   fields,
   onSave,
-  { save = "Save", extra = "", wide = false } = {},
+  { save = "Save", extra = "", wide = false, trusted = "" } = {},
 ) {
   openDialog(
     title,
@@ -1168,11 +1282,13 @@ function formDialog(
       action("close-dialog", "Cancel") +
       `<button type="submit" form="edit-form" class="primary">${save}</button>`,
     wide,
+    trusted,
   );
   $("edit-form").onsubmit = async (e) => {
     e.preventDefault();
     const button = $("dialog-content").querySelector("button[form]");
     button.disabled = true;
+    $("form-error").textContent = "";
     try {
       await onSave(Object.fromEntries(new FormData($("edit-form"))));
       closeDialog();
@@ -1216,7 +1332,6 @@ function workspaceForm(record) {
 // ---- Durable tasks, uncertain work and workflows (ADR 016) ---------------------------------
 const phaseLabels = { queued: "Queued", running: "Running", waiting_on_human: "Waiting for you", paused: "Paused", completed: "Completed", failed: "Failed", cancelled: "Cancelled", uncertain: "Outcome unknown" };
 const phaseLabel = (status) => phaseLabels[status === "waiting" ? "waiting_on_human" : status] || status;
-const phaseTone = (status) => (status === "completed" ? "sage" : ["waiting_on_human", "uncertain", "failed"].includes(status) ? "clay" : "");
 const unresolvedOps = (t) => (t.operations || []).filter((op) => ["attempted", "uncertain"].includes(op.status) && !["completed", "not_completed", "unknown"].includes(op.determination?.status));
 const needsAttention = (t) => t.status === "uncertain" || unresolvedOps(t).some((op) => op.status === "uncertain") || (t.executor && t.status === "waiting_on_human");
 let recordingTab = null;
@@ -1299,7 +1414,7 @@ async function taskDetail(id) {
   ].join("");
   openDialog(
     t.title,
-    `<div class="task-detail" data-task="${esc(t.id)}"><p><span class="tag ${phaseTone(t.status)}">${esc(phaseLabel(t.status))}</span> ${esc(executorLabel(t.executor))}${managed ? ` · ${Number(t.progress) || 0}%` : ""}${t.workflowRun ? ` · workflow ${esc(t.workflowRun.title)}` : ""}</p>${t.objective ? `<p>${esc(t.objective)}</p>` : ""}${t.staleness?.stale ? `<div class="notice">Results may be stale: ${esc(t.staleness.reasons.join("; "))}</div>` : ""}${blockerActions(t)}${uncertainReview(t)}<h3>Steps</h3>${steps}${t.outputs?.length || t.evidence?.length ? `<p class="muted">Outputs: ${esc([...(t.outputs || []), ...(t.evidence || [])].join(", "))}</p>` : ""}<h3>History</h3><ul class="task-history">${history || "<li>No changes yet.</li>"}</ul><p class="muted">Steps run through the same permission checks as any agent command. Accepted page actions are not proof of an external result.</p></div>`,
+    `<div class="task-detail" data-task="${esc(t.id)}"><p>${stateBadge(t.status, esc(phaseLabel(t.status)))} ${esc(executorLabel(t.executor))}${managed ? ` · ${Number(t.progress) || 0}%` : ""}${t.workflowRun ? ` · workflow ${esc(t.workflowRun.title)}` : ""}</p>${t.objective ? `<p>${esc(t.objective)}</p>` : ""}${t.staleness?.stale ? `<div class="notice">Results may be stale: ${esc(t.staleness.reasons.join("; "))}</div>` : ""}${blockerActions(t)}${uncertainReview(t)}<h3>Steps</h3>${steps}${t.outputs?.length || t.evidence?.length ? `<p class="muted">Outputs: ${esc([...(t.outputs || []), ...(t.evidence || [])].join(", "))}</p>` : ""}<h3>History</h3><ul class="task-history">${history || "<li>No changes yet.</li>"}</ul><p class="muted">Steps run through the same permission checks as any agent command. Accepted page actions are not proof of an external result.</p></div>`,
     controls + action("edit-task-record", "Edit record", "note", attrs) + action("close-dialog", "Close"),
     true,
   );
@@ -1794,7 +1909,7 @@ async function openPreview(id, versionId) {
 async function closePreview(quiet = false) {
   if (!previewing) return;
   previewing = null;
-  try { await window.weft.execute("artifacts.closePreview", {}); } catch { /* already closed */ }
+  try { await weftExecute("artifacts.closePreview", {}); } catch { /* already closed */ }
   if (!quiet) { renderContent(); layout(); }
 }
 async function compareDialog(id, versionId) {
@@ -1831,7 +1946,7 @@ async function redactionEditor(id, versionId) {
       + `${area("Exact text to remove (one entry per line; every occurrence, also in the title)", "literals")}${field("Pattern to remove (optional regular expression)", "pattern")}`
       + `${metadata.length ? `<fieldset><legend>Address and metadata review</legend><ul>${metadata.slice(0, 30).map((f) => `<li>${esc(f.field)}: ${esc(f.detail)}${f.parameter ? " (" + esc(f.parameter) + ")" : ""}</li>`).join("")}</ul></fieldset>` : ""}`
       + `${choice("Keep of the web address", "url", [["origin-path", "Site and path, no query (recommended)"], ["origin", "Site only"], ["remove", "Nothing"], ["keep", "Full address"]], "origin-path")}`
-      + `${version.pngBase64 ? `${choice("Screenshot", "image", [["redact", "Keep, with the areas drawn below blacked out"], ["omit", "Leave the screenshot out"]], "redact")}<p>Drag on the screenshot to mark areas to black out. ${esc(review.image || "")}</p><div class="redact-canvas" id="redact-canvas"><img id="redact-image" src="data:image/png;base64,${esc(version.pngBase64)}" alt="Screenshot to redact" draggable="false"></div><div id="redact-regions" class="muted">No areas marked.</div>` : ""}`
+      + `${version.pngBase64 ? `${choice("Screenshot", "image", [["redact", "Keep, with the areas drawn below blacked out"], ["omit", "Leave the screenshot out"]], "redact")}<p>Drag on the screenshot to mark areas to black out. ${esc(review.image || "")}</p><div class="redact-canvas" id="redact-canvas"><img id="redact-image" src="data:image/png;base64,${esc(version.pngBase64)}" alt="Screenshot to redact" draggable="false"></div><div id="redact-regions" class="muted" aria-live="polite">No areas marked.</div><fieldset class="region-entry"><legend>Or add an area by its position in screenshot pixels</legend><div class="region-fields">${[["Left", "rx"], ["Top", "ry"], ["Width", "rw"], ["Height", "rh"]].map(([label, name]) => `<label>${label}<input name="${name}" type="number" min="0" step="1" inputmode="numeric"></label>`).join("")}</div><button type="button" class="secondary" id="redact-add-region">Add area</button></fieldset>` : ""}`
       + `${review.archive ? `<p>${esc(review.archive)}</p>` : ""}<label><input type="checkbox" name="restrict" ${version.access === "restricted" ? "checked disabled" : "checked"}> Restrict the original: withhold it from agents, search and default exports</label></form><div id="redact-preview" aria-live="polite"></div>`,
     `<button class="secondary" type="button" id="redact-show">Preview</button>` + action("close-dialog", "Cancel") + `<button class="primary" type="button" id="redact-save">Save sanitized version</button>`, true);
   const image = $("redact-image");
@@ -1843,7 +1958,25 @@ async function redactionEditor(id, versionId) {
     canvas.onpointerdown = (event) => { event.preventDefault(); start = point(event); box = document.createElement("div"); box.className = "redact-box"; canvas.append(box); canvas.setPointerCapture(event.pointerId); };
     canvas.onpointermove = (event) => { if (!start) return; const p = point(event); Object.assign(box.style, { left: `${Math.min(start.x, p.x) / p.scale + image.offsetLeft}px`, top: `${Math.min(start.y, p.y) / p.scale + image.offsetTop}px`, width: `${Math.abs(p.x - start.x) / p.scale}px`, height: `${Math.abs(p.y - start.y) / p.scale}px` }); };
     canvas.onpointerup = (event) => { if (!start) return; const p = point(event); const r = { x: Math.min(start.x, p.x), y: Math.min(start.y, p.y), width: Math.abs(p.x - start.x), height: Math.abs(p.y - start.y) }; start = null; if (r.width >= 2 && r.height >= 2) regions.push(r); else box.remove(); listRegions(); };
-    $("redact-regions").onclick = (event) => { const index = event.target.dataset?.removeRegion; if (index === undefined) return; regions.splice(Number(index), 1); canvas.querySelectorAll(".redact-box")[Number(index)]?.remove(); listRegions(); };
+    $("redact-regions").onclick = (event) => { const index = event.target.dataset?.removeRegion; if (index === undefined) return; regions.splice(Number(index), 1); canvas.querySelectorAll(".redact-box")[Number(index)]?.remove(); listRegions(); $("redact-add-region")?.focus(); };
+    // Keyboard alternative to dragging (#31): the same region, entered as numbers.
+    $("redact-add-region").onclick = () => {
+      const form = $("redact-form");
+      const value = (name) => Math.round(Number(form.querySelector(`[name="${name}"]`).value));
+      const r = { x: value("rx"), y: value("ry"), width: value("rw"), height: value("rh") };
+      if (![r.x, r.y, r.width, r.height].every(Number.isFinite) || r.width < 2 || r.height < 2 || r.x < 0 || r.y < 0) { $("form-error").textContent = "Enter a left and top position and a width and height of at least 2 pixels."; return; }
+      r.width = Math.min(r.width, image.naturalWidth - Math.min(r.x, image.naturalWidth));
+      r.height = Math.min(r.height, image.naturalHeight - Math.min(r.y, image.naturalHeight));
+      if (r.width < 2 || r.height < 2) { $("form-error").textContent = `The area must lie inside the ${image.naturalWidth} × ${image.naturalHeight} pixel screenshot.`; return; }
+      $("form-error").textContent = "";
+      const scale = image.naturalWidth / image.getBoundingClientRect().width;
+      const drawn = document.createElement("div");
+      drawn.className = "redact-box";
+      Object.assign(drawn.style, { left: `${r.x / scale + image.offsetLeft}px`, top: `${r.y / scale + image.offsetTop}px`, width: `${r.width / scale}px`, height: `${r.height / scale}px` });
+      canvas.append(drawn);
+      regions.push(r);
+      listRegions();
+    };
   }
   const collect = () => {
     const form = new FormData($("redact-form"));
@@ -1951,7 +2084,7 @@ function reviewDisclosure(disclosure, request) {
       const selectable = (d.items || []).some((item) => item.key && item.kind !== "message");
       const send = `<button id="acknowledge-disclosure" class="primary" ${d.blocked ? "disabled" : ""}>${d.requiresAcknowledgement ? "Acknowledge and send" : "Send"}</button>`;
       openDialog(d.requiresAcknowledgement ? "Review model destination" : "Review what the model receives", disclosureBody(d, exclude),
-        action("close-dialog", "Cancel") + (selectable ? '<button id="update-disclosure" class="secondary">Update preview</button>' : "") + send);
+        action("close-dialog", "Cancel") + (selectable ? '<button id="update-disclosure" class="secondary">Update preview</button>' : "") + send, false, "Model destination review");
       if ($("update-disclosure")) $("update-disclosure").onclick = async () => {
         exclude = collect();
         try { d = (await execute("chat.preview", { ...request, ...(exclude.length ? { exclude } : {}) }, true)).disclosure; render(); }
@@ -2095,7 +2228,7 @@ async function enableEncryptionDialog() {
       if (values.passphrase !== values.passphrase2) throw new Error("The passphrases do not match.");
       const result = await execute("encryption.enable", { acknowledgeKeyLoss: true, unlockMode: values.unlockMode, ...(values.passphrase ? { passphrase: values.passphrase } : {}), removePlaintextCopies: Boolean(values.removePlaintextCopies) }, true);
       setTimeout(() => showRecoveryKey("Encryption is on", result.recoveryKey, result.notice), 0);
-    }, { save: "Encrypt my data", wide: true });
+    }, { save: "Encrypt my data", wide: true, trusted: "Encryption" });
 }
 function showRecoveryKey(title, key, notice) {
   openDialog(title,
@@ -2142,14 +2275,17 @@ function disableEncryptionDialog() {
     async () => {
       await execute("encryption.disable", { acknowledgePlaintext: true }, true);
       toast("Encryption is off.");
-    }, { save: "Turn off encryption" });
+    }, { save: "Turn off encryption", trusted: "Encryption" });
 }
 /** Full-window lock screen: nothing else renders until a person unlocks. */
 async function showLockScreen() {
   if (lockScreenOpen) return new Promise((resolve) => unlockWaiters.push(resolve));
   lockScreenOpen = true;
   if ($("dialog").open) closeDialog();
-  try { encryption = await window.weft.execute("encryption.status", {}); } catch { /* render with what is known */ }
+  // Only the lock screen is operable: everything behind it is inert to keyboard, pointer and assistive technology.
+  const restoreFocus = rememberFocus();
+  for (const element of [$("app"), document.querySelector(".skip-link")]) element.inert = true;
+  try { encryption = await weftExecute("encryption.status", {}); } catch { /* render with what is known */ }
   const e = encryption || { methods: { os: {}, passphrase: {} } };
   const screen = document.createElement("div");
   screen.id = "lock-screen";
@@ -2164,11 +2300,13 @@ async function showLockScreen() {
     button.disabled = true;
     $("unlock-error").textContent = "";
     try {
-      await window.weft.execute("encryption.unlock", args);
+      await weftExecute("encryption.unlock", args);
       screen.remove();
       lockScreenOpen = false;
+      for (const element of [$("app"), document.querySelector(".skip-link")]) element.inert = false;
       for (const resolve of unlockWaiters.splice(0)) resolve();
       await refresh(true);
+      restoreFocus();
       toast("Unlocked.");
     } catch (error) {
       $("unlock-error").textContent = errorMessage(error);
@@ -2275,7 +2413,7 @@ async function loadModels() {
   models = await execute("models.list", {}, true);
   if (!models.some((m) => m.id === modelId)) modelId = models[0]?.id || "";
 }
-function openAgent() {
+function openAgent(focus = false) {
   agentOpen = true;
   void execute("settings.update", { agentPanelOpen: true }, true).catch(
     () => {},
@@ -2286,6 +2424,7 @@ function openAgent() {
   renderShell();
   renderAgent();
   layout();
+  if (focus) $("chat-input")?.focus();
 }
 function closeAgent() {
   agentOpen = false;
@@ -2305,7 +2444,7 @@ function renderAgent() {
   );
   if (!conversation) conversationId = null;
   $("agent-panel").innerHTML =
-    `<div class="agent-header"><span class="agent-symbol icon">${icon("spark")}</span><div><strong>${esc(conversation?.title || "A thinking partner")}</strong><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="polite" aria-relevant="additions text"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><div id="chat-attachments" class="chat-attachments" aria-label="Selected attachments"></div><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button type="button" class="text-button" data-action="attach-chat">${icon("plus")}Attach</button><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
+    `<div class="agent-header"><span class="agent-symbol icon" aria-hidden="true">${icon("spark")}</span><div><h2 class="agent-title">${esc(conversation?.title || "A thinking partner")}</h2><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="off" tabindex="0"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><div id="chat-attachments" class="chat-attachments" role="group" aria-label="Selected attachments"></div><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button type="button" class="text-button" data-action="attach-chat">${icon("plus")}Attach</button><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
   updateDestination();
   renderAttachments();
   renderMessages();
@@ -2348,7 +2487,7 @@ function renderMessages() {
   const messages = c?.messages || [];
   const manifests = new Map((c?.turnManifests || []).filter((t) => t.turnId).map((t) => [t.turnId, t]));
   const last = messages.at(-1);
-  $("chat-messages").innerHTML = messages.length
+  setHTML($("chat-messages"), messages.length
     ? messages
         .map((m) => {
           const manifest = m.turnId && manifests.get(m.turnId);
@@ -2359,10 +2498,11 @@ function renderMessages() {
           return `<div class="chat-message ${m.role === "user" ? "user" : "assistant"}"><div class="message-author">${esc(messageAuthor(m))}${status}</div><div class="message-body">${m.role === "tool" ? proposalCard(m) || `<details><summary>Source and tool result</summary><pre class="tool-result">${esc(m.content)}</pre></details>` : esc(m.content)}</div>${m.role === "assistant" ? turnUsage(manifest) : ""}${resume}</div>${failed}`;
         })
         .join("")
-    : `<div class="chat-welcome"><span class="agent-symbol icon">${icon("spark")}</span><h3>A little help,<br>a fresh perspective.</h3><p>Think through an idea, make a plan, or ask a question. Choose a model above to get started.</p><button data-action="chat-prompt" data-text="Help me turn a project idea into a clear plan.">Help me make a plan ${icon("arrow")}</button><button data-action="chat-prompt" data-text="Help me organize my research. What should I collect first?">Organize my research ${icon("arrow")}</button><button data-action="section" data-section="settings">Configure a model ${icon("settings")}</button></div>`;
-  if (chatBusy)
-    $("chat-messages").innerHTML +=
-      '<p class="muted">Waiting for your model…</p>';
+    : `<div class="chat-welcome"><span class="agent-symbol icon">${icon("spark")}</span><h3>A little help,<br>a fresh perspective.</h3><p>Think through an idea, make a plan, or ask a question. Choose a model above to get started.</p><button data-action="chat-prompt" data-text="Help me turn a project idea into a clear plan.">Help me make a plan ${icon("arrow")}</button><button data-action="chat-prompt" data-text="Help me organize my research. What should I collect first?">Organize my research ${icon("arrow")}</button><button data-action="section" data-section="settings">Configure a model ${icon("settings")}</button></div>`);
+  if (chatBusy) {
+    $("chat-messages").innerHTML += '<p class="muted">Waiting for your model…</p>';
+    $("chat-messages").__weftHTML = null;
+  }
   renderLiveTurn();
   $("chat-messages").scrollTop = $("chat-messages").scrollHeight;
 }
@@ -2376,9 +2516,12 @@ function renderLiveTurn() {
     bubble = document.createElement("div");
     bubble.id = "chat-live";
     bubble.className = "chat-message assistant";
+    // Streaming text is shown, not read token by token; completion is announced once.
+    bubble.setAttribute("aria-hidden", "true");
     bubble.innerHTML = '<div class="message-author"></div><div class="message-body"></div>';
     const waiting = $("chat-waiting");
     if (waiting) box.insertBefore(bubble, waiting); else box.append(bubble);
+    box.__weftHTML = null;
   }
   bubble.querySelector(".message-author").textContent = `${liveTurn.model || "MODEL"} · ${liveTurn.phase === "vision_fallback" ? "describing images with the vision fallback" : "streaming"}`;
   bubble.querySelector(".message-body").textContent = liveTurn.text || "…";
@@ -2391,6 +2534,7 @@ function onTurnFrame(frame) {
   if (frame.type === "delta") liveTurn.text += frame.text;
   if (frame.type === "phase") liveTurn.phase = frame.phase;
   if (frame.type === "end") {
+    if (!chatBusy && frame.conversationId === conversationId && agentOpen) announce("A model reply finished in this conversation.");
     liveTurn = null;
     // Turns started by other clients also settle into durable messages.
     if (!chatBusy) void refresh(true).catch(() => {});
@@ -2481,29 +2625,38 @@ async function sendChat(e) {
     renderAttachments();
     $("chat-messages").innerHTML +=
       `<div class="chat-message user"><div class="message-author">YOU</div><div class="message-body">${esc(text)}</div></div><p class="muted" id="chat-waiting">Waiting for your model… ${action("cancel-chat", "Cancel", "", "", "text-button")}</p>`;
+    $("chat-messages").__weftHTML = null;
+    $("chat-messages").setAttribute("aria-busy", "true");
+    announce("Message sent. Waiting for the model.");
     await execute("chat.send", request, true);
     liveTurn = null;
     await refresh(true);
+    const reply = records("conversations").find((c) => c.id === conversationId)?.messages?.filter((m) => m.role === "assistant").at(-1);
+    announce(reply ? `Reply from ${reply.model || "the model"}${reply.status && reply.status !== "complete" ? ` (${reply.status})` : ""}: ${short(reply.content, 160)}` : "The model did not return a reply.");
   } catch (error) {
     liveTurn = null;
     toast(errorMessage(error));
     await refresh(true);
   } finally {
     chatBusy = false;
+    $("chat-messages")?.removeAttribute("aria-busy");
     if ($("chat-send")) $("chat-send").disabled = false;
     renderMessages();
   }
 }
 // ---- Resume state, tab groups and tab search (#24) ----------------------------------
 const groupColors = { plum: "Plum", sage: "Sage", clay: "Clay", sky: "Sky", sand: "Sand", rose: "Rose", slate: "Slate" };
+// Agent presence beside the tab it affects (style guide 10): a text label with a distinct marker shape.
 const tabFlags = (t) => [
-  t.controlMode === "agent-drives" ? "Agent drives" : t.controlMode === "assist" ? "Assist" : "",
-  t.suspended ? "Suspended" : "",
-  records("tasks").some((task) => !["completed", "failed", "cancelled"].includes(task.status) && (task.tabIds || []).includes(t.id)) ? "Task" : "",
+  t.activity ? stateBadge("working", "Working") : "",
+  controlMode(t) === "agent-drives" ? stateBadge("agent", "Agent drives") : controlMode(t) === "assist" ? stateBadge("assist", "Assist") : "",
+  t.queued?.length ? stateBadge("waiting", `${t.queued.length} waiting`) : "",
+  t.suspended ? '<span class="tab-flag">Suspended</span>' : "",
+  records("tasks").some((task) => !["completed", "failed", "cancelled"].includes(task.status) && (task.tabIds || []).includes(t.id)) ? '<span class="tab-flag">Task</span>' : "",
 ].filter(Boolean);
 function tabButton(tab) {
   const flags = tabFlags(tab);
-  return `<div class="tab ${tab.active ? "active" : ""} ${tab.suspended ? "suspended" : ""}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span>${flags.map((f) => `<span class="tab-flag">${esc(f)}</span>`).join("")}</button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}">×</button></div>`;
+  return `<div class="tab ${tab.active ? "active" : ""} ${tab.suspended ? "suspended" : ""}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span>${flags.join("")}</button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}">×</button></div>`;
 }
 function tabStrip() {
   const groups = records("tabGroups");
@@ -2554,7 +2707,7 @@ function saveResume(partial) {
   resumeTimer = setTimeout(() => {
     const body = resumePending;
     resumePending = {};
-    void window.weft.execute("resume.save", { workspaceId, ...body }).catch(() => {});
+    void weftExecute("resume.save", { workspaceId, ...body }).catch(() => {});
   }, 250);
 }
 const focusLabel = () => (splitTabId ? ` · Focused pane: ${focusedPane === "secondary" ? "right" : "left"}` : "");
@@ -2562,7 +2715,8 @@ let restoreNotices = [];
 let navigationSerial = 0;
 async function applyResume(announce = false) {
   // A person who navigates while the saved view loads keeps their choice.
-  const serial = navigationSerial;
+  // At startup, any navigation since the window loaded (for example a URL typed while the profile opens) wins.
+  const serial = announce ? 0 : navigationSerial;
   const resume = await execute("resume.get", { workspaceId: ws().id }, true);
   if (serial !== navigationSerial) return;
   splitTabId = resume.view.split.tabId;
@@ -2589,7 +2743,7 @@ async function loadResumePanel() {
   const handoffs = r.continue.handoffs.map((h) => row(h.objective || h.blocker || "Handoff", `${h.status} · ${h.from} → ${h.to}${h.nextStep ? " · Next: " + short(h.nextStep, 60) : ""}`, open(h.link, "Review"))).join("");
   // Shown only when there is something to continue, so an empty workspace stays uncluttered.
   panel.hidden = !(pinned || blockers || handoffs || r.tabs.suspended);
-  panel.innerHTML = `<div class="section-heading"><h2>Continue where you left off</h2><span class="muted micro">${r.saved ? `Last view: ${esc(names[r.view.section] || r.view.section)}` : "Saved as you work"}</span></div>${pinned || blockers || handoffs ? `${pinned ? `<h3 class="micro">Pinned</h3>${pinned}` : ""}${blockers ? `<h3 class="micro">Blockers and waiting tasks</h3>${blockers}` : ""}${handoffs ? `<h3 class="micro">Open handoffs</h3>${handoffs}` : ""}` : "<p>Pin materials, tasks or captures to keep them here. Blocked tasks and open handoffs appear automatically.</p>"}${r.tabs.suspended ? `<small>${r.tabs.suspended} suspended tab${r.tabs.suspended === 1 ? "" : "s"} reload when opened.</small>` : ""}`;
+  setHTML(panel, `<div class="section-heading"><h2>Continue where you left off</h2><span class="muted micro">${r.saved ? `Last view: ${esc(names[r.view.section] || r.view.section)}` : "Saved as you work"}</span></div>${pinned || blockers || handoffs ? `${pinned ? `<h3 class="micro">Pinned</h3>${pinned}` : ""}${blockers ? `<h3 class="micro">Blockers and waiting tasks</h3>${blockers}` : ""}${handoffs ? `<h3 class="micro">Open handoffs</h3>${handoffs}` : ""}` : "<p>Pin materials, tasks or captures to keep them here. Blocked tasks and open handoffs appear automatically.</p>"}${r.tabs.suspended ? `<small>${r.tabs.suspended} suspended tab${r.tabs.suspended === 1 ? "" : "s"} reload when opened.</small>` : ""}`);
 }
 async function togglePin(type, id) {
   const r = await execute("resume.get", { workspaceId: ws().id }, true);
@@ -2605,7 +2759,24 @@ async function loadDisplayPanel() {
   if (!panel) return;
   const [d, r] = await Promise.all([execute("display.status", {}, true), execute("resources.status", {}, true)]);
   if (!$("display-panel")) return;
-  panel.innerHTML = `<div class="settings-row"><div><strong>${d.windowVisible ? "Window shown" : "Running headless"}</strong><small>${d.launchedHeadless ? "Started without a window. Closing this window keeps Weft running in the background; open pages then reload offscreen." : "Started with a window."}</small><small>Profile ${esc(d.profile.fingerprint)} · ${d.tabs.total} tabs (${d.tabs.suspended} suspended)</small></div><div class="inline-actions">${action("display-hide", "Run in background", "")}${action("quit-weft", "Quit Weft", "", "", "secondary danger")}</div></div><div class="settings-row"><div><strong>Resources</strong><small>${r.agentCommands.running} agent command${r.agentCommands.running === 1 ? "" : "s"} running (limit ${r.limits.maxAgentCommands}) · captures ${r.captures.running} running, ${r.captures.queued} waiting · idle tabs suspend after ${r.limits.idleSuspendMinutes ? r.limits.idleSuspendMinutes + " min" : "never"}${r.memory?.budgetMb ? ` · page memory ${r.memory.rendererMemoryMb} MB of ${r.memory.budgetMb} MB` : ""}${r.memory?.system && r.memory.system.level !== "normal" ? ` · system memory pressure: ${esc(r.memory.system.level)}` : ""}</small></div>${action("manage-resources", "Limits & queue", "")}</div>`;
+  setHTML(panel.innerHTML = `<div class="settings-row"><div><strong>${d.windowVisible ? "Window shown" : "Running headless"}</strong><small>${d.launchedHeadless ? "Started without a window. Closing this window keeps Weft running in the background; open pages then reload offscreen." : "Started with a window."}</small><small>Profile ${esc(d.profile.fingerprint)} · ${d.tabs.total} tabs (${d.tabs.suspended} suspended)</small></div><div class="inline-actions">${action("display-hide", "Run in background", "")}${action("quit-weft", "Quit Weft", "", "", "secondary danger")}</div></div><div class="settings-row"><div><strong>Resources</strong><small>${r.agentCommands.running} agent command${r.agentCommands.running === 1 ? "" : "s"} running (limit ${r.limits.maxAgentCommands}) · captures ${r.captures.running} running, ${r.captures.queued} waiting · idle tabs suspend after ${r.limits.idleSuspendMinutes ? r.limits.idleSuspendMinutes + " min" : "never"}${r.memory?.budgetMb ? ` · page memory ${r.memory.rendererMemoryMb} MB of ${r.memory.budgetMb} MB` : ""}${r.memory?.system && r.memory.system.level !== "normal" ? ` · system memory pressure: ${esc(r.memory.system.level)}` : ""}</small></div>${action("manage-resources", "Limits & queue", "")}</div>`);
+}
+/** Multi-agent input serialization (#9): who may send page input, and how long requests wait for a busy tab. */
+function automationSettings() {
+  const current = { inputConcurrency: "shared", queueLimit: 0, queueTimeoutMs: 5000, ...(state.settings.automation || {}) };
+  formDialog("Agent input",
+    `<p>Weft sends page input to a tab one action at a time. These settings decide what happens when several agents want the same tab. You can always take over a tab, and real input from you stops agent input at once.</p>`
+      + choice("Which agents may act on a tab", "inputConcurrency", [["shared", "Shared: any permitted agent may act on a tab that is available to agents"], ["exclusive", "Exclusive: an agent must claim the tab first; one agent holds it at a time"]], current.inputConcurrency)
+      + `<label>Agent actions that may wait for a busy tab (0–20; 0 refuses at once)<input name="queueLimit" type="number" min="0" max="20" step="1" value="${Number(current.queueLimit)}" required></label>`
+      + `<label>Longest wait for a busy tab, in seconds (0–60)<input name="queueSeconds" type="number" min="0" max="60" step="0.1" value="${Math.round(current.queueTimeoutMs / 100) / 10}" required></label>`
+      + `<p class="muted">A waiting action is refused with “resource busy” when the wait runs out, so the agent can retry later. Changes apply to the next action.</p>`,
+    async (values) => {
+      const queueLimit = Number(values.queueLimit), queueTimeoutMs = Math.round(Number(values.queueSeconds) * 1000);
+      if (!Number.isInteger(queueLimit) || queueLimit < 0 || queueLimit > 20) throw new Error("Enter a whole number of waiting actions from 0 to 20.");
+      if (!Number.isFinite(queueTimeoutMs) || queueTimeoutMs < 0 || queueTimeoutMs > 60000) throw new Error("Enter a wait from 0 to 60 seconds.");
+      await execute("settings.update", { automation: { inputConcurrency: values.inputConcurrency, queueLimit, queueTimeoutMs } }, true);
+      toast(`Agent input: ${values.inputConcurrency === "exclusive" ? "exclusive, claim first" : "shared"}; up to ${queueLimit} waiting for ${queueTimeoutMs / 1000} s.`);
+    }, { save: "Save agent input settings", trusted: "Agent access" });
 }
 async function manageResources() {
   const r = await execute("resources.status", {}, true);
@@ -2727,8 +2898,20 @@ function palette() {
         )
         .join("");
     }
-    if ($("palette-results"))
+    if ($("palette-results")) {
       draw(html || '<p class="muted">No matches found.</p>');
+      if (q) announce(`${$("palette-results").querySelectorAll("button").length} results.`);
+    }
+  };
+  // Arrow keys move between results; Enter in the search field opens the first one.
+  $("palette-query").onkeydown = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); $("palette-results").querySelector("button")?.focus(); }
+    if (e.key === "Enter") { e.preventDefault(); $("palette-results").querySelector("button")?.click(); }
+  };
+  $("palette-results").onkeydown = (e) => {
+    const items = [...$("palette-results").querySelectorAll("button")];
+    const index = items.indexOf(document.activeElement);
+    if (["ArrowDown", "ArrowUp"].includes(e.key) && index >= 0) { e.preventDefault(); (items[index + (e.key === "ArrowDown" ? 1 : -1)] || $("palette-query")).focus(); }
   };
   $("palette-query").oninput();
 }
@@ -2759,6 +2942,7 @@ async function act(button) {
     kind = button.dataset.kind;
   if (button.closest?.(".palette-results")) closeDialog();
   if (await knowledge.handle(a, button)) return;
+  if (await lists.handle(a, button)) return;
   switch (a) {
     case "manage-clients":
       await manageClients();
@@ -2825,7 +3009,7 @@ async function act(button) {
       formDialog("Allow another attempt",
         `<div class="notice">The earlier attempt may already have charged. Allowing another attempt risks paying twice. The agent still needs your approval of the same terms before it can submit again.</div>${area("Why (optional)", "note", "")}`,
         async (v) => { const result = await execute("payments.retry", { id, confirmDuplicateRisk: true, ...(v.note ? { note: v.note } : {}) }); toast(result.notice); },
-        { save: "I accept the risk of paying twice" });
+        { save: "I accept the risk of paying twice", trusted: "Payments" });
       break;
     case "fill-credential": {
       if (!active()) throw new Error("Open the sign-in page in a tab first.");
@@ -2838,7 +3022,7 @@ async function act(button) {
       if (!open.length) throw new Error("Create the task first; grants are bound to one open task.");
       formDialog("Allow a task to use this sign-in",
         `<p>The agent working on this task may fill this sign-in without asking each time, only on its listed sites, until the uses run out, the time ends or the task closes.</p>${choice("Task", "taskId", open.map((t) => [t.id, t.title]), open[0].id)}${field("Number of uses", "uses", "1", "number", true)}${field("Minutes", "minutes", "60", "number", true)}`,
-        async (v) => { await execute("credentials.grantTask", { id, taskId: v.taskId, uses: Number(v.uses), minutes: Number(v.minutes) }); toast("Task grant created."); });
+        async (v) => { await execute("credentials.grantTask", { id, taskId: v.taskId, uses: Number(v.uses), minutes: Number(v.minutes) }); toast("Task grant created."); }, { trusted: "Sign-in grant" });
       break;
     }
     case "revoke-credential":
@@ -2914,7 +3098,7 @@ async function act(button) {
           "Proceed to a known harmful destination?",
           `<p>${esc(active().blocked.url)} is listed as ${esc(active().blocked.category)} by your security intelligence. Continuing allows only this address in this tab, for this visit.</p><label><input type="checkbox" name="acknowledge" required> I understand the risk and want to continue</label>`,
           async () => { await execute("page.allowOnce", { tabId: active().id, acknowledgeSecurityRisk: true }); },
-          { save: "Proceed for this visit" },
+          { save: "Proceed for this visit", trusted: "Security stop" },
         );
       } else await execute("page.allowOnce", { tabId: active().id });
       break;
@@ -3160,11 +3344,26 @@ async function act(button) {
       restoreNotices = [];
       renderSafetyNotices(null);
       break;
+    case "focus-pane-to":
+      focusedPane = button.dataset.pane === "secondary" ? "secondary" : "primary";
+      saveResume({ split: { tabId: splitTabId, focusedPane } });
+      renderShell();
+      renderContent();
+      await focusPage();
+      break;
+    case "manage-lists":
+      if ($("dialog").open) closeDialog();
+      navigateSection("lists");
+      break;
+    case "automation-settings":
+      automationSettings();
+      break;
     case "focus-pane":
       focusedPane = focusedPane === "primary" ? "secondary" : "primary";
       saveResume({ split: { tabId: splitTabId, focusedPane } });
       closeDialog();
       renderShell();
+      renderContent();
       layout();
       toast(`Focused pane: ${focusedPane === "secondary" ? "right" : "left"}.`);
       break;
@@ -3295,7 +3494,7 @@ async function act(button) {
           await execute("tasks.continue", { id, note: "Granted a saved sign-in" });
           await taskDetail(id);
         },
-        { save: "Grant and continue" },
+        { save: "Grant and continue", trusted: "Sign-in grant" },
       );
       break;
     case "task-parameters":
@@ -3391,7 +3590,7 @@ async function act(button) {
       closeDialog();
       break;
     case "ask":
-      openAgent();
+      openAgent(true);
       break;
     case "new-chat":
       if (chatBusy)
@@ -3406,7 +3605,7 @@ async function act(button) {
       break;
     case "open-chat":
       conversationId = id;
-      openAgent();
+      openAgent(true);
       break;
     case "chat-prompt":
       $("chat-input").value = button.dataset.text;
@@ -3596,7 +3795,7 @@ document.addEventListener("change", (event) => {
   if (["activity-type", "activity-outcome"].includes(event.target.id)) {
     activityState[event.target.id === "activity-type" ? "types" : "outcome"] = event.target.value;
     activityState.loaded = 50;
-    void loadActivity();
+    void loadActivity().then(() => announce(`${activityState.items.length} activity entr${activityState.items.length === 1 ? "y" : "ies"} shown.`));
   }
   if (event.target.id === "auto-updates")
     void execute("update.configure", { automaticChecks: event.target.checked }, true)
@@ -3654,10 +3853,11 @@ $("new-tab").onclick = () =>
   void act({ dataset: { action: "new-tab" } }).catch(() => {});
 $("search-button").onclick = palette;
 $("command-button").onclick = openCommands;
-$("agent-toggle").onclick = () => (agentOpen ? closeAgent() : openAgent());
+$("agent-toggle").onclick = () => (agentOpen ? closeAgent() : openAgent(true));
 $("settings-button").onclick = () => navigateSection("settings");
 $("downloads-button").onclick = () => navigateSection("downloads");
 $("privacy-button").onclick = () => navigateSection("privacy");
+$("focus-page").onclick = () => void focusPage();
 $("site-controls").onclick = () => {
   void siteProtection().catch((e) => toast(errorMessage(e)));
 };
@@ -3678,8 +3878,9 @@ $("toggle-sidebar").onclick = () => {
   layout();
 };
 $("split-view").onclick = () => {
-  const other = visibleTabs().find((t) => t.id !== active()?.id);
-  if (!other) return toast("Open a second tab to use split view.");
+  // Only a second live page can share the view: blank, blocked and suspended tabs are skipped.
+  const other = visibleTabs().find((t) => t.id !== active()?.id && t.url !== "about:blank" && !t.blocked && !t.suspended);
+  if (!splitTabId && !other) return toast("Open a second web page to use split view.");
   splitTabId = splitTabId ? null : other.id;
   focusedPane = "primary";
   saveResume({ split: { tabId: splitTabId, focusedPane } });
@@ -3704,8 +3905,44 @@ $("run").onclick = async () => {
     $("status").textContent = errorMessage(e);
   }
 };
+// F6 regions (#31): address bar, the live page (a native view), the agent panel and the sidebar.
+function chromeRegions() {
+  const pageShown = !$("focus-page").hidden;
+  return [
+    { name: "address", focus: () => { $("address").focus(); $("address").select(); }, owns: (el) => el?.closest?.("#navigation") },
+    ...(pageShown ? [{ name: "page", focus: () => void focusPage(), owns: () => false }] : []),
+    ...(agentOpen ? [{ name: "agent", focus: () => $("chat-input")?.focus(), owns: (el) => el?.closest?.("#agent-panel") }] : []),
+    { name: "sidebar", focus: () => (document.querySelector("#tabs .tab.active button, #sections .section-link.active, #sections .section-link") || $("search-button")).focus(), owns: (el) => el?.closest?.(".workspace-sidebar, .workspace-rail") },
+    { name: "content", focus: () => focusView($("content")), owns: (el) => el?.closest?.("#content, .topbar, #safety-notices") },
+  ];
+}
+function cycleRegion(step, from = null) {
+  const regions = chromeRegions();
+  let index = from ? regions.findIndex((r) => r.name === from) : regions.findIndex((r) => r.owns(document.activeElement));
+  if (index < 0) index = step > 0 ? -1 : 0;
+  regions[(index + step + regions.length) % regions.length].focus();
+}
+// Browser-owned keys pressed inside a page arrive here: the page can never keep keyboard focus.
+window.weft.onChrome?.((shortcut) => {
+  if (lockScreenOpen) return;
+  if ($("dialog").open) return;
+  if (shortcut === "palette") return palette();
+  if (shortcut === "chrome-back") return cycleRegion(-1, "page");
+  if (shortcut === "chrome") return cycleRegion(1, "page");
+  $("address").focus();
+  $("address").select();
+});
 document.addEventListener("keydown", (e) => {
   if ($("dialog").open) return;
+  if (e.key === "F6" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    return cycleRegion(e.shiftKey ? -1 : 1);
+  }
+  // Escape leaves the agent panel and returns to the control that opened it.
+  if (e.key === "Escape" && agentOpen && document.activeElement?.closest("#agent-panel")) {
+    e.preventDefault();
+    return closeAgent();
+  }
   if ((e.ctrlKey || e.metaKey) && !e.altKey) {
     const key = e.key.toLowerCase();
     if (["k", "l", "t", "w", "f", "j"].includes(key) || (key === "a" && e.shiftKey)) e.preventDefault();
@@ -3733,7 +3970,7 @@ try {
   }
   selectCommand();
   window.weft.onTurnFrame?.(onTurnFrame);
-  encryption = await window.weft.execute("encryption.status", {});
+  encryption = await weftExecute("encryption.status", {});
   if (encryption.locked) await showLockScreen();
   await loadModels();
   await refresh(true);

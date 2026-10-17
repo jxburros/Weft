@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('weft', {
     ipcRenderer.on('weft:turn', listener);
     return () => ipcRenderer.off('weft:turn', listener);
   },
+  focusPage: () => ipcRenderer.invoke('weft:focusPage'),
+  onChrome: callback => {
+    const listener = (_event, shortcut) => callback(String(shortcut));
+    ipcRenderer.on('weft:chrome', listener);
+    return () => ipcRenderer.off('weft:chrome', listener);
+  },
   executeOutcome: (name, args = {}) => ipcRenderer.invoke('weft:execute', name, args),
   execute: async (name, args = {}) => {
     const outcome = await ipcRenderer.invoke('weft:execute', name, args);
