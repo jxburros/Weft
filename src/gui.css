@@ -1,0 +1,30 @@
+:root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #101827; color: #e4ebf6; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+button, input, select, textarea { font: inherit; color: inherit; background: #19283f; border: 1px solid #35465e; border-radius: 6px; }
+button { cursor: pointer; padding: 7px 11px; }
+button:hover { background: #30496c; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid #6bcbb8; outline-offset: 2px; }
+header { height: 112px; padding: 10px 14px; border-bottom: 1px solid #35465e; }
+.tabbar { height: 40px; display: flex; align-items: center; gap: 12px; }
+strong { letter-spacing: 3px; color: #83e2c9; }
+#tabs { display: flex; flex: 1; gap: 6px; overflow-x: auto; }
+.tab { display: flex; min-width: 100px; max-width: 210px; border-radius: 6px; }
+.tab button { border-radius: 0; background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab button:first-child { flex: 1; min-width: 0; }
+.tab.active { background: #30496c; }
+#navigation { display: flex; gap: 7px; margin-top: 8px; }
+#address { flex: 1; padding: 7px 12px; min-width: 80px; }
+main { position: absolute; top: 112px; right: 360px; left: 0; bottom: 0; display: grid; place-items: center; color: #8d9db4; }
+aside { position: absolute; top: 112px; right: 0; bottom: 0; width: 360px; padding: 20px; border-left: 1px solid #35465e; overflow-y: auto; }
+h1 { font-size: 21px; margin: 0 0 8px; }
+h2 { font-size: 15px; }
+.muted, #description { color: #a3b4cb; line-height: 1.5; }
+label { display: block; margin: 18px 0 7px; font-weight: 600; }
+select, textarea { width: 100%; padding: 9px; }
+textarea, pre { font: 12px/1.5 ui-monospace, monospace; }
+textarea { resize: vertical; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow-y: auto; }
+#run { margin-top: 12px; background: #286a60; width: 100%; }
+#status { color: #83e2c9; overflow-wrap: anywhere; }
+a { color: #83e2c9; }
