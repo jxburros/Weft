@@ -82,7 +82,7 @@ if (process.argv.includes("--a11y-child")) {
     window.webContents.focus();
     await run(readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8"));
     await run(`(${installChecks.toString()})()`);
-    const report = { views: [], keyboard: [], restoration: [], zoom: [], motion: null, liveRegions: null, boundary: null };
+    const report = { views: [], keyboard: [], restoration: [], zoom: [], motion: null, liveRegions: null, boundary: null, ownership: null, split: null };
     const failures = [];
     const audit = async (label, theme) => {
       await settle();
@@ -285,6 +285,37 @@ if (process.argv.includes("--a11y-child")) {
     if (!leftWithF6) failures.push("boundary: F6 inside the page did not return focus to Weft");
     if (!enteredWithButton) failures.push("boundary: the Move focus into the page control did not focus the page");
     if (pageSaw.some((key) => ["F6", "l", "L"].includes(key))) failures.push(`boundary: the page received browser-owned keys ${pageSaw.join(",")}`);
+
+    // ---- Ownership, handoff transition and split view (#36): stated in text, framed, and focusable per pane.
+    await execute("tabs.setControlMode", { tabId: live.id, mode: "agent-drives", agent: "research-agent" });
+    await until('document.getElementById("page-owner").textContent.includes("Agent drives") && document.querySelector(".pane-frame.agent") !== null', "agent ownership shown");
+    const handoff = await run('document.querySelector(".pane-frame")?.classList.contains("handoff")');
+    await until('document.getElementById("announcer").textContent.includes("Agent drives")', "ownership change announced");
+    await execute("tabs.takeover", { tabId: live.id });
+    await until('document.getElementById("page-owner").textContent.includes("You drive") && document.querySelector(".pane-frame.agent") === null', "takeover shown");
+    report.ownership = { handoffTransition: handoff, chip: await run('document.getElementById("page-owner").textContent'), statusBar: await run('document.getElementById("ownership").textContent') };
+    if (!handoff) failures.push("ownership: the page frame did not show the handoff transition");
+    const second = await execute("tabs.new", { url: `${origin}/second` });
+    await until(`(async () => (await window.weft.execute("tabs.list", {})).some((t) => t.id === ${second.id} && !t.loading))()`, "second page");
+    await act("activate-tab", { id: String(live.id) });
+    await until('document.getElementById("breadcrumb-section").textContent === "Live page"');
+    await run('document.getElementById("split-view").click()');
+    await until('document.querySelectorAll(".pane-header").length === 2', "split view panes");
+    await audit("split view", "light");
+    const panes = await run('[...document.querySelectorAll(".pane-header")].map((h) => ({ focused: h.classList.contains("focused"), text: h.textContent }))');
+    await run('document.querySelector(\'.pane-header [data-pane="secondary"]\').focus()');
+    await press("Enter");
+    await until('document.querySelector(".pane-header.focused")?.dataset.pane === "secondary" && document.querySelector(".pane-frame.focused")?.dataset.pane === "secondary"', "secondary pane focused");
+    const secondary = window.contentView.children.filter((view) => view.webContents && view.webContents !== window.webContents).sort((a, b) => a.getBounds().x - b.getBounds().x).at(-1);
+    for (let i = 0; i < 50 && !secondary.webContents.isFocused(); i++) await pause(30);
+    report.split = { panes, secondaryReceivedFocus: secondary.webContents.isFocused(), statusBar: await run('document.getElementById("ownership").textContent') };
+    if (!report.split.secondaryReceivedFocus) failures.push("split view: choosing the right pane did not move keyboard focus into it");
+    if (!panes.some((p) => p.focused && p.text.includes("Focused"))) failures.push("split view: the focused pane is not stated in text");
+    await run('document.getElementById("split-view").click()');
+    await until('document.querySelectorAll(".pane-header").length === 0', "split view closed");
+    // Hand keyboard focus back to Weft and let the last announcement finish before measuring idle silence.
+    window.webContents.focus();
+    await pause(500);
 
     // ---- Live regions: one status region and one alert region announce meaningful changes; polling is silent.
     const regions = await run('[...document.querySelectorAll("[aria-live]:not([aria-live=off]), [role=status], [role=alert], [role=log]:not([aria-live=off])")].map((el) => el.id || el.className)');

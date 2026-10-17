@@ -3874,8 +3874,9 @@ $("toggle-sidebar").onclick = () => {
   layout();
 };
 $("split-view").onclick = () => {
-  const other = visibleTabs().find((t) => t.id !== active()?.id);
-  if (!other) return toast("Open a second tab to use split view.");
+  // Only a second live page can share the view: blank, blocked and suspended tabs are skipped.
+  const other = visibleTabs().find((t) => t.id !== active()?.id && t.url !== "about:blank" && !t.blocked && !t.suspended);
+  if (!splitTabId && !other) return toast("Open a second web page to use split view.");
   splitTabId = splitTabId ? null : other.id;
   focusedPane = "primary";
   saveResume({ split: { tabId: splitTabId, focusedPane } });
