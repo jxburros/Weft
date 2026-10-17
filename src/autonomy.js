@@ -51,6 +51,11 @@ add('administration', 'update.check update.install update.rollback update.config
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Durable task runtime and workflows (#8, #58, #10): steering one's own task is local work; every step is gated separately as
+// the task identity. Rebinding identity, review decisions, outcome determinations, duplicate-risk retries and recording are human-only.
+add('local_write', 'tasks.start tasks.pause tasks.continue tasks.cancel tasks.redirect workflows.run');
+add('local_read', 'workflows.validate');
+add('administration', 'tasks.reassign tasks.review tasks.reconcile tasks.retryStep workflows.recordStart workflows.recordStop');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { PHASES } from './task-phases.js';
+import { taskPlan, workflowParameter, workflowStep, credentialRef } from './task-commands.js';
 
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
@@ -14,9 +16,10 @@ export const finishReason = z.enum(['stop', 'length', 'content_filter', 'other',
 export const recordShapes = {
   materials: { title, localOnly: z.boolean().default(false), kind: z.enum(['note', 'website', 'file', 'linked-file', 'service']).default('note'), content: text.default(''), url: httpUrl.nullable().optional(), filename: z.string().max(255).optional(), mimeType: z.string().max(128).optional(), fileBase64: z.string().max(14000000).optional(), note: text.optional(), tags: tags.default([]), pinned: z.boolean().default(false) },
   context: { title, localOnly: z.boolean().default(false), content: text.default(''), category: z.enum(['confirmed', 'findings', 'questions', 'instructions', 'decisions']).default('findings'), sources: z.array(z.string().max(16384)).max(100).default([]), tags: tags.default([]) },
-  tasks: { title, objective: text.default(''), status: z.enum(['queued', 'running', 'waiting', 'paused', 'completed', 'failed', 'cancelled']).default('queued'), assignee: z.string().max(200).default('human'), progress: z.number().min(0).max(100).default(0), blocker: text.default(''), checkpoint: text.default(''), nextStep: text.default(''), evidence: references.default([]), materialIds: references.default([]), tabIds: z.array(z.number().int().positive()).max(100).default([]), outputs: references.default([]) },
+  tasks: { title, objective: text.default(''), status: z.enum(PHASES).default('queued'), assignee: z.string().max(200).default('human'), progress: z.number().min(0).max(100).default(0), blocker: text.default(''), checkpoint: text.default(''), nextStep: text.default(''), evidence: references.default([]), materialIds: references.default([]), tabIds: z.array(z.number().int().positive()).max(100).default([]), outputs: references.default([]),
+    plan: taskPlan.default([]).describe('Executable steps; run with tasks.start. Creating or saving a plan never runs it.'), modelId: id.nullable().optional().describe('Default model connection for model steps.') },
   conversations: { title: title.default('New conversation') },
-  workflows: { title, enabled: z.boolean().default(true), description: text.default(''), parameters: z.array(z.string().max(200)).max(100).default([]), steps: z.array(z.strictObject({ title, instruction: text, reviewRequired: z.boolean().default(true) })).max(100).default([]), allowedSites: z.array(z.string().max(255)).max(100).default([]), materialIds: references.default([]), expectedOutputs: text.default('') },
+  workflows: { title, enabled: z.boolean().default(true), description: text.default(''), parameters: z.array(workflowParameter).max(100).default([]), steps: z.array(workflowStep).max(100).default([]), credentialRefs: z.array(credentialRef).max(50).default([]).describe('Opaque credential broker references; never secret values.'), allowedSites: z.array(z.string().max(255)).max(100).default([]), materialIds: references.default([]), expectedOutputs: text.default('') },
   siteRules: { enabled: z.boolean().default(true), hostname: z.string().trim().min(1).max(253), includeSubdomains: z.boolean().default(true), path: z.string().max(2048).default('/'), behavior: z.enum(['block', 'warn']).default('block'), mode: z.enum(['navigation', 'connection']).default('navigation'), reason: z.string().max(240).default('Personal preference'), note: text.default(''), scope: z.enum(['workspace', 'global']).default('workspace'), evidence: z.array(httpUrl).max(20).default([]), reviewBy: reviewDate.nullable().optional() },
 };
 export const modelShape = { provider: z.string().max(100).optional(), endpoint: httpUrl.optional(), model: z.string().max(200).optional() };

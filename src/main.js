@@ -134,6 +134,9 @@ app.whenReady().then(async () => {
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, onEvent: event => events.emit('event', event) });
+  // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain.
+  await dispatch.tasks.init();
+  dispatch.tasks.start();
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
@@ -170,6 +173,7 @@ app.on('before-quit', event => {
   providers?.close();
   relay.close();
   plugins?.close();
+  dispatch?.tasks?.close();
   const cleanup = browser?.close();
   browser = null;
   workspace?.close();

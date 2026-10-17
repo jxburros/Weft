@@ -28,6 +28,7 @@ import { ThreatIntel } from './threat-intel.js';
 import { DownloadSafety, NEVER_LAUNCH, applyOriginMetadata, fileCategory, hashFile } from './download-safety.js';
 import { ruleSource } from './site-rules.js';
 import { sanitizeUrl } from './workspace.js';
+import { RECORDING_WORLD, recordingScript } from './recording-script.js';
 
 const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
@@ -411,6 +412,7 @@ export class Browser {
       // An exact-visit exception ends as soon as the tab commits any other destination.
       if (tab.allowUrl !== this.overrideKey(contents.getURL())) { tab.allowUrl = null; tab.allowSecurity = false; }
       this.layout(); this.persist();
+      try { this.onNavigate?.({ tabId: tab.id, url: contents.getURL() }); } catch { /* recording is best effort */ }
     });
     contents.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame === false) return; tab.version++; this.stateBoundary(tab, 'in-page navigation'); this.persist(); });
     contents.on('did-start-navigation', details => {
@@ -1176,6 +1178,29 @@ export class Browser {
       navigationVersion: version, frame, viewport: { width: live.width, height: live.height }, devicePixelRatio: live.devicePixelRatio, zoom: contents.getZoomFactor?.() ?? 1,
       scroll: { x: live.scrollX, y: live.scrollY }, document: { width: live.documentWidth, height: live.documentHeight }, clip, image: pngSize(data), scale, cropped,
       redaction: { method: 'masked-sensitive-form-fields', applied: !!mask }, contentTrust: 'untrusted', limitations } };
+  }
+
+  /**
+   * Workflow recording (#10): report a person's trusted clicks and committed field changes in one tab
+   * from an isolated world. Values are never read. Returns a stop function, or null when unsupported.
+   */
+  startRecordingCapture(tabId, onEvent) {
+    const contents = this.tab(tabId).view?.webContents;
+    if (typeof contents?.executeJavaScriptInIsolatedWorld !== 'function') return null;
+    const nonce = randomUUID();
+    const prefix = `weft-record:${nonce}:`;
+    const inject = () => { if (!contents.isDestroyed?.()) contents.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: recordingScript(nonce) }]).catch(() => {}); };
+    const onConsole = (event, _level, legacyMessage) => {
+      const text = typeof event?.message === 'string' ? event.message : legacyMessage;
+      if (typeof text !== 'string' || !text.startsWith(prefix) || text.length > 4096) return;
+      try { onEvent(JSON.parse(text.slice(prefix.length))); } catch { /* malformed reports are ignored */ }
+    };
+    contents.on('console-message', onConsole);
+    contents.on('dom-ready', inject);
+    inject();
+    const stop = () => { contents.removeListener('console-message', onConsole); contents.removeListener('dom-ready', inject); };
+    stop.flush = () => new Promise(resolve => setTimeout(resolve, 50));
+    return stop;
   }
 
   checkControl(tab, args, context, name) {
