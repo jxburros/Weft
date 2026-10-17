@@ -1,4 +1,7 @@
 import electron from 'electron';
+import { AutomationAdmission } from './admission.js';
+
+const mutatingCommands = new Set(['page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.zoom', 'page.allowOnce', 'tabs.close', 'tabs.move', 'tabs.pin']);
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, openSync, closeSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -18,8 +21,9 @@ function bounded(promise, timeout = 8000) {
 }
 
 export class Browser {
-  constructor({ window, session, workspaceService, electronApi = electron } = {}) {
+  constructor({ window, session, workspaceService, admission = new AutomationAdmission(), electronApi = electron } = {}) {
     this.electron = electronApi;
+    this.admission = admission;
     this.window = window;
     this.workspaceService = workspaceService;
     this.sessions = new Map();
@@ -135,7 +139,7 @@ export class Browser {
     const contents = tab.view.webContents;
     const rule = this.workspaceService?.matchSiteRule(contents.getURL() || tab.url, tab.workspaceId);
     return { id: tab.id, workspaceId: tab.workspaceId, url: tab.blocked?.url || contents.getURL() || tab.url || 'about:blank',
-      title: contents.getTitle() || tab.title || 'New tab', active: tab.id === this.activeId,
+      title: String(contents.getTitle() || tab.title || 'New tab').slice(0, 1000), active: tab.id === this.activeId,
       pinned: !!tab.pinned, controller: tab.controller ?? 'available', version: tab.version ?? 1,
       loading: contents.isLoading?.() ?? false, canGoBack: contents.navigationHistory?.canGoBack() ?? false,
       canGoForward: contents.navigationHistory?.canGoForward() ?? false, zoom: contents.getZoomFactor?.() ?? 1,
@@ -202,7 +206,7 @@ export class Browser {
       if (tab.controller !== 'human' && tab.controller !== 'available') {
         // Real native input is a human takeover at the next input boundary.
         // Already executed page scripts cannot be rolled back.
-        tab.controller = 'human'; tab.version++; contents.stop(); this.persist();
+        tab.controller = 'human'; tab.controlEpoch = (tab.controlEpoch ?? 0) + 1; tab.version++; contents.stop(); this.persist();
       }
     };
     contents.on('before-input-event', humanInput);
@@ -211,7 +215,7 @@ export class Browser {
     contents.on('did-navigate-in-page', () => { tab.version++; this.persist(); });
     contents.on('page-title-updated', () => this.persist());
     contents.on('did-finish-load', () => {
-      this.workspaceService?.recordVisit({ workspaceId: tab.workspaceId, url: contents.getURL(), title: contents.getTitle(), tabId: tab.id });
+      this.workspaceService?.recordVisit({ workspaceId: tab.workspaceId, url: contents.getURL(), title: contents.getTitle().slice(0, 1000), tabId: tab.id });
       this.persist();
     });
     contents.on('did-fail-load', (_event, code, description, failedUrl, isMainFrame) => {
@@ -301,25 +305,48 @@ export class Browser {
   }
 
   async execute(name, args = {}, context = { actor: 'human' }) {
+    this.admission.assertAutomationAdmitted(context.actor, name);
+    const human = ['human', 'admin'].includes(context.actor);
+    const tab = mutatingCommands.has(name) ? this.tab(args.tabId) : null;
+    if (tab?.inFlight && !human) throw Object.assign(new Error('Another action is still in flight on this tab'), { code: 'tab_busy' });
+    if (tab?.inFlight && human) {
+      tab.controlEpoch = (tab.controlEpoch ?? 0) + 1;
+      tab.controller = 'human';
+      tab.view.webContents.stop();
+    }
+    const token = tab ? Symbol(name) : null;
+    const epoch = tab?.controlEpoch ?? 0;
+    if (tab) tab.inFlight = token;
+    try {
+      const result = await this.executeAdmitted(name, args, context);
+      if (tab && !human && epoch !== (tab.controlEpoch ?? 0)) throw Object.assign(new Error('Tab control changed during the action; inspect current state. Already submitted effects cannot be undone.'), { code: 'action_interrupted' });
+      if (tab?.blocked && ['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload'].includes(name)) throw Object.assign(new Error(tab.error || 'Blocked by site rule'), { code: 'site_blocked' });
+      return result;
+    } finally { if (tab?.inFlight === token) tab.inFlight = null; }
+  }
+
+  async executeAdmitted(name, args = {}, context = { actor: 'human' }) {
     const human = ['human', 'admin'].includes(context.actor);
     const workspaceId = args.workspaceId ?? this.workspaceId;
     if (this.workspaceService && !this.workspaceService.snapshot().workspaces.some(workspace => workspace.id === workspaceId)) throw new Error('Workspace not found');
     const session = () => this.sessions.get(workspaceId)?.session ?? this.sessionFor(workspaceId);
     if (!human && ['cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear'].includes(name)) throw new Error('Storage administration requires the trusted browser interface');
     if (name !== 'tabs.move' && args.tabId != null && args.workspaceId != null && this.tab(args.tabId).workspaceId !== args.workspaceId) throw new Error('Tab belongs to a different workspace');
-    const mutating = ['page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.zoom', 'page.allowOnce', 'tabs.close', 'tabs.move', 'tabs.pin'];
-    if (mutating.includes(name)) this.checkControl(this.tab(args.tabId), args, context);
+    if (!human && name === 'page.allowOnce') throw new Error('Site exceptions require the trusted browser interface');
+    if (mutatingCommands.has(name)) this.checkControl(this.tab(args.tabId), args, context);
 
     switch (name) {
       case 'browser.emergencyStop': {
         if (!human) throw new Error('Emergency stop requires the trusted browser interface');
-        for (const tab of this.tabs.values()) { tab.controller = 'human'; tab.version++; tab.view.webContents.stop(); }
+        this.admission.stop();
+        for (const tab of this.tabs.values()) { tab.controlEpoch = (tab.controlEpoch ?? 0) + 1; tab.controller = 'human'; tab.version++; tab.view.webContents.stop(); }
         this.downloadGrants.clear();
         for (const { item } of this.downloads.values()) item?.cancel();
         for (const task of this.workspaceService?.snapshot().tasks ?? []) if (task.status === 'running') await this.workspaceService.execute('tasks.transition', { id: task.id, status: 'paused', cause: 'Human emergency stop' }, context);
         this.persist();
-        return { stopped: true, tabs: this.tabs.size, notice: 'Future agent input requires a human handoff. Already executed page actions cannot be undone.' };
+        return { stopped: true, automation: this.admission.status, tabs: this.tabs.size, notice: 'Future agent input requires a human handoff. Already executed page actions cannot be undone.' };
       }
+      case 'browser.resumeAutomation': return { automation: this.admission.resume(context.actor), notice: 'Automation resumed. Existing human tab leases remain in place.' };
       case 'downloads.approve': {
         if (!human) throw new Error('Download approval requires the trusted browser interface');
         const download = this.downloads.get(args.downloadId);
@@ -332,7 +359,7 @@ export class Browser {
         return { approved: args.downloadId };
       }
       case 'browser.info':
-        return { name: 'Weft', electron: process.versions.electron, chromium: process.versions.chrome, node: process.versions.node };
+        return { name: 'Weft', automation: this.admission.status, electron: process.versions.electron, chromium: process.versions.chrome, node: process.versions.node };
       case 'tabs.list': return [...this.tabs.values()].filter(tab => tab.workspaceId === workspaceId).map(tab => this.describe(tab));
       case 'tabs.new': return this.newTab(args.url, workspaceId);
       case 'tabs.activate': return this.activate(args.tabId);
@@ -350,15 +377,17 @@ export class Browser {
         if (args.expectedVersion != null && args.expectedVersion !== tab.version) throw new Error('Stale tab version; inspect current state');
         if (!human && tab.controller !== 'available' && tab.controller !== context.actor) throw new Error('Tab control is already held');
         tab.controller = human ? (args.controller ?? 'human') : context.actor;
+        tab.controlEpoch = (tab.controlEpoch ?? 0) + 1;
         tab.version++; this.persist(); return this.describe(tab);
       }
       case 'tabs.takeover': {
         if (!human) throw new Error('Human takeover requires the trusted browser interface');
-        const tab = this.tab(args.tabId); tab.controller = 'human'; tab.version++; tab.view.webContents.stop(); this.persist(); return this.describe(tab);
+        const tab = this.tab(args.tabId); tab.controlEpoch = (tab.controlEpoch ?? 0) + 1; tab.controller = 'human'; tab.version++; tab.view.webContents.stop(); this.persist(); return this.describe(tab);
       }
       case 'tabs.release': {
         const tab = this.tab(args.tabId);
         if (!human && tab.controller !== context.actor) throw new Error('Tab control is not held by this actor');
+        tab.controlEpoch = (tab.controlEpoch ?? 0) + 1;
         tab.controller = 'available'; tab.version++; this.persist(); return this.describe(tab);
       }
       case 'storage.info': return { workspaceId, isolated: true, persistent: true, coverage: {
@@ -428,15 +457,23 @@ export class Browser {
       case 'page.reload': contents.reload(); return { success: true };
       case 'page.stop': contents.stop(); return { success: true };
       case 'page.inspect': return this.describe(tab);
-      case 'page.readable': return contents.executeJavaScript(`(() => ({url: location.href, title: document.title,
-        text: (document.querySelector('main, article, [role="main"]') || document.body)?.innerText.slice(0, 500000) || '',
-        links: [...document.querySelectorAll('a[href]')].slice(0, 100).map(a => ({text: a.innerText.slice(0, 200), url: a.href}))}))()`);
+      case 'page.readable': return contents.executeJavaScript(`(() => {
+        const root = (document.querySelector('main, article, [role="main"]') || document.body)?.cloneNode(true);
+        root?.querySelectorAll('input, textarea, select, [contenteditable], script, style, template').forEach(element => element.remove());
+        return {url: location.href, title: document.title.slice(0, 1000), text: root?.textContent.slice(0, 500000) || '',
+          links: [...document.querySelectorAll('a[href]')].slice(0, 100).map(a => ({text: a.innerText.slice(0, 200), url: a.href.slice(0, 16384)}))};
+      })()`);
       case 'page.find':
         if (!args.text) { contents.stopFindInPage('clearSelection'); return { stopped: true }; }
         return { requestId: contents.findInPage(args.text, { forward: args.forward ?? true, findNext: args.findNext ?? false }) };
       case 'page.zoom': contents.setZoomFactor(args.factor); this.persist(); return { factor: contents.getZoomFactor() };
-      case 'page.title': return contents.getTitle();
-      case 'page.content': return contents.executeJavaScript('document.documentElement.outerHTML');
+      case 'page.title': return contents.getTitle().slice(0, 1000);
+      case 'page.content': return contents.executeJavaScript(`(() => {
+        const root = document.documentElement.cloneNode(true);
+        root.querySelectorAll('input, textarea, select, [contenteditable], script, style, template').forEach(element => element.remove());
+        root.querySelectorAll('*').forEach(element => { for (const attribute of [...element.attributes]) if (/^on/i.test(attribute.name) || /value|token|password|secret/i.test(attribute.name)) element.removeAttribute(attribute.name); });
+        return root.outerHTML.slice(0, 500000);
+      })()`);
       case 'page.evaluate': {
         const result = await contents.executeJavaScript(args.expression, true);
         return result === undefined ? null : JSON.parse(JSON.stringify(result));
@@ -447,7 +484,7 @@ export class Browser {
           const element = document.querySelector(${JSON.stringify(args.selector)});
           if (!element) throw new Error('Element not found');
           element.click();
-          return {success: true};
+          return {submitted: true, outcome: 'unverified', notice: 'Input submitted; inspect the page to verify its effect.'};
         })()`, true);
       case 'page.fill':
         return contents.executeJavaScript(`(() => {
@@ -463,7 +500,7 @@ export class Browser {
           } else throw new Error('Element is not editable');
           element.dispatchEvent(new Event('input', {bubbles: true}));
           element.dispatchEvent(new Event('change', {bubbles: true}));
-          return {success: true};
+          return {submitted: true, outcome: 'unverified', notice: 'Input submitted; inspect the page to verify its effect.'};
         })()`, true);
       case 'page.screenshot': {
         if (!this.attachedViews.has(tab.view)) throw new Error('Show the tab before capturing a screenshot');
@@ -496,7 +533,7 @@ export class Browser {
     const human = ['human', 'admin'].includes(context.actor);
     if (!human) {
       if (tab.controller !== 'available' && tab.controller !== context.actor) throw new Error('Tab control is held by another actor; request handoff');
-      if (tab.controller !== 'available' && args.expectedVersion == null) throw new Error('An expectedVersion is required while holding a tab lease');
+      if (args.expectedVersion == null) throw new Error('An expectedVersion is required for automation input; inspect current state');
     } else if (tab.controller !== 'human' && tab.controller !== 'available') {
       throw new Error('Take over this tab before changing it');
     }

@@ -302,14 +302,15 @@ if (mainSmoke) {
         });
         const url = `http://127.0.0.1:${port}/v1/execute`;
         assert.equal((await fetch(url)).status, 401);
-        const request = command => fetch(url, {
+        const request = (command, args = {}) => fetch(url, {
           method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command, args: {} }),
+          body: JSON.stringify({ command, args }),
         });
         assert.equal((await (await request('browser.info')).json()).result.electron, '44.9.0');
         assert.equal((await (await request('tabs.list')).json()).result.length, 1);
+        const cliTab = (await (await request('page.inspect')).json()).result;
         const cli = await promisify(execFile)(process.execPath, [
-          fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'page.evaluate', '{"expression":"6 * 7"}',
+          fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'page.evaluate', JSON.stringify({ tabId: cliTab.id, expectedVersion: cliTab.version, expression: '6 * 7' }),
         ], { env: { ...process.env, WEFT_API_URL: `http://127.0.0.1:${port}`, WEFT_TOKEN: token } });
         assert.equal(JSON.parse(cli.stdout), 42);
         const mcp = new Client({ name: 'chromium-smoke', version: '1.0.0' });
@@ -322,7 +323,8 @@ if (mainSmoke) {
           await mcp.connect(transport);
           const { commands } = await import('../src/commands.js');
           assert.equal((await mcp.listTools()).tools.length, Object.keys(commands).length);
-          const answer = await mcp.callTool({ name: 'page_evaluate', arguments: { expression: '21 * 2' } });
+          const mcpTab = (await (await request('page.inspect')).json()).result;
+          const answer = await mcp.callTool({ name: 'page_evaluate', arguments: { tabId: mcpTab.id, expectedVersion: mcpTab.version, expression: '21 * 2' } });
           assert.equal(JSON.parse(answer.content[0].text), 42);
           const screenshot = await mcp.callTool({ name: 'page_screenshot', arguments: {} });
           assert.equal(screenshot.content[0].type, 'image');
