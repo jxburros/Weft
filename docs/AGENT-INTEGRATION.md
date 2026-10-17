@@ -245,7 +245,7 @@ work and your budgets.
 
 Idle background tabs may be suspended. A suspended tab keeps its id, URL, title,
 ownership and group; using it reloads the page (sites may ask to sign in again,
-unsent input is gone) and `page.inspect` reports `restored`. `tabs.suspend`
+unsent input is gone) and `page.inspect` reports `restored`. Agents may suspend only tabs nobody holds (`lease_conflict` otherwise); `tabs.suspend`
 refuses tabs that are leased, linked to an open task, busy, playing media or
 holding edited form fields and lists why. `tabs.search` finds tabs by title, URL
 or group, and `resume.get` lists blockers, open tasks and handoffs to continue.
