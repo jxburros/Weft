@@ -28,6 +28,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, openSync, closeSync, chmodSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
+import { scrubFile } from './components.js';
 import { ARCHIVE_CSP, ARCHIVE_FORMAT, ARCHIVE_FORMAT_VERSION, ARCHIVE_LIMITS, CID_HOST, FALLBACK_DOCUMENT_URL, archiveKey, buildArchive } from './archive.js';
 import { SiteStoragePolicy, STORAGE_COVERAGE } from './site-storage.js';
 import { ThreatIntel } from './threat-intel.js';
@@ -117,13 +118,15 @@ export class Browser {
     this.attachedViews = new Set();
     // Set by WorkspaceExtensions; without it, extension-originated requests are cancelled.
     this.extensionRequestAllowed = null;
-    this.session = session ?? this.sessionFor(this.workspaceId);
+    // A locked encrypted profile has no active workspace yet: sessions are created after unlock.
+    this.suspended = Boolean(workspaceService?.locked);
+    this.session = session ?? (this.suspended ? null : this.sessionFor(this.workspaceId));
     if (session) this.configureSession(session, this.workspaceId);
     this.onResize = () => this.layout();
     window?.on('resize', this.onResize);
   }
 
-  get workspaceId() { return this.workspaceService?.activeWorkspaceId ?? 'general'; }
+  get workspaceId() { return this.workspaceService?.locked ? 'general' : this.workspaceService?.activeWorkspaceId ?? 'general'; }
 
   partition(workspaceId) {
     return this.sessions.get(workspaceId)?.session ?? this.electron.session.fromPartition(`persist:weft-${workspaceId}`);
@@ -376,13 +379,15 @@ export class Browser {
   }
 
   persist() {
-    if (this.closing || this.restoring) return;
+    if (this.closing || this.restoring || this.suspended) return;
     this.workspaceService?.persistSession({ tabs: [...this.tabs.values()].map(tab => this.describe(tab)), activeId: this.activeId });
   }
 
   async restore() {
     // Temporary site data left by a crash is erased before any tab can load it again.
     await this.siteStorage?.cleanup('startup').catch(error => { this.storageRecoveryError = error.message; });
+    // Locked encrypted profile: tabs are restored by resume() after a person unlocks.
+    if (this.workspaceService?.locked) { this.suspended = true; return; }
     const saved = this.workspaceService?.snapshot().browserSession;
     this.restoring = true;
     try {
@@ -394,6 +399,27 @@ export class Browser {
       if (selected?.workspaceId === this.workspaceId) this.activate(selected.id);
       else await this.switchWorkspace(this.workspaceId);
     } finally { this.restoring = false; this.persist(); }
+  }
+
+  /**
+   * Workspace encryption lock: save the tab list while it can still be written,
+   * then close every tab without persisting, so no workspace page stays loaded.
+   */
+  async suspend({ persist = true } = {}) {
+    if (this.suspended) return;
+    if (persist) { try { this.persist(); } catch { /* the saved session from the last change remains */ } }
+    this.suspended = true;
+    // The offline archive preview holds decrypted archive bodies in memory; it closes with the lock.
+    if (this.preview) { try { this.closeArchivePreview(); } catch { /* closing anyway */ } }
+    for (const id of [...this.tabs.keys()]) { try { this.closeTab(id); } catch { /* keep closing */ } }
+    this.activeId = null;
+    this.layout();
+  }
+  /** After unlock: restore the saved tabs of the unlocked profile. */
+  async resume() {
+    if (!this.suspended || this.workspaceService?.locked) return;
+    this.suspended = false;
+    await this.restore();
   }
 
   async switchWorkspace(workspaceId) {
@@ -528,7 +554,7 @@ export class Browser {
     this.tabs.delete(tabId);
     const contents = tab.view.webContents;
     if (contents && !contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
-    if (!this.closing && this.activeId === null) {
+    if (!this.closing && !this.suspended && this.activeId === null) {
       const next = [...this.tabs.values()].find(candidate => candidate.workspaceId === this.workspaceId);
       if (next) this.activate(next.id);
     }
@@ -650,7 +676,11 @@ export class Browser {
         if (signal?.aborted) throw error;
         incomplete.push(/timed out/i.test(error.message) ? 'archive-timeout' : 'archive-failed');
         archive = { format: ARCHIVE_FORMAT, formatVersion: ARCHIVE_FORMAT_VERSION, status: 'failed', reason: String(error.message).slice(0, 300), resources: [], counts: {}, complete: false };
-      } finally { rmSync(temp, { recursive: true, force: true }); }
+      } finally {
+        // An encrypted profile (ADR 014) overwrites Chromium's transient plaintext serialization before removing it.
+        if (this.workspaceService?.storage?.encrypted) { try { scrubFile(file); } catch { /* removed below regardless */ } }
+        rmSync(temp, { recursive: true, force: true });
+      }
     } finally {
       for (const [event, listener] of Object.entries(listeners)) contents.removeListener(event, listener);
     }

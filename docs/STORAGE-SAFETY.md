@@ -1,6 +1,7 @@
 # Local storage, backup and export safety
 
-Verified against code: 2026-10-17. Design and rationale: [ADR 011](decisions/011-transactional-storage-search-and-recovery.md).
+Verified against code: 2026-10-17. Design and rationale: [ADR 011](decisions/011-transactional-storage-search-and-recovery.md);
+workspace encryption: [ADR 014](decisions/014-workspace-encryption-and-key-management.md).
 
 ## Layout
 
@@ -15,9 +16,12 @@ Verified against code: 2026-10-17. Design and rationale: [ADR 011](decisions/011
 | `recovery/` | Preserved originals: migrated JSON stores, pre-migration and pre-restore data |
 | `transfers/<name>/` | Large-project packages written or read by export/import |
 | `restore-journal.json` | Present only while a restore is in progress |
+| `encryption-keyring.json` | Present only when workspace encryption is on: wrapped keys, never an unwrapped key |
 
-All of these contain project content (including the search index) and are not
-encrypted. Files and folders are created owner-only where the OS supports it.
+Without workspace encryption all of these contain plaintext project content
+(including the search index). Files and folders are created owner-only where
+the OS supports it. See [Encryption at rest](#encryption-at-rest) for what
+changes when a person turns encryption on.
 
 The database holds every workspace collection, including handoff and takeover
 records, shared context collections, evidence conflicts, freshness schedules,
@@ -46,6 +50,51 @@ Updater state lives in the separate `updates/` folder of the user-data
 directory. Stamped writes (`writeVerifiedJson`) refuse to overwrite a file that
 changed since it was read; browser-owned journals use exclusive temporary files,
 fsync and rename, and remove the temporary file if the write fails.
+
+## Encryption at rest
+
+Off by default; a person turns it on in Settings > Encryption
+(`encryption.enable`, human-only) after acknowledging that losing the recovery
+key, the passphrase and the OS key means the data is gone. Then:
+
+| Store | Treatment |
+| --- | --- |
+| `records.doc`, `state_meta` values (except `schemaVersion`), retained request results | AES-256-GCM envelopes `wfe1.<keyVersion>.<revision>.…` bound to collection, id, revision and key version |
+| Request fingerprints | Keyed HMAC, so guessable arguments cannot be confirmed |
+| `components/` | Sealed files named by a keyed locator (no plaintext digests on disk); content SHA-256 re-verified after decryption |
+| Search index | Not on disk: an in-memory FTS5 database built on the first search after unlock |
+| Backups | Sealed snapshot, sealed components and a copy of the keyring (manifest format 2) |
+| `recovery/` copies made afterwards | Copies of the sealed database |
+| Plaintext left from before | Listed by `encryption.status {inventory: true}` and when enabling; older backups and recovery copies can be overwritten and removed on request; export packages are only listed |
+
+Still plaintext: record/workspace identifiers, collection names, record counts,
+component sizes, timestamps of files, the activity log and other small policy
+files listed above, Chromium partitions and anything exported with explicit
+acknowledgement. The keyring wraps a random profile key with the OS key store
+(Electron `safeStorage`; `basic_text` on Linux is refused), a recovery key and
+an optional scrypt passphrase.
+
+Locking (`encryption.lock`) closes the database, drops decrypted state and keys
+and closes tabs; every command except `encryption.status`, `encryption.unlock`,
+`encryption.checkRecoveryKey` and `guide.get` then returns `locked` (HTTP 423,
+CLI exit 9). Profiles in manual unlock mode start locked. Only a person in the
+Weft window unlocks.
+
+Enabling, disabling and data-key rotation are crash-safe: one SQLite
+transaction switches every value, a `pending` marker in the keyring lets the
+next start roll back or complete the migration without any key, and every
+sealed value names its key version so an interrupted rotation resumes. Plaintext
+component files and freed database pages are overwritten (`secure_delete`,
+`VACUUM`), but SSDs, copy-on-write filesystems, snapshots and the freed tail of
+a truncated WAL can keep earlier blocks: overwriting is never called secure
+erasure.
+
+Exports (`workspaces.export`, `workspaces.exportPackage`, `workspaces.exportAs`)
+from an encrypted profile require `acknowledgePlaintext: true` and say they are
+plaintext. Restoring an encrypted backup needs the recovery key or passphrase
+that was valid when it was made unless the session's key still fits; restoring
+a plaintext backup makes the profile plaintext again (the replaced keyring is
+kept in `recovery/pre-restore-*`).
 
 ## Writers and conflicts
 
@@ -97,12 +146,14 @@ byte-for-byte unchanged; restore a backup (below).
 `backups.create` (and the GUI's Back up now) writes a `VACUUM INTO` snapshot and
 copies of every referenced component to a temporary folder, writes a manifest of
 SHA-256 digests, renames it into place and verifies it (digests,
-`integrity_check`, component completeness). The application also makes an
+`integrity_check`, component completeness; for an encrypted profile also the
+keyring and the encryption marker). The application also makes an
 automatic backup at startup and every 24 hours when due, keeping the latest
 five; failures appear as storage warnings and in `backups.list`. Manual backups
 are not pruned. `backups.verify` recomputes everything and never modifies a
-backup; manifest paths other than `workspace.sqlite` and
-`components/<aa>/<sha256>` are rejected.
+backup; manifest paths other than `workspace.sqlite`,
+`components/<aa>/<name>` and, for encrypted backups, `encryption-keyring.json`
+are rejected. Encrypted backups stay encrypted (see Encryption at rest).
 
 `backups.restore` (human-only; `dryRun` previews record counts) refuses an
 unverified backup, writes `restore-journal.json`, moves the current database and
@@ -225,4 +276,7 @@ import previews, corrupted components, malformed packages and links, and older
 formats. `npm run test:perf` measures capture-heavy stores and asserts that
 metadata changes leave component files untouched. Windows directory-fsync
 behavior, macOS/Windows crash behavior and real sync-client races have not been
-exercised on this Linux runner.
+exercised on this Linux runner. Encryption is covered by `test/encryption*.test.js`
+(including real `SIGKILL` crash tests at every migration and rotation step);
+real macOS Keychain, Windows DPAPI and Linux secret-service backends have not been
+exercised.

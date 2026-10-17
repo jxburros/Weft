@@ -100,9 +100,15 @@ export class EventLog {
     if (after > this.seq) return { entries: [], gap: { reason: 'unknown_event_id', oldestEventId } };
     const entries = this.entries.filter(entry => entry.seq > after);
     const first = this.entries[0]?.seq ?? this.seq + 1;
-    return { entries, gap: first > after + 1 ? { reason: 'expired', oldestEventId } : null };
+    return { entries, gap: first > after + 1 ? { reason: this.cleared && after < this.cleared.seq ? this.cleared.reason : 'expired', oldestEventId } : null };
   }
   subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  /** Drop every retained event (for example when an encrypted profile locks); a later replay from before reports this reason as its gap. */
+  reset(reason) {
+    this.entries = [];
+    this.bytes = 0;
+    this.cleared = { seq: this.seq, reason: /^[a-z][a-z_]{0,31}$/.test(reason) ? reason : 'expired' };
+  }
 }
 
 export function setSseHeaders(res) {

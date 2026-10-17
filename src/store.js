@@ -7,6 +7,9 @@ import { syncDirectory } from './storage-safety.js';
 import { rejectSecretKeys } from './export-safety.js';
 import { SEARCH_INDEX_VERSION, compileQuery, indexable, recordDocument, versionDocument } from './search-index.js';
 import { VectorIndex } from './vector-index.js';
+import { SEALED_PREFIX, encryptionError, lockedError } from './encryption.js';
+
+const SEALED_PREFIX_LIKE = SEALED_PREFIX;
 
 export const STORE_FILE = 'workspace.sqlite';
 export const COMPONENTS_DIR = 'components';
@@ -54,18 +57,31 @@ export function removeDatabaseFiles(path) { for (const suffix of ['', '-wal', '-
  * transaction. Capture/file bytes become lazy, verified component reads.
  */
 export class MetadataStore {
-  constructor({ directory, file = STORE_FILE, assertOwned = () => {}, migrations = storeMigrations, clock = Date.now } = {}) {
+  constructor({ directory, file = STORE_FILE, assertOwned = () => {}, migrations = storeMigrations, clock = Date.now, keys = null } = {}) {
     this.directory = directory;
     this.path = join(directory, file);
     this.assertOwned = assertOwned;
     this.migrations = migrations;
     this.clock = clock;
+    // Unlocked key material for an encrypted profile (src/encryption.js); the database marker decides whether it is used.
+    this.availableKeys = keys;
+    this.keys = null;
     this.components = new ComponentStore(join(directory, COMPONENTS_DIR));
     this.resetCaches();
     this.pending = null;
     this.lastPrune = 0;
   }
   static exists(directory) { return existsSync(join(directory, STORE_FILE)); }
+  /** Encryption marker of a database file, read without opening it as a store (no key needed). */
+  static encryptionInfo(path) {
+    if (!existsSync(path)) return null;
+    const db = new DatabaseSync(path, { readOnly: true });
+    try {
+      const table = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'store_info'").get();
+      const value = table && db.prepare("SELECT value FROM store_info WHERE key = 'encryption'").get()?.value;
+      return value ? JSON.parse(value) : null;
+    } finally { db.close(); }
+  }
   /** Interrupted creations/migrations never became the canonical file; remove them. */
   static cleanupTemporary(directory) {
     if (!existsSync(directory)) return;
@@ -125,10 +141,20 @@ export class MetadataStore {
     this.db = db;
     this.readOnly = readOnly;
     try {
+      const encryption = JSON.parse(this.info('encryption') || 'null');
+      if (encryption) {
+        if (!this.availableKeys) throw lockedError();
+        if (encryption.profileId !== this.availableKeys.profileId) throw encryptionError('component_integrity', 'ENCRYPTION_INTEGRITY: the keyring belongs to a different profile than this database. Nothing was changed; restore the matching keyring or backup.');
+        this.keys = this.availableKeys;
+        // Temporary tables, sorts and the search index never spill to disk for encrypted profiles.
+        db.exec('PRAGMA temp_store = MEMORY');
+      } else this.keys = null;
+      this.components.keys = this.keys;
       if (!readOnly) {
         this.migrate(); this.ensureSearchIndex();
+        // Encrypted profiles keep embedding vectors and their queue in memory only, like the search index (ADR 014, ADR 018).
         this.vectors = new VectorIndex(db);
-        this.vectors.ensure(key => this.info(key), (key, value) => this.setInfo(key, value));
+        this.vectors.ensure(key => this.info(key), (key, value) => this.setInfo(key, value), { memory: Boolean(this.keys), now: this.clock() });
       }
       else if (this.version() > STORE_SCHEMA_VERSION) throw failure('STORE_UNSUPPORTED', 'Workspace database was written by a newer Weft version');
       const stat = statSync(this.path);
@@ -137,7 +163,8 @@ export class MetadataStore {
     } catch (error) { this.close(); throw error; }
     return this;
   }
-  close() { try { this.db?.close(); } catch { /* already closed */ } this.db = null; }
+  close() { try { this.db?.close(); } catch { /* already closed */ } this.db = null; this.searchReady = false; }
+  get encrypted() { return Boolean(this.keys); }
   assertOpen() { if (!this.db) throw failure('STORE_CLOSED', 'Workspace storage is closed'); }
   version() { return this.db.prepare('PRAGMA user_version').get().user_version; }
   readDataVersion() { return this.db.prepare('PRAGMA data_version').get().data_version; }
@@ -176,8 +203,22 @@ export class MetadataStore {
     chmodSync(target, 0o600);
     fsyncPath(target);
   }
+  static searchSchema(schema = 'main') {
+    return `CREATE TABLE ${schema}.search_docs(rowid INTEGER PRIMARY KEY, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', workspace_id TEXT, revision INTEGER, version_number INTEGER, local_only INTEGER NOT NULL DEFAULT 0, updated_at TEXT, UNIQUE(collection, record_id, version_id));
+        CREATE INDEX ${schema}.search_docs_workspace ON search_docs(workspace_id);
+        CREATE VIRTUAL TABLE ${schema}.search_fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
+        INSERT INTO ${schema}.search_fts(search_fts, rank) VALUES('secure-delete', 1);`;
+  }
   ensureSearchIndex() {
+    if (this.keys) {
+      // Encrypted profiles: the FTS index lives only in an attached in-memory database, built on the first search after unlock.
+      this.db.exec("DROP TABLE IF EXISTS main.search_fts; DROP TABLE IF EXISTS main.search_docs; ATTACH DATABASE ':memory:' AS mem;");
+      this.db.exec(MetadataStore.searchSchema('mem'));
+      this.searchReady = false;
+      return;
+    }
     const exists = this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('search_docs', 'search_fts')").get().count === 2;
+    this.searchReady = true;
     // FTS5 secure-delete removes deleted tokens from the index immediately instead of leaving tombstoned segments (redaction, restriction, purge).
     if (exists && this.info('searchIndexVersion') === String(SEARCH_INDEX_VERSION)) {
       // Enabled once for indexes created before this option; opening never writes otherwise (other readers would see a change).
@@ -185,11 +226,8 @@ export class MetadataStore {
       return;
     }
     this.transaction(() => {
-      this.db.exec(`DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs;
-        CREATE TABLE search_docs(rowid INTEGER PRIMARY KEY, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', workspace_id TEXT, revision INTEGER, version_number INTEGER, local_only INTEGER NOT NULL DEFAULT 0, updated_at TEXT, UNIQUE(collection, record_id, version_id));
-        CREATE INDEX search_docs_workspace ON search_docs(workspace_id);
-        CREATE VIRTUAL TABLE search_fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
-        INSERT INTO search_fts(search_fts, rank) VALUES('secure-delete', 1);`);
+      this.db.exec('DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs;');
+      this.db.exec(MetadataStore.searchSchema('main'));
       for (const row of this.db.prepare('SELECT collection, doc FROM records').iterate()) {
         const record = JSON.parse(row.doc);
         if (row.doc.includes('"$component"')) this.hydrate(row.collection, record, false);
@@ -198,23 +236,48 @@ export class MetadataStore {
       this.setInfo('searchIndexVersion', String(SEARCH_INDEX_VERSION));
     });
   }
+  /** Encrypted profiles: build the in-memory index from the decrypted documents already held for diffing. */
+  buildMemoryIndex() {
+    this.transaction(() => {
+      this.db.exec('DELETE FROM mem.search_fts; DELETE FROM mem.search_docs;');
+      this.searchReady = true;
+      try {
+        for (const [collection, docs] of this.docs) {
+          for (const { doc } of docs.values()) {
+            const record = JSON.parse(doc);
+            if (doc.includes('"$component"')) this.hydrate(collection, record, false);
+            this.indexRecord(collection, record);
+          }
+        }
+      } catch (error) { this.searchReady = false; throw error; }
+    });
+  }
 
   // ---- Loading and lazy components -------------------------------------------------
   load() {
     this.assertOpen();
     this.resetCaches();
     const state = {};
-    for (const row of this.db.prepare('SELECT key, value FROM state_meta ORDER BY key').iterate()) { state[row.key] = JSON.parse(row.value); this.meta.set(row.key, row.value); }
+    for (const row of this.db.prepare('SELECT key, value FROM state_meta ORDER BY key').iterate()) { const value = this.openMeta(row.key, row.value); state[row.key] = JSON.parse(value); this.meta.set(row.key, value); }
     for (const name of JSON.parse(this.info('layout') || '[]')) { state[name] = []; this.layout.add(name); this.docs.set(name, new Map()); }
     for (const row of this.db.prepare('SELECT collection, id, seq, doc FROM records ORDER BY collection, seq').iterate()) {
       if (!this.layout.has(row.collection)) { this.layout.add(row.collection); state[row.collection] = []; this.docs.set(row.collection, new Map()); }
-      state[row.collection].push(this.parse(row.collection, row.doc));
-      this.docs.get(row.collection).set(row.id, { doc: row.doc, seq: row.seq });
+      const doc = this.keys ? this.keys.openDoc(row.collection, row.id, row.doc) : row.doc;
+      const record = this.parse(row.collection, doc);
+      if (this.keys && record?.id !== row.id) throw encryptionError('component_integrity', `ENCRYPTION_INTEGRITY: ${row.collection} record ${String(row.id).slice(0, 80)} does not match its row`);
+      state[row.collection].push(record);
+      this.docs.get(row.collection).set(row.id, { doc, seq: row.seq });
       if (row.seq > (this.maxSeq.get(row.collection) || 0)) this.maxSeq.set(row.collection, row.seq);
     }
     this.dataVersion = this.readDataVersion();
     return state;
   }
+  /** Settings values are sealed for encrypted profiles, except the numeric schema version that offline tools read. */
+  openMeta(key, value) { return this.keys && key !== 'schemaVersion' ? this.keys.openMeta(key, value) : value; }
+  sealMeta(key, json) { return this.keys && key !== 'schemaVersion' ? this.keys.sealMeta(key, json) : json; }
+  sealDoc(collection, record, doc) { return this.keys ? this.keys.sealDoc(collection, record.id, doc, record.revision) : doc; }
+  /** Request fingerprints: a keyed HMAC of the argument digest for encrypted profiles, so guessable arguments cannot be confirmed from disk. */
+  requestFingerprint(digest) { return this.keys ? this.keys.fingerprint(digest) : digest; }
   parse(collection, doc) {
     const record = JSON.parse(doc);
     if (doc.includes('"$component"')) this.hydrate(collection, record, true);
@@ -394,19 +457,19 @@ export class MetadataStore {
       this.transaction(() => {
         if (this.readDataVersion() !== this.dataVersion) throw failure('STORE_CONFLICT', 'Workspace database changed outside this session. Changes were not written; restart and review external changes before retrying.');
         const db = this.db;
-        for (const item of plan.meta) db.prepare('INSERT INTO state_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(item.key, item.json);
+        for (const item of plan.meta) db.prepare('INSERT INTO state_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(item.key, this.sealMeta(item.key, item.json));
         for (const key of plan.metaDeletes) db.prepare('DELETE FROM state_meta WHERE key = ?').run(key);
         const refsOf = (collection, id) => db.prepare('SELECT sha256 FROM component_refs WHERE collection = ? AND record_id = ?').all(collection, id).map(row => row.sha256);
         for (const row of plan.upserts) {
           const id = row.record.id;
           const workspaceId = row.collection === 'workspaces' ? id : typeof row.record.workspaceId === 'string' ? row.record.workspaceId : null;
-          db.prepare('INSERT INTO records(collection, id, workspace_id, seq, doc) VALUES (?, ?, ?, ?, ?) ON CONFLICT(collection, id) DO UPDATE SET workspace_id = excluded.workspace_id, seq = excluded.seq, doc = excluded.doc').run(row.collection, id, workspaceId, row.seq, row.doc);
-          const next = new Map(row.markers.map(entry => [entry.marker.sha256, entry.marker.size]));
+          db.prepare('INSERT INTO records(collection, id, workspace_id, seq, doc) VALUES (?, ?, ?, ?, ?) ON CONFLICT(collection, id) DO UPDATE SET workspace_id = excluded.workspace_id, seq = excluded.seq, doc = excluded.doc').run(row.collection, id, workspaceId, row.seq, this.sealDoc(row.collection, row.record, row.doc));
+          const next = new Map(row.markers.map(entry => [this.components.id(entry.marker.sha256), entry.marker.size]));
           for (const hash of refsOf(row.collection, id)) if (!next.has(hash)) released.add(hash);
           db.prepare('DELETE FROM component_refs WHERE collection = ? AND record_id = ?').run(row.collection, id);
           for (const [hash, size] of next) db.prepare('INSERT INTO component_refs(sha256, collection, record_id, size) VALUES (?, ?, ?, ?)').run(hash, row.collection, id, size);
           this.indexRecord(row.collection, row.record);
-          if (row.collection === 'artifacts') this.vectors?.pruneUnindexed(row.collection, id);
+          if (row.collection === 'artifacts') this.vectors?.pruneWithheld(row.collection, row.record);
           if (indexable(row.collection, row.record)) this.vectors?.enqueue(row.collection, row.record, this.clock());
         }
         for (const row of plan.reseq) db.prepare('UPDATE records SET seq = ? WHERE collection = ? AND id = ?').run(row.seq, row.collection, row.record.id);
@@ -420,8 +483,10 @@ export class MetadataStore {
         if (plan.layout) this.setInfo('layout', JSON.stringify(plan.layout));
         for (const item of removeRequests) db.prepare('DELETE FROM requests WHERE scope = ? AND request_id = ?').run(item.scope, item.requestId);
         for (const item of requests) {
-          const result = item.result === undefined ? null : JSON.stringify(item.result);
-          db.prepare('INSERT INTO requests(scope, request_id, command, fingerprint, workspace_id, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(item.scope, item.requestId, item.command, item.fingerprint, item.workspaceId ?? null, result && Buffer.byteLength(result) > MAX_RETAINED_RESULT ? OMITTED_RESULT : result, this.clock());
+          let result = item.result === undefined ? null : JSON.stringify(item.result);
+          if (result && Buffer.byteLength(result) > MAX_RETAINED_RESULT) result = OMITTED_RESULT;
+          else if (result && this.keys) result = this.keys.sealResult(item.scope, item.requestId, result);
+          db.prepare('INSERT INTO requests(scope, request_id, command, fingerprint, workspace_id, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(item.scope, item.requestId, item.command, item.fingerprint, item.workspaceId ?? null, result, this.clock());
         }
         this.pruneRequests();
       });
@@ -457,25 +522,27 @@ export class MetadataStore {
     if (!stat || `${stat.dev}:${stat.ino}` !== this.identity) throw failure('STORE_CONFLICT', 'Workspace database was replaced or removed outside this session. Changes were not written; restart and review the profile.');
   }
   /** Delete component files no committed record references any longer. */
-  collectGarbage(hashes) {
-    for (const hash of hashes) {
-      if (!this.db.prepare('SELECT 1 FROM component_refs WHERE sha256 = ? LIMIT 1').get(hash)) this.components.remove(hash);
+  collectGarbage(ids) {
+    for (const id of ids) {
+      if (!this.db.prepare('SELECT 1 FROM component_refs WHERE sha256 = ? LIMIT 1').get(id)) this.components.remove(id);
     }
   }
   /** Startup recovery: remove components and temporary files left by interrupted writes. */
   sweepOrphans() {
     const referenced = new Set(this.db.prepare('SELECT DISTINCT sha256 FROM component_refs').all().map(row => row.sha256));
     const { hashes, temporary } = this.components.list();
-    this.components.removeTemporary(temporary);
+    // In an encrypted profile an unreferenced file may be plaintext left by an interrupted migration: overwrite before removing.
+    const scrub = Boolean(this.keys);
+    this.components.removeTemporary(temporary, { scrub });
     let removed = 0;
-    for (const hash of hashes) if (!referenced.has(hash)) { this.components.remove(hash); removed++; }
+    for (const id of hashes) if (!referenced.has(id)) { this.components.remove(id, { scrub }); removed++; }
     return { removed, temporary: temporary.length };
   }
   /** Verify every referenced component; returns problems without changing anything. */
   verifyComponents() {
     const problems = [];
     for (const row of this.db.prepare('SELECT sha256, min(size) AS size FROM component_refs GROUP BY sha256').iterate()) {
-      try { this.components.read(row.sha256, row.size); } catch (error) { problems.push({ sha256: row.sha256, code: error.code, message: error.message }); }
+      try { this.components.verifyId(row.sha256, row.size); } catch (error) { problems.push({ sha256: row.sha256, code: error.code, message: error.message }); }
     }
     return problems;
   }
@@ -516,8 +583,150 @@ export class MetadataStore {
     return sha256(hash.join('\u0001'));
   }
 
+  // ---- Encryption migration and data-key rotation (ADR 014) ---------------------------
+  /**
+   * Encrypt this plaintext store in place. Components are sealed under keyed
+   * locators first (orphans until the commit); then one transaction seals every
+   * record, setting and retained request result, rewrites component references
+   * and request fingerprints, drops the on-disk search index and writes the
+   * encryption marker. A crash before COMMIT leaves the plaintext store intact;
+   * after it, the store is fully encrypted. Plaintext component files are
+   * returned for the caller to overwrite and remove once the commit is durable.
+   */
+  encryptInPlace(keys, { onStep = () => {} } = {}) {
+    this.assertOpen();
+    if (this.keys) throw encryptionError('invalid_arguments', 'This profile is already encrypted');
+    const sealed = new ComponentStore(this.components.root, { keys });
+    const refs = this.db.prepare('SELECT sha256, min(size) AS size FROM component_refs GROUP BY sha256').all();
+    for (const ref of refs) sealed.put(this.components.read(ref.sha256, ref.size));
+    onStep('components-sealed');
+    this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    this.transaction(() => {
+      const db = this.db;
+      for (const row of db.prepare('SELECT collection, id, doc FROM records').all()) {
+        let revision = null;
+        try { revision = JSON.parse(row.doc).revision; } catch { /* sealed without a revision binding */ }
+        db.prepare('UPDATE records SET doc = ? WHERE collection = ? AND id = ?').run(keys.sealDoc(row.collection, row.id, row.doc, revision), row.collection, row.id);
+      }
+      // Test hook: a crash here proves the half-written transaction rolls back.
+      onStep('in-transaction');
+      for (const row of db.prepare("SELECT key, value FROM state_meta WHERE key != 'schemaVersion'").all()) db.prepare('UPDATE state_meta SET value = ? WHERE key = ?').run(keys.sealMeta(row.key, row.value), row.key);
+      for (const row of db.prepare('SELECT scope, request_id, fingerprint, result FROM requests').all()) {
+        const result = row.result === null || row.result === OMITTED_RESULT ? row.result : keys.sealResult(row.scope, row.request_id, row.result);
+        db.prepare('UPDATE requests SET fingerprint = ?, result = ? WHERE scope = ? AND request_id = ?').run(/^[0-9a-f]{64}$/.test(row.fingerprint) ? keys.fingerprint(row.fingerprint) : row.fingerprint, result, row.scope, row.request_id);
+      }
+      const componentRows = db.prepare('SELECT sha256, collection, record_id, size FROM component_refs').all();
+      db.exec('DELETE FROM component_refs');
+      const insert = db.prepare('INSERT OR IGNORE INTO component_refs(sha256, collection, record_id, size) VALUES (?, ?, ?, ?)');
+      for (const row of componentRows) insert.run(keys.locator(row.sha256), row.collection, row.record_id, row.size);
+      db.exec("DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs; DELETE FROM store_info WHERE key = 'searchIndexVersion'");
+      // Embedding vectors are derived from record text: they are dropped here and rebuilt in memory after unlock (ADR 018 vectors, ADR 014).
+      db.exec('DROP TABLE IF EXISTS main.vector_chunks; DROP TABLE IF EXISTS main.vector_queue;');
+      this.setInfo('encryption', JSON.stringify({ format: 1, profileId: keys.profileId, enabledAt: new Date(this.clock()).toISOString() }));
+    });
+    onStep('committed');
+    this.compact();
+    onStep('compacted');
+    return refs.map(ref => ref.sha256);
+  }
+  /**
+   * Decrypt this encrypted store in place (explicit human choice). Plaintext
+   * components are written first; one transaction then opens every value and
+   * removes the marker. Request identities that cannot be re-fingerprinted are
+   * marked so a retry reports already_committed instead of applying twice.
+   * Returns the sealed component names for the caller to remove.
+   */
+  decryptInPlace({ onStep = () => {} } = {}) {
+    this.assertOpen();
+    const keys = this.keys;
+    if (!keys) throw encryptionError('invalid_arguments', 'This profile is not encrypted');
+    const plain = new ComponentStore(this.components.root);
+    const digests = new Map();
+    const collect = value => {
+      if (Array.isArray(value)) { value.forEach(collect); return; }
+      if (!value || typeof value !== 'object') return;
+      if (value.$component && /^[0-9a-f]{64}$/.test(value.$component.sha256)) digests.set(keys.locator(value.$component.sha256), value.$component.sha256);
+      else Object.values(value).forEach(collect);
+    };
+    const rows = this.db.prepare('SELECT collection, id, doc FROM records').all().map(row => ({ ...row, plain: keys.openDoc(row.collection, row.id, row.doc) }));
+    for (const row of rows) if (row.plain.includes('"$component"')) collect(JSON.parse(row.plain));
+    const refs = this.db.prepare('SELECT sha256, min(size) AS size FROM component_refs GROUP BY sha256').all();
+    for (const ref of refs) {
+      const hash = digests.get(ref.sha256);
+      if (!hash) throw encryptionError('component_integrity', `ENCRYPTION_INTEGRITY: stored component ${ref.sha256.slice(0, 12)} is not referenced by any decrypted record; nothing was changed`);
+      plain.put(this.components.read(hash, ref.size));
+    }
+    onStep('components-opened');
+    this.transaction(() => {
+      const db = this.db;
+      for (const row of rows) db.prepare('UPDATE records SET doc = ? WHERE collection = ? AND id = ?').run(row.plain, row.collection, row.id);
+      onStep('in-transaction');
+      for (const row of db.prepare("SELECT key, value FROM state_meta WHERE key != 'schemaVersion'").all()) db.prepare('UPDATE state_meta SET value = ? WHERE key = ?').run(keys.openMeta(row.key, row.value), row.key);
+      for (const row of db.prepare('SELECT scope, request_id, result FROM requests').all()) {
+        const result = row.result === null || row.result === OMITTED_RESULT ? row.result : keys.openResult(row.scope, row.request_id, row.result);
+        db.prepare("UPDATE requests SET fingerprint = 'rekeyed', result = ? WHERE scope = ? AND request_id = ?").run(result, row.scope, row.request_id);
+      }
+      const componentRows = db.prepare('SELECT sha256, collection, record_id, size FROM component_refs').all();
+      db.exec('DELETE FROM component_refs');
+      const insert = db.prepare('INSERT OR IGNORE INTO component_refs(sha256, collection, record_id, size) VALUES (?, ?, ?, ?)');
+      for (const row of componentRows) insert.run(digests.get(row.sha256), row.collection, row.record_id, row.size);
+      db.exec("DELETE FROM store_info WHERE key IN ('encryption', 'searchIndexVersion')");
+    });
+    onStep('committed');
+    this.compact();
+    return refs.map(ref => ref.sha256);
+  }
+  /** Rewrite the database file so freed pages and the WAL hold no earlier content (secure_delete also zeroes freed pages). */
+  compact() {
+    this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    this.db.exec('VACUUM');
+    this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    this.dataVersion = this.readDataVersion();
+  }
+  /**
+   * One resumable step of data-key rotation: re-seal up to `limit` values or
+   * components still under an older data key. Every sealed value names its key
+   * version, so an interrupted job resumes from what remains.
+   */
+  reencryptStep({ limit = 500 } = {}) {
+    this.assertOpen();
+    const keys = this.keys;
+    const current = `${SEALED_PREFIX_LIKE}${keys.currentVersion}.%`;
+    let done = 0;
+    this.transaction(() => {
+      const db = this.db;
+      for (const row of db.prepare('SELECT collection, id, doc FROM records WHERE doc NOT LIKE ? LIMIT ?').all(current, limit)) {
+        db.prepare('UPDATE records SET doc = ? WHERE collection = ? AND id = ?').run(keys.reseal(['record', row.collection, row.id], row.doc, `${row.collection} record`), row.collection, row.id); done++;
+      }
+      if (done < limit) for (const row of db.prepare("SELECT key, value FROM state_meta WHERE key != 'schemaVersion' AND value NOT LIKE ? LIMIT ?").all(current, limit - done)) {
+        db.prepare('UPDATE state_meta SET value = ? WHERE key = ?').run(keys.reseal(['state', row.key], row.value, `setting ${row.key}`), row.key); done++;
+      }
+      if (done < limit) for (const row of db.prepare('SELECT scope, request_id, result FROM requests WHERE result IS NOT NULL AND result != ? AND result NOT LIKE ? LIMIT ?').all(OMITTED_RESULT, current, limit - done)) {
+        db.prepare('UPDATE requests SET result = ? WHERE scope = ? AND request_id = ?').run(keys.reseal(['request', row.scope, row.request_id], row.result, 'stored request result'), row.scope, row.request_id); done++;
+      }
+    });
+    if (done < limit) {
+      for (const row of this.db.prepare('SELECT DISTINCT sha256 FROM component_refs').all()) {
+        if (done >= limit) break;
+        const version = this.components.versionOf(row.sha256);
+        if (version === null || version === keys.currentVersion) continue;
+        if (this.components.reseal(row.sha256)) done++;
+      }
+    }
+    return { reencrypted: done, complete: done < limit && this.remainingUnderOldKeys() === 0 };
+  }
+  remainingUnderOldKeys() {
+    const current = `${SEALED_PREFIX_LIKE}${this.keys.currentVersion}.%`;
+    const count = sql => this.db.prepare(sql).get(current).count;
+    let remaining = count('SELECT count(*) AS count FROM records WHERE doc NOT LIKE ?') + count("SELECT count(*) AS count FROM state_meta WHERE key != 'schemaVersion' AND value NOT LIKE ?")
+      + this.db.prepare('SELECT count(*) AS count FROM requests WHERE result IS NOT NULL AND result != ? AND result NOT LIKE ?').get(OMITTED_RESULT, current).count;
+    for (const row of this.db.prepare("SELECT DISTINCT sha256 FROM component_refs").all()) { const version = this.components.versionOf(row.sha256); if (version !== null && version !== this.keys.currentVersion) remaining++; }
+    return remaining;
+  }
+
   // ---- Search ------------------------------------------------------------------------
   indexRecord(collection, record) {
+    if (!this.searchReady) return;
     const existing = this.db.prepare('SELECT rowid, version_id FROM search_docs WHERE collection = ? AND record_id = ?').all(collection, record.id);
     if (!indexable(collection, record)) { for (const row of existing) this.deleteDocument(row.rowid); return; }
     const documents = [recordDocument(collection, record)];
@@ -544,6 +753,7 @@ export class MetadataStore {
     }
   }
   unindexRecord(collection, id) {
+    if (!this.searchReady) return;
     for (const row of this.db.prepare('SELECT rowid FROM search_docs WHERE collection = ? AND record_id = ?').all(collection, id)) this.deleteDocument(row.rowid);
   }
   deleteDocument(rowid) {
@@ -569,6 +779,7 @@ export class MetadataStore {
     this.assertOpen();
     const compiled = compileQuery(query);
     if (!compiled || typeof workspaceId !== 'string') return [];
+    if (!this.searchReady && this.keys) this.buildMemoryIndex();
     // Rank first; build excerpts only for the returned rows.
     const statement = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, bm25(search_fts, 6.0, 1.0) AS score
       FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid
@@ -595,7 +806,9 @@ export class MetadataStore {
   // ---- Request identity ----------------------------------------------------------------
   request(scope, requestId) {
     this.assertOpen();
-    return this.db.prepare('SELECT command, fingerprint, workspace_id AS workspaceId, result, created_at AS createdAt FROM requests WHERE scope = ? AND request_id = ?').get(scope, requestId);
+    const row = this.db.prepare('SELECT command, fingerprint, workspace_id AS workspaceId, result, created_at AS createdAt FROM requests WHERE scope = ? AND request_id = ?').get(scope, requestId);
+    if (row && this.keys && row.result !== null && row.result !== OMITTED_RESULT) row.result = this.keys.openResult(scope, requestId, row.result);
+    return row;
   }
   pruneRequests(force = false) {
     const now = this.clock();

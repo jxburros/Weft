@@ -6,6 +6,7 @@ import { DatabaseSync } from './sqlite.js';
 import { componentPath } from './components.js';
 import { COMPONENTS_DIR, RECOVERY_DIR, STORE_FILE, STORE_SCHEMA_VERSION } from './store.js';
 import { syncDirectory } from './storage-safety.js';
+import { KEYRING_FILE } from './encryption.js';
 
 export const BACKUPS_DIR = 'backups';
 export const RESTORE_JOURNAL = 'restore-journal.json';
@@ -15,7 +16,9 @@ const COMPONENT_FILE = /^components\/([0-9a-f]{2})\/([0-9a-f]{64})$/;
 const MAX_MANIFEST = 64 * 1024 * 1024;
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
 const manifestSchema = z.strictObject({
-  format: z.literal('weft-backup'), formatVersion: z.literal(1), id: z.string().regex(ID), kind: z.enum(BACKUP_KINDS),
+  format: z.literal('weft-backup'), formatVersion: z.union([z.literal(1), z.literal(2)]), id: z.string().regex(ID), kind: z.enum(BACKUP_KINDS),
+  // Format 2: an encrypted profile's backup. Sealed components keep their keyed names and the keyring travels with the backup.
+  encryption: z.strictObject({ profileId: z.string().uuid(), keyVersions: z.array(z.number().int().min(1)).max(8) }).optional(),
   createdAt: z.string().max(40), note: z.string().max(500), storeSchemaVersion: z.number().int().min(1), dataSchemaVersion: z.number().int().min(1).nullable(),
   counts: z.record(z.string().max(200), z.number().int().min(0)), contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
   files: z.array(z.strictObject({ path: z.string().max(200), size: z.number().int().min(0), sha256: z.string().regex(/^[0-9a-f]{64}$/) })).min(1).max(1000000),
@@ -45,7 +48,8 @@ function inspectDatabase(path) {
     const counts = Object.fromEntries(db.prepare('SELECT collection, count(*) AS count FROM records GROUP BY collection ORDER BY collection').all().map(row => [row.collection, row.count]));
     const refs = db.prepare('SELECT sha256, min(size) AS size FROM component_refs GROUP BY sha256').all();
     const schema = db.prepare("SELECT value FROM state_meta WHERE key = 'schemaVersion'").get();
-    return { integrity, storeSchemaVersion, counts, refs, dataSchemaVersion: schema ? JSON.parse(schema.value) : null };
+    const encryption = db.prepare("SELECT value FROM store_info WHERE key = 'encryption'").get();
+    return { integrity, storeSchemaVersion, counts, refs, dataSchemaVersion: schema ? JSON.parse(schema.value) : null, encryption: encryption ? JSON.parse(encryption.value) : null };
   } finally { db.close(); }
 }
 
@@ -66,10 +70,20 @@ export function createBackup(storage, { kind = 'manual', note = '', clock = Date
     const files = [{ path: STORE_FILE, ...hashFile(database) }];
     for (const ref of inspected.refs) {
       storage.components.copyTo(ref.sha256, join(temp, COMPONENTS_DIR), ref.size);
-      files.push({ path: `${COMPONENTS_DIR}/${ref.sha256.slice(0, 2)}/${ref.sha256}`, size: ref.size, sha256: ref.sha256 });
+      // Encrypted profiles store sealed files under keyed names: the manifest records the file's own digest and size.
+      files.push({ path: `${COMPONENTS_DIR}/${ref.sha256.slice(0, 2)}/${ref.sha256}`, ...hashFile(join(temp, COMPONENTS_DIR, ref.sha256.slice(0, 2), ref.sha256)) });
     }
-    const manifest = { format: 'weft-backup', formatVersion: 1, id, kind, createdAt, note: String(note).slice(0, 500), storeSchemaVersion: inspected.storeSchemaVersion,
-      dataSchemaVersion: inspected.dataSchemaVersion, counts: inspected.counts, contentDigest: storage.contentDigest(), files };
+    let encryption;
+    if (inspected.encryption) {
+      copyFileSync(join(storage.directory, KEYRING_FILE), join(temp, KEYRING_FILE));
+      fsyncPath(join(temp, KEYRING_FILE));
+      const keyring = JSON.parse(readFileSync(join(temp, KEYRING_FILE), 'utf8'));
+      if (keyring.profileId !== inspected.encryption.profileId) throw failure('BACKUP_INVALID', 'The keyring does not match the encrypted database');
+      files.push({ path: KEYRING_FILE, ...hashFile(join(temp, KEYRING_FILE)) });
+      encryption = { profileId: keyring.profileId, keyVersions: keyring.dataKeys.map(entry => entry.version) };
+    }
+    const manifest = { format: 'weft-backup', formatVersion: encryption ? 2 : 1, id, kind, createdAt, note: String(note).slice(0, 500), storeSchemaVersion: inspected.storeSchemaVersion,
+      dataSchemaVersion: inspected.dataSchemaVersion, counts: inspected.counts, contentDigest: storage.contentDigest(), files, ...(encryption && { encryption }) };
     writeFileSync(join(temp, 'manifest.json'), JSON.stringify(manifest, null, 2), { flag: 'wx', mode: 0o600 });
     fsyncPath(join(temp, 'manifest.json'));
     for (const directory of new Set(files.map(file => file.path.split('/').slice(0, -1).join('/')))) fsyncPath(join(temp, directory));
@@ -102,7 +116,8 @@ export function verifyBackup(directory, id) {
   let bytes = 0;
   for (const file of manifest.files) {
     const component = COMPONENT_FILE.exec(file.path);
-    if ((file.path !== STORE_FILE && !component) || (component && (component[2].slice(0, 2) !== component[1] || component[2] !== file.sha256)) || seen.has(file.path)) { problems.push({ path: file.path, problem: 'invalid path' }); continue; }
+    const keyringEntry = file.path === KEYRING_FILE && Boolean(manifest.encryption);
+    if ((file.path !== STORE_FILE && !component && !keyringEntry) || (component && (component[2].slice(0, 2) !== component[1] || (!manifest.encryption && component[2] !== file.sha256))) || seen.has(file.path)) { problems.push({ path: file.path, problem: 'invalid path' }); continue; }
     seen.add(file.path);
     try {
       const stat = regularFile(join(folder, ...file.path.split('/')));
@@ -119,9 +134,15 @@ export function verifyBackup(directory, id) {
       if (inspected.integrity.join() !== 'ok') problems.push({ path: STORE_FILE, problem: 'integrity check failed' });
       if (inspected.storeSchemaVersion > STORE_SCHEMA_VERSION) problems.push({ path: STORE_FILE, problem: 'written by a newer Weft version' });
       for (const ref of inspected.refs) if (!seen.has(`${COMPONENTS_DIR}/${ref.sha256.slice(0, 2)}/${ref.sha256}`)) problems.push({ path: `${COMPONENTS_DIR}/${ref.sha256.slice(0, 2)}/${ref.sha256}`, problem: 'referenced component not in manifest' });
+      if (Boolean(inspected.encryption) !== Boolean(manifest.encryption) || (manifest.encryption && inspected.encryption.profileId !== manifest.encryption.profileId)) problems.push({ path: STORE_FILE, problem: 'encryption state does not match the manifest' });
+      if (manifest.encryption && !seen.has(KEYRING_FILE)) problems.push({ path: KEYRING_FILE, problem: 'missing' });
+      else if (manifest.encryption && !problems.some(item => item.path === KEYRING_FILE)) {
+        try { if (JSON.parse(readFileSync(join(folder, KEYRING_FILE), 'utf8')).profileId !== manifest.encryption.profileId) problems.push({ path: KEYRING_FILE, problem: 'keyring belongs to a different profile' }); }
+        catch { problems.push({ path: KEYRING_FILE, problem: 'unreadable' }); }
+      }
     } catch { problems.push({ path: STORE_FILE, problem: 'database unreadable' }); }
   } else if (!seen.has(STORE_FILE)) problems.push({ path: STORE_FILE, problem: 'missing' });
-  return { id, kind: manifest.kind, createdAt: manifest.createdAt, note: manifest.note, counts: inspected?.counts ?? manifest.counts, bytes,
+  return { id, kind: manifest.kind, createdAt: manifest.createdAt, note: manifest.note, counts: inspected?.counts ?? manifest.counts, bytes, encrypted: Boolean(manifest.encryption),
     files: manifest.files.length, status: problems.length ? 'failed' : 'verified', problems: problems.slice(0, 1000), verifiedAt: new Date().toISOString() };
 }
 
@@ -133,7 +154,7 @@ export function listBackups(directory) {
     if (!ID.test(name)) continue;
     try {
       const { manifest } = readManifest(directory, name);
-      items.push({ id: name, kind: manifest.kind, createdAt: manifest.createdAt, note: manifest.note, counts: manifest.counts, files: manifest.files.length, bytes: manifest.files.reduce((sum, file) => sum + file.size, 0), status: 'unverified' });
+      items.push({ id: name, kind: manifest.kind, createdAt: manifest.createdAt, note: manifest.note, counts: manifest.counts, files: manifest.files.length, bytes: manifest.files.reduce((sum, file) => sum + file.size, 0), encrypted: Boolean(manifest.encryption), status: 'unverified' });
     } catch (error) { items.push({ id: name, kind: name.split('-')[1], createdAt: null, status: 'invalid', problem: error.message }); }
   }
   return items.sort((a, b) => b.id.localeCompare(a.id));
@@ -169,7 +190,7 @@ function writeJournal(directory, journal) {
   renameSync(temp, path);
   syncDirectory(directory);
 }
-const LIVE = [STORE_FILE, `${STORE_FILE}-wal`, `${STORE_FILE}-shm`, `${STORE_FILE}-journal`, COMPONENTS_DIR];
+const LIVE = [STORE_FILE, `${STORE_FILE}-wal`, `${STORE_FILE}-shm`, `${STORE_FILE}-journal`, COMPONENTS_DIR, KEYRING_FILE];
 
 /**
  * Journaled restore. The current database and components are moved, never
@@ -203,7 +224,7 @@ function continueRestore(directory, journal, onStep) {
     mkdirSync(staging, { mode: 0o700 });
     for (const file of manifest.files) {
       const source = join(folder, ...file.path.split('/'));
-      const target = file.path === STORE_FILE ? join(staging, STORE_FILE) : componentPath(join(staging, COMPONENTS_DIR), file.sha256);
+      const target = file.path === STORE_FILE || file.path === KEYRING_FILE ? join(staging, file.path) : componentPath(join(staging, COMPONENTS_DIR), file.path.split('/')[2]);
       mkdirSync(join(target, '..'), { recursive: true, mode: 0o700 });
       regularFile(source);
       copyFileSync(source, target, constants.COPYFILE_FICLONE);
@@ -215,7 +236,7 @@ function continueRestore(directory, journal, onStep) {
     writeJournal(directory, { ...journal, state: 'swapping' }); journal.state = 'swapping';
   }
   if (journal.state === 'swapping') {
-    for (const name of [COMPONENTS_DIR, STORE_FILE]) {
+    for (const name of [COMPONENTS_DIR, KEYRING_FILE, STORE_FILE]) {
       if (!existsSync(join(staging, name))) continue;
       if (existsSync(join(directory, name))) renameSync(join(directory, name), join(recoveryDir, `${name}.unexpected-${randomUUID().slice(0, 8)}`));
       renameSync(join(staging, name), join(directory, name));

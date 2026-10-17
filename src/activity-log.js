@@ -14,7 +14,7 @@ export const ACTIVITY_OUTCOMES = Object.freeze(['attempted', 'completed', 'faile
 export const DEFAULT_RETENTION = Object.freeze({ maxAgeDays: 90, maxEntries: 20000 });
 const GENESIS = '0'.repeat(64);
 const idPattern = /^[A-Za-z][A-Za-z0-9]{0,15}[_-][A-Za-z0-9_-]{6,80}$/;
-const secretKey = { test: name => exactSecretKey.test(name) || /token|secret|passw|credential|authorization|cookie|api.?key|private.?key|signature/i.test(name) };
+const secretKey = { test: name => exactSecretKey.test(name) || /token|secret|passw|passphrase|recovery.?key|credential|authorization|cookie|api.?key|private.?key|signature/i.test(name) };
 const digest = value => createHash('sha256').update(value).digest('hex');
 const short = (value, max = 300) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
 
@@ -40,7 +40,8 @@ export function summarizeArgs(args) {
     if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) summary[key] = value;
     else if (typeof value === 'string') {
       if (/url|endpoint|href|source/i.test(key) || /^https?:\/\//i.test(value)) summary[key] = minimizeUrl(value);
-      else if (idPattern.test(value) || /^[a-z][a-z0-9_.-]{0,39}$/i.test(value) && /(^id$|Id$|status|kind|category|role|mode|level|topic|provider|action|type|scope|behavior)/.test(key)) summary[key] = value.slice(0, 100);
+      // Identifier-shaped values are kept only in identifier-named fields: free text such as a one-word note never is.
+      else if ((idPattern.test(value) && /(^id$|Id$|^name$|^command$|^format$|^extractor$)/.test(key)) || /^[a-z][a-z0-9_.-]{0,39}$/i.test(value) && /(^id$|Id$|status|kind|category|role|mode|level|topic|provider|action|type|scope|behavior|^method$|^target$)/.test(key)) summary[key] = value.slice(0, 100);
       else summary[key] = { chars: value.length };
     } else if (Array.isArray(value)) summary[key] = { items: value.length };
     else if (value && typeof value === 'object') summary[key] = { fields: Object.keys(value).filter(name => !secretKey.test(name)).slice(0, 20) };

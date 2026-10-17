@@ -47,6 +47,7 @@ export const commandDefinitions = {
   'workspaces.duplicate': ['Copy project records; exclude sessions and credentials', { id, name: title.optional() }],
   'workspaces.delete': ['Permanently delete a workspace and its saved records', { id }],
   'workspaces.export': ['Export project records with optional exact-term residue scan and metadata review; images are unverifiable', { id, sensitiveTerms: z.array(z.string().min(1).max(200)).max(100).optional(), captures: capturePolicy.optional(),
+    acknowledgePlaintext: z.boolean().optional().describe('Required when the profile is encrypted: the person confirmed that this export is written as plaintext.'),
     reviewMetadata: z.boolean().optional().describe('Add a review of URL query/path metadata and detection-assistance matches in exported fields.') }],
   'workspaces.import': ['Import a versioned project export as a new workspace', { data: z.unknown() }],
   'settings.get': ['Get non-secret application preferences', {}],
@@ -114,7 +115,8 @@ for (const name of ['history.list', 'bookmarks.list', 'workspaces.list', 'search
 const packageName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/, 'Use 1-100 letters, digits, dots, dashes or underscores; no paths').refine(value => !value.includes('..'), 'Package names cannot contain ..');
 const backupId = z.string().regex(/^\d{8}T\d{6}Z-(?:manual|automatic)-[0-9a-f]{8}$/, 'Expected a backup identifier from backups.list');
 Object.assign(commandDefinitions, {
-  'workspaces.exportPackage': ['Write a large-project package folder (records, exact components, manifest) under the profile transfers folder', { id, name: packageName, sensitiveTerms: z.array(z.string().min(1).max(200)).max(100).optional(), captures: capturePolicy.optional() }],
+  'workspaces.exportPackage': ['Write a large-project package folder (records, exact components, manifest) under the profile transfers folder', { id, name: packageName, sensitiveTerms: z.array(z.string().min(1).max(200)).max(100).optional(), captures: capturePolicy.optional(),
+    acknowledgePlaintext: z.boolean().optional().describe('Required when the profile is encrypted: the person confirmed that this export is written as plaintext.') }],
   'workspaces.importPackage': ['Verify and import a package folder from the profile transfers folder as a new workspace', { name: packageName }],
   'batch.execute': ['Apply up to 100 record commands all-or-nothing in one transaction; page, browser and workspace-lifecycle commands are rejected', { commands: z.array(z.strictObject({ command: z.string().min(1).max(100), args: z.record(z.string(), z.unknown()).default({}) })).min(1).max(100) }],
   'backups.create': ['Create a verified local backup of the database and stored components', { note: z.string().max(500).optional() }],

@@ -7,7 +7,7 @@ import { GUIDANCE, getGuidance, guidanceTopics } from './guidance.js';
 
 const groups = {
   tabs: ['tabs'], page: ['page'],
-  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'sources', 'services'],
+  workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'sources', 'services', 'encryption'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch', 'citations', 'freshness', 'conflicts', 'collections'],
   artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials'], models: ['models', 'chat'],
 };

@@ -73,6 +73,7 @@ if (process.argv.includes("--visual-child")) {
       if(name==="tabs.list") return tabs;
       if(name==="models.list") return models;
       if(name==="browser.info") return {automation:{stopped}};
+      if(name==="encryption.status") return {enabled:false,locked:false,lockReason:null,unlockMode:null,keyVersion:null,rotation:null,methods:{os:{configured:false,available:true,backend:"gnome_libsecret",protects:true,reason:null},recovery:{configured:false},passphrase:{configured:false}},coverage:{encrypted:[],notEncrypted:[],threatModel:""}};
       if(name==="browser.resumeAutomation") { stopped=false; return {}; }
       if(name==="conversations.create") { const c={id:"chat",workspaceId:"fixture",title:args.title,messages:[]};state.conversations.push(c);return c; }
       if(name==="chat.preview") return {disclosure:{endpoint:"https://model.example/v1",model:"fixture",locality:"remote",requiresAcknowledgement:true,items:[{kind:"message",title:"Your request",bytes:10}],tools:[],totalBytes:10}};

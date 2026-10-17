@@ -53,21 +53,30 @@ export class VectorIndex {
     this.configs = new Map();
     this.cache = new Map();
   }
-  ensure(getInfo, setInfo) {
-    const exists = this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('vector_config', 'vector_chunks', 'vector_queue')").get().count === 3;
-    if (!exists || getInfo('vectorIndexVersion') !== String(VECTOR_INDEX_VERSION)) {
-      this.db.exec(`DROP TABLE IF EXISTS vector_chunks; DROP TABLE IF EXISTS vector_queue; DROP TABLE IF EXISTS vector_config;
-        CREATE TABLE vector_config(workspace_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, model_id TEXT, provider TEXT, endpoint TEXT, embedding_model TEXT, model_key TEXT,
-          locality TEXT, egress_acknowledged INTEGER NOT NULL DEFAULT 0, min_similarity REAL NOT NULL, dims INTEGER, updated_at TEXT NOT NULL, last_error TEXT);
-        CREATE TABLE vector_chunks(rowid INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', chunk INTEGER NOT NULL,
-          chunk_start INTEGER NOT NULL, chunk_end INTEGER NOT NULL, text_sha256 TEXT NOT NULL, model_key TEXT NOT NULL, dims INTEGER NOT NULL, vector BLOB NOT NULL, UNIQUE(collection, record_id, version_id, chunk));
-        CREATE INDEX vector_chunks_workspace ON vector_chunks(workspace_id, model_key);
-        CREATE TABLE vector_queue(collection TEXT NOT NULL, record_id TEXT NOT NULL, workspace_id TEXT NOT NULL, enqueued_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
-          PRIMARY KEY(collection, record_id)) WITHOUT ROWID;
-        CREATE INDEX vector_queue_workspace ON vector_queue(workspace_id);`);
-      setInfo('vectorIndexVersion', String(VECTOR_INDEX_VERSION));
-    }
+  /**
+   * Create or upgrade the tables. With `memory` (encrypted profiles, ADR 014) vectors and the queue
+   * live only in the attached in-memory database: any on-disk copy is dropped, and every record of a
+   * workspace with embeddings enabled is queued again so vectors are rebuilt after unlock. The
+   * per-workspace configuration (connection, model name, locality) stays on disk like other model
+   * connection settings.
+   */
+  ensure(getInfo, setInfo, { memory = false, now = Date.now() } = {}) {
+    const current = getInfo('vectorIndexVersion') === String(VECTOR_INDEX_VERSION);
+    if (!current) this.db.exec('DROP TABLE IF EXISTS main.vector_chunks; DROP TABLE IF EXISTS main.vector_queue; DROP TABLE IF EXISTS main.vector_config;');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS main.vector_config(workspace_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, model_id TEXT, provider TEXT, endpoint TEXT, embedding_model TEXT, model_key TEXT,
+      locality TEXT, egress_acknowledged INTEGER NOT NULL DEFAULT 0, min_similarity REAL NOT NULL, dims INTEGER, updated_at TEXT NOT NULL, last_error TEXT);`);
+    if (memory) this.db.exec('DROP TABLE IF EXISTS main.vector_chunks; DROP TABLE IF EXISTS main.vector_queue;');
+    const schema = memory ? 'mem' : 'main';
+    this.db.exec(`CREATE TABLE IF NOT EXISTS ${schema}.vector_chunks(rowid INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', chunk INTEGER NOT NULL,
+        chunk_start INTEGER NOT NULL, chunk_end INTEGER NOT NULL, text_sha256 TEXT NOT NULL, model_key TEXT NOT NULL, dims INTEGER NOT NULL, vector BLOB NOT NULL, UNIQUE(collection, record_id, version_id, chunk));
+      CREATE INDEX IF NOT EXISTS ${schema}.vector_chunks_workspace ON vector_chunks(workspace_id, model_key);
+      CREATE TABLE IF NOT EXISTS ${schema}.vector_queue(collection TEXT NOT NULL, record_id TEXT NOT NULL, workspace_id TEXT NOT NULL, enqueued_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+        PRIMARY KEY(collection, record_id)) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS ${schema}.vector_queue_workspace ON vector_queue(workspace_id);`);
+    if (!current) setInfo('vectorIndexVersion', String(VECTOR_INDEX_VERSION));
+    this.memory = memory;
     this.loadConfigs();
+    if (memory) for (const [workspaceId, config] of this.configs) if (config.enabled === 1) this.requeueWorkspace(workspaceId, now);
   }
   loadConfigs() {
     this.configs = new Map(this.db.prepare('SELECT * FROM vector_config').all().map(row => [row.workspace_id, row]));
@@ -89,15 +98,16 @@ export class VectorIndex {
     if (collection === 'workspaces') { this.db.prepare('DELETE FROM vector_config WHERE workspace_id = ?').run(id); this.configs.delete(id); }
   }
   /**
-   * Called inside the commit transaction after the full-text index was updated: drop vectors of any
-   * capture version that is no longer indexed (restricted or purged originals, #17), whether or not
-   * embeddings are still enabled, so derived vectors never outlive the text they were made from.
+   * Called inside the commit transaction: drop vectors of capture versions that are restricted,
+   * purged or gone (#17), whether or not embeddings are still enabled, so derived vectors never
+   * outlive the text they were made from.
    */
-  pruneUnindexed(collection, recordId) {
-    const removed = this.db.prepare(`DELETE FROM vector_chunks WHERE collection = ? AND record_id = ? AND version_id <> ''
-      AND version_id NOT IN (SELECT version_id FROM search_docs WHERE collection = ? AND record_id = ?)`).run(collection, recordId, collection, recordId);
-    if (removed.changes) this.cache.clear();
-    return removed.changes;
+  pruneWithheld(collection, record) {
+    const keep = new Set((Array.isArray(record?.versions) ? record.versions : []).filter(version => version && typeof version.id === 'string' && version.access !== 'restricted' && !version.purged).map(version => version.id));
+    const stale = this.db.prepare("SELECT DISTINCT version_id FROM vector_chunks WHERE collection = ? AND record_id = ? AND version_id <> ''").all(collection, record.id).map(row => row.version_id).filter(id => !keep.has(id));
+    for (const versionId of stale) this.db.prepare('DELETE FROM vector_chunks WHERE collection = ? AND record_id = ? AND version_id = ?').run(collection, record.id, versionId);
+    if (stale.length) this.cache.clear();
+    return stale.length;
   }
   setConfig(row) {
     this.db.prepare(`INSERT INTO vector_config(workspace_id, enabled, model_id, provider, endpoint, embedding_model, model_key, locality, egress_acknowledged, min_similarity, dims, updated_at, last_error)
@@ -122,7 +132,9 @@ export class VectorIndex {
   }
   /** Queue every indexed record of the workspace; unchanged chunks are reused by text digest. */
   requeueWorkspace(workspaceId, now) {
-    this.db.prepare(`INSERT INTO vector_queue(collection, record_id, workspace_id, enqueued_at) SELECT DISTINCT collection, record_id, workspace_id, ? FROM search_docs WHERE workspace_id = ?
+    // From the record table, not the search index: an encrypted profile builds its in-memory index lazily. Records that
+    // have nothing to embed are dropped from the queue when processed.
+    this.db.prepare(`INSERT INTO vector_queue(collection, record_id, workspace_id, enqueued_at) SELECT collection, id, workspace_id, ? FROM main.records WHERE workspace_id = ? AND collection <> 'workspaces'
       ON CONFLICT(collection, record_id) DO UPDATE SET enqueued_at = excluded.enqueued_at, attempts = 0, last_error = NULL`).run(now, workspaceId);
     this.cache.delete(workspaceId);
   }

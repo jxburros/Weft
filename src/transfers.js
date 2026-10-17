@@ -70,8 +70,13 @@ export class Transfers {
   discard(key) {
     const session = this.sessions.get(key);
     this.sessions.delete(key);
-    if (session) rmSync(session.file, { force: true });
+    if (session?.buffer) session.buffer.fill(0);
+    if (session?.file) rmSync(session.file, { force: true });
   }
+  /** Drop every unfinished upload (an encrypted profile is locking): in-memory parts are zeroed. */
+  discardAll() { for (const key of [...this.sessions.keys()]) this.discard(key); this.cached = null; }
+  /** Encrypted profiles (ADR 014) keep material and artifact upload parts in memory only; package files are plaintext exports by nature. */
+  inMemory(purpose) { return purpose !== 'package' && Boolean(this.workspace.storage?.encrypted); }
   session(transferId, context) {
     this.expire();
     const session = this.sessions.get(transferId);
@@ -81,7 +86,7 @@ export class Transfers {
     return session;
   }
   describe(session) {
-    const { file, owner, ...rest } = session;
+    const { file, owner, buffer, ...rest } = session;
     return { ...rest, createdAt: new Date(session.createdAt).toISOString(), expiresAt: new Date(session.touchedAt + TRANSFER_LIMITS.idleMs).toISOString(), chunkBytes: CHUNK_BYTES };
   }
 
@@ -115,13 +120,17 @@ export class Transfers {
     if (open.filter(session => session.owner === owner).length >= TRANSFER_LIMITS.maxOpenPerCaller) throw fail('unavailable', `At most ${TRANSFER_LIMITS.maxOpenPerCaller} unfinished uploads per caller; commit or abort one first`);
     if (open.reduce((sum, session) => sum + session.size, 0) + args.size > TRANSFER_LIMITS.maxOpenBytes) throw fail('unavailable', 'Too many bytes are being uploaded; try again after current uploads finish');
     const transferId = `xfer_${randomUUID()}`;
-    const directory = join(this.root, UPLOADS);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const file = join(directory, `${transferId}.part`);
-    closeSync(openSync(file, 'wx', 0o600));
+    let file = null, buffer = null;
+    if (this.inMemory(args.purpose)) buffer = Buffer.alloc(args.size);
+    else {
+      const directory = join(this.root, UPLOADS);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      file = join(directory, `${transferId}.part`);
+      closeSync(openSync(file, 'wx', 0o600));
+    }
     const now = this.clock();
     const session = { transferId, owner, workspaceId, purpose: args.purpose, size: args.size, sha256: args.sha256, received: 0, mimeType: args.mimeType ?? null, filename: args.filename ?? null,
-      packageName: args.packageName ?? null, path: args.path ?? null, createdAt: now, touchedAt: now, file };
+      packageName: args.packageName ?? null, path: args.path ?? null, createdAt: now, touchedAt: now, file, buffer };
     this.sessions.set(transferId, session);
     return this.describe(session);
   }
@@ -134,16 +143,22 @@ export class Transfers {
     // A retried chunk that was already written is accepted only if it is byte-identical.
     if (args.offset + bytes.length <= session.received) {
       const existing = Buffer.alloc(bytes.length);
-      const fd = openSync(session.file, 'r');
-      try { readSync(fd, existing, 0, bytes.length, args.offset); } finally { closeSync(fd); }
+      if (session.buffer) session.buffer.copy(existing, 0, args.offset, args.offset + bytes.length);
+      else {
+        const fd = openSync(session.file, 'r');
+        try { readSync(fd, existing, 0, bytes.length, args.offset); } finally { closeSync(fd); }
+      }
       if (!existing.equals(bytes)) throw fail('stale_state', 'A different chunk was already received at this offset', { details: { reason: 'offset_conflict' } });
       session.touchedAt = this.clock();
       return { ...this.describe(session), duplicate: true };
     }
     if (args.offset !== session.received) throw fail('stale_state', `Expected offset ${session.received}; resume from there`, { details: { reason: 'offset_mismatch' } });
     if (session.received + bytes.length > session.size) throw fail('invalid_arguments', 'Chunk extends past the declared size', { field: 'dataBase64' });
-    const fd = openSync(session.file, 'r+');
-    try { writeSync(fd, bytes, 0, bytes.length, args.offset); fsyncSync(fd); } finally { closeSync(fd); }
+    if (session.buffer) bytes.copy(session.buffer, args.offset);
+    else {
+      const fd = openSync(session.file, 'r+');
+      try { writeSync(fd, bytes, 0, bytes.length, args.offset); fsyncSync(fd); } finally { closeSync(fd); }
+    }
     session.received += bytes.length;
     session.touchedAt = this.clock();
     return this.describe(session);
@@ -151,7 +166,7 @@ export class Transfers {
 
   verified(session) {
     if (session.received !== session.size) throw fail('invalid_arguments', `Upload incomplete: ${session.received} of ${session.size} bytes received`, { field: 'transferId', notStarted: true });
-    const bytes = readFileSync(session.file);
+    const bytes = session.buffer ? Buffer.from(session.buffer) : readFileSync(session.file);
     if (bytes.length !== session.size || sha(bytes) !== session.sha256) throw fail('component_integrity', 'Uploaded bytes do not match the declared SHA-256; nothing was created. Abort and upload again.', { notStarted: true });
     return bytes;
   }

@@ -148,7 +148,8 @@ export class Retrieval {
   }
   async drainOnce() {
     const storage = this.workspace.storage;
-    if (this.closed || !storage?.db || !this.vectors) return;
+    // A locked encrypted profile has no decrypted text to embed and no open store (ADR 014).
+    if (this.closed || this.workspace.locked || !storage?.db || !this.vectors) return;
     for (let rounds = 0; rounds < 1000; rounds++) {
       const enabled = [...this.vectors.configs.values()].filter(row => row.enabled === 1).map(row => row.workspace_id);
       const queue = this.vectors.queued(8, enabled);

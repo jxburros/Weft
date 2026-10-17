@@ -357,6 +357,36 @@ revoking and granting credentials are human-only. The broker has not had an
 independent security review; see
 [ADR-017](decisions/017-credential-broker-and-protected-login.md) for its limits.
 
+## Encrypted workspaces and the locked state
+
+A person can turn on workspace encryption (Settings > Encryption; see
+[ADR 014](decisions/014-workspace-encryption-and-key-management.md)). While the
+encrypted data is locked — after a person locks it, or at startup when the
+profile asks for a passphrase or recovery key — every command fails before it
+starts with code `locked` (HTTP 423, CLI exit 9, MCP `isError` with the same
+outcome) and `error.details.reason` (`locked`, `unlock_required` or
+`os_key_unavailable`). Nothing ran; do not retry in a loop or try another
+interface. Report it and wait for the person. `encryption.status` (MCP
+`weft_workspace`) still answers and shows whether encryption is on, whether it
+is locked and how it unlocks, without any secret. The event stream publishes
+`encryption` events with status `locked` or `unlocked`. Unlocking, locking,
+enabling, rotating keys, changing unlock options and turning encryption off are
+human-only administration (`permission_required` with reason `human_only`).
+
+```sh
+weft encryption.status
+```
+
+Exports from an encrypted profile are plaintext and are refused unless the
+person confirmed that (`acknowledgePlaintext: true` on `workspaces.export`,
+`workspaces.exportPackage` and `workspaces.exportAs`, all human-only).
+Locking also discards unfinished upload sessions and the retained event log
+(a replay from before the lock reports the gap reason `locked`); embedding
+vectors of an encrypted profile are rebuilt in memory after unlock, so search
+coverage may report pending documents for a while. Saved sign-ins use their own
+vault and key (ADR 017), but `credentials.fill` and every other command also
+answer `locked` while the workspace data is locked.
+
 
 ## Safe retries, atomic batches, previews and search
 

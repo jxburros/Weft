@@ -75,6 +75,9 @@ add('administration', 'artifacts.setAccess artifacts.purgeContent artifacts.prev
 add('local_read', 'weft.capabilities events.list search.status transfers.read transfers.list conversations.messages artifacts.versions');
 add('local_write', 'search.reindex transfers.begin transfers.append transfers.commit transfers.abort');
 add('administration', 'search.configureEmbeddings');
+// Workspace encryption (#26, ADR 014): status is a metadata read that works while locked; the lifecycle is human-only.
+add('local_read', 'encryption.status');
+add('administration', 'encryption.enable encryption.lock encryption.unlock encryption.configure encryption.rotate encryption.checkRecoveryKey encryption.disable');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -143,6 +146,7 @@ const dataOverrides = {
   'artifacts.readOriginal': ['workspace_records', 'restricted_original'],
   'weft.capabilities': [], 'search.status': [], 'events.list': ['activity'], 'transfers.list': [], 'conversations.messages': ['conversations'],
   'transfers.read': ['workspace_records', 'page_capture'],
+  'encryption.status': [],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];
