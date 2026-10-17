@@ -43,6 +43,7 @@ if (process.argv.includes("--visual-child")) {
     return {ratio:changed/(pixels.length/4),diff:nativeImage.createFromBitmap(diff,actual.getSize())};
   };
   const capture = async name => {
+    await until("innerWidth === 1200 && innerHeight === 800");
     await run('document.fonts.ready');
     await until(`document.getElementById("address").value === ${JSON.stringify(name.endsWith("-blocked") ? "https://restricted.example/" : "")}`);
     await run('document.activeElement?.blur(); document.getElementById("toast").hidden = true; document.getElementById("status").textContent = "Ready"');
@@ -84,8 +85,11 @@ if (process.argv.includes("--visual-child")) {
     };
     ipcMain.handle("weft:execute", (_event, name, args) => ({ result: fixtureExecute(name, args) }));
     window=new BrowserWindow({width:1200,height:800,useContentSize:true,show:true,webPreferences:{preload:join(root,"src/preload.cjs"),contextIsolation:true,sandbox:true}});
-    window.setMenuBarVisibility(false);
+    // Remove platform menu geometry before fixing the renderer viewport.
+    window.removeMenu();
+    window.setContentSize(1200,800);
     await window.loadFile(join(root,"src/gui.html"));
+    await until("innerWidth === 1200 && innerHeight === 800");
     await until('document.getElementById("content").textContent.includes("Make room")');
     // Native modal focus, accessible name, Escape, and restoration are exercised in Chromium.
     await run('document.getElementById("search-button").focus()');
