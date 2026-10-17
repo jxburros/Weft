@@ -54,6 +54,7 @@ button:disabled {
 }
 button.primary:disabled,
 button.secondary:disabled {
+  color: var(--disabled-ink);
   background: var(--disabled-surface);
   border: 1px dashed var(--disabled-ink);
   filter: none;

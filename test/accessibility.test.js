@@ -81,6 +81,10 @@ if (process.argv.includes("--a11y-child")) {
     await until('document.getElementById("content")?.textContent.includes("Pick up where you left off")', "overview");
     window.focus();
     window.webContents.focus();
+    // Other windows on a shared test display can take OS focus; emulate a focused page so
+    // :focus-visible and focus behaviour match a person using this window.
+    await window.webContents.debugger.attach("1.3");
+    await window.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
     await run(readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8"));
     await run(`(${installChecks.toString()})()`);
     const report = { views: [], keyboard: [], restoration: [], zoom: [], motion: null, liveRegions: null, boundary: null, ownership: null, split: null };
@@ -364,7 +368,6 @@ if (process.argv.includes("--a11y-child")) {
     window.setContentSize(1480, 960);
 
     // ---- Reduced motion: no animation or transition runs, and state stays in text.
-    await window.webContents.debugger.attach("1.3");
     await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
     await section("tabs");
     await settle();
@@ -372,7 +375,6 @@ if (process.argv.includes("--a11y-child")) {
     report.motion = { reducedMotionRunning: moving, handoffDuration: await run('getComputedStyle(document.documentElement).getPropertyValue("--motion-handoff").trim()') };
     if (moving.length) failures.push(`reduced motion: still animating ${moving.join("; ")}`);
     await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] });
-    window.webContents.debugger.detach();
 
     // ---- Lock screen: the only operable surface, audited in both themes, and focus returns after unlock.
     await execute("encryption.enable", { acknowledgeKeyLoss: true, unlockMode: "manual", passphrase: "a11y lock passphrase" });
