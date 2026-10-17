@@ -37,6 +37,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         if (['models.save', 'models.delete'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });
         return providers.execute(command, args, context);
       }
+      if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);
       if (Object.hasOwn(workspaceCommands, command)) return workspace.execute(command, args, context);
       if (command === 'browser.emergencyStop' && context.actor === 'human') {
         admission.stop();

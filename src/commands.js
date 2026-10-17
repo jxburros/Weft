@@ -5,11 +5,17 @@ import { commandDefinitions as workspaceDefinitions } from './workspace-commands
 import { providerCommandDefinitions } from './provider-commands.js';
 import { clientCommandDefinitions } from './clients.js';
 import { listCommandDefinitions } from './community-lists.js';
+import { handoffCommandDefinitions } from './handoff-commands.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
 const expectedVersion = z.number().int().positive().optional();
 const page = { tabId, workspaceId, expectedVersion };
+const ref = z.string().regex(/^f\d{1,6}e\d{1,9}$/).describe('Element ref from your latest page.snapshot (frame-scoped, for example f0e12).');
+const snapshotId = z.string().max(64).describe('Snapshot that supplied the ref; must be your latest.');
+const observationId = z.string().max(64).describe('snapshotId or captureId whose viewport geometry the coordinates were taken from.');
+const key = z.string().regex(/^(?:[\x20-\x7e]|Enter|Tab|Backspace|Escape|Space|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|F(?:[1-9]|1[0-2]))$/)
+  .describe('One printable character or a named key such as Enter, Tab, Escape or Down.');
 const url = z.string().max(16384).refine(value => {
   try {
     const parsed = new URL(value);
@@ -36,8 +42,15 @@ const definitions = {
   'tabs.claim': ['Claim tab input control', { tabId: tabId.unwrap(), controller: z.string().min(1).max(100).optional(), expectedVersion }],
   'tabs.takeover': ['Human takes control and revokes old versions', { tabId: tabId.unwrap() }],
   'tabs.release': ['Release tab input control', { tabId: tabId.unwrap() }],
+  'tabs.setControlMode': ['Human sets the tab control mode: you-drive, assist (agent observes) or agent-drives', { tabId: tabId.unwrap(),
+    mode: z.enum(['you-drive', 'assist', 'agent-drives']).describe('you-drive: only the person; assist: an agent may observe and propose; agent-drives: an agent may hold the input lease.'),
+    agent: z.string().min(1).max(200).optional().describe('Actor identity to assist or drive; omit to let any agent claim.'),
+    allowRawInput: z.boolean().optional().describe('agent-drives only: permit coordinate and keyboard input.'), expectedVersion }],
   'page.inspect': ['Inspect tab state and navigation version', page],
   'page.readable': ['Read text and links from the current page', page],
+  'page.snapshot': ['Read a semantic/accessibility snapshot with frame-scoped element refs and coverage report', { ...page,
+    maxNodes: z.number().int().min(1).max(3000).optional().describe('Maximum nodes to return (default 400); the result reports truncation.'),
+    includeBoxes: z.boolean().optional().describe('Include viewport CSS-pixel boxes (default true).') }],
   'page.find': ['Find text in page; empty text clears results', { ...page, text: z.string().max(4096), forward: z.boolean().optional(), findNext: z.boolean().optional() }],
   'page.zoom': ['Set page zoom factor', { ...page, factor: z.number().min(0.25).max(5) }],
   'storage.info': ['Describe storage isolation and supported controls', { workspaceId }],
@@ -53,11 +66,23 @@ const definitions = {
   'page.evaluate': ['Evaluate JavaScript in the page (trusted automation only)', {
     ...page, expression: z.string().min(1).max(262144),
   }],
-  'page.click': ['Click a CSS selector', { ...page, selector: z.string().min(1).max(16384) }],
-  'page.fill': ['Fill an input and dispatch input/change events', {
-    ...page, selector: z.string().min(1).max(16384), value: z.string().max(262144),
+  'page.click': ['Click an element by snapshot ref or CSS selector', { ...page, selector: z.string().min(1).max(16384).optional().describe('CSS selector; supply this or ref.'), ref: ref.optional(), snapshotId: snapshotId.optional() }],
+  'page.fill': ['Fill an input by snapshot ref or CSS selector and dispatch input/change events', {
+    ...page, selector: z.string().min(1).max(16384).optional().describe('CSS selector; supply this or ref.'), ref: ref.optional(), snapshotId: snapshotId.optional(), value: z.string().max(262144),
   }],
-  'page.screenshot': ['Capture a PNG as base64', { ...page, fullPage: z.boolean().optional() }],
+  'page.clickAt': ['Click viewport coordinates (agents need raw input permission and a current observation)', { ...page,
+    x: z.number().min(0).max(20000).describe('Viewport X in CSS pixels.'), y: z.number().min(0).max(20000).describe('Viewport Y in CSS pixels.'),
+    observationId: observationId.optional(), button: z.enum(['left', 'right', 'middle']).optional().describe('Mouse button (default left).'),
+    clickCount: z.number().int().min(1).max(3).optional().describe('Click count (default 1).') }],
+  'page.press': ['Press one key in the focused element (agents need raw input permission)', { ...page, key, observationId: observationId.optional() }],
+  'page.screenshot': ['Capture a viewport, full-page, element or region PNG with capture metadata', { ...page, fullPage: z.boolean().optional().describe('Capture the whole document.'),
+    ref: ref.optional(), snapshotId: snapshotId.optional(),
+    rect: z.strictObject({ x: z.number().min(-20000).max(20000).describe('Viewport X in CSS pixels.'), y: z.number().min(-20000).max(20000).describe('Viewport Y in CSS pixels.'),
+      width: z.number().min(1).max(20000).describe('Width in CSS pixels.'), height: z.number().min(1).max(20000).describe('Height in CSS pixels.') }).optional().describe('Viewport-relative region.'),
+    scale: z.number().min(0.1).max(2).optional().describe('Resolution multiplier (default 1).'),
+    maxWidth: z.number().int().min(16).max(8192).optional().describe('Maximum image width in pixels (default 4096); larger regions are cropped.'),
+    maxHeight: z.number().int().min(16).max(8192).optional().describe('Maximum image height in pixels (default 4096); larger regions are cropped.'),
+    observationId: observationId.optional() }],
   'page.pdf': ['Print a page to PDF as base64', page],
   'cookies.list': ['List cookies in a workspace session (human administration)', { url: cookieUrl.optional(), workspaceId }],
   'cookies.set': ['Set a cookie in a workspace session (human administration)', { workspaceId,
@@ -72,15 +97,16 @@ const definitions = {
   ...providerCommandDefinitions,
   ...clientCommandDefinitions,
   ...listCommandDefinitions,
+  ...handoffCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
 
-const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'page.allowOnce',
+const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'tabs.setControlMode', 'page.allowOnce',
   'cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear', 'history.clear', 'settings.update',
   'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete',
   'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback']);
-const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.title', 'page.content',
+const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export']);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
@@ -152,10 +178,10 @@ export function toCommandError(error, commandName, input) {
   }
   const message = error?.message || 'Command failed';
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
-    unknown_command: 400, tab_busy: 409, action_interrupted: 409, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
+    unknown_command: 400, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
     timeout: 504, not_found: 404, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
     command_failed: 422, transport_error: 503 };
-  let code = Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
+  let code = error?.code === 'SITE_BLOCKED' ? 'site_blocked' : Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
     if (/stale|STALE_STATE/i.test(message)) code = 'stale_state';
     else if (/tab control|tab lease|Take over this tab/i.test(message)) code = 'lease_conflict';
@@ -173,6 +199,12 @@ export function toCommandError(error, commandName, input) {
       .filter(tab => Number.isSafeInteger(tab?.tabId) && tab.tabId > 0 && workspaceId(tab.workspaceId)).slice(0, 1000)
       .map(({ tabId, workspaceId }) => ({ tabId, workspaceId }));
   }
+  // Fixed vocabularies only: page-sourced or caller-supplied values never reach error details.
+  const word = value => typeof value === 'string' && /^[a-z_]{1,40}$/.test(value);
+  if (code === 'stale_state' && word(error.details?.reason)) details.reason = error.details.reason;
+  if (code === 'stale_state' && Array.isArray(error.details?.changed)) details.changed = error.details.changed.filter(item => ['url', 'width', 'height', 'scrollX', 'scrollY', 'devicePixelRatio'].includes(item));
+  if (code === 'action_interrupted' && error.details) details.interrupted = { command: Object.hasOwn(commands, error.details.command) ? error.details.command : null, cancellable: false };
+  if (code === 'tab_busy' && error.details) details.queued = Number.isSafeInteger(error.details.queued) ? error.details.queued : 0;
   if (code === 'emergency_stop' && typeof error.details?.stoppedAt === 'string' && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(error.details.stoppedAt)) details.stoppedAt = error.details.stoppedAt;
   return { code, message, field: null, schema: schemaHint(commandName), httpStatus: known[code], ...(Object.keys(details).length && { details }) };
 }
@@ -202,7 +234,7 @@ export function normalizeCommand(name, args = {}) {
   return { command, args: output, normalized };
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
-  stale_state: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, permission_required: 4, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
+  stale_state: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
   emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;

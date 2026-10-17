@@ -3,10 +3,13 @@ export const ACTION_CLASSES = Object.freeze(['local_read', 'external_read', 'loc
 const classifications = new Map();
 function add(actionClass, names) { for (const name of names.split(/\s+/).filter(Boolean)) classifications.set(name, actionClass); }
 add('local_read', `guide.get browser.info tabs.list page.inspect storage.info downloads.list history.list bookmarks.list workspace.snapshot workspaces.list workspaces.get workspaces.export settings.get activity.list search.query artifacts.list artifacts.get models.list`);
-add('external_read', `page.readable page.title page.content page.screenshot page.pdf`);
+add('external_read', `page.readable page.snapshot page.title page.content page.screenshot page.pdf`);
 add('local_write', `tabs.activate tabs.close tabs.pin tabs.claim tabs.release page.find page.zoom page.stop downloads.cancel bookmarks.create bookmarks.delete workspaces.create workspaces.update workspaces.switch workspaces.archive workspaces.restore workspaces.duplicate workspaces.import conversations.message tasks.transition artifacts.capture artifacts.create artifacts.annotate artifacts.delete chat.cancel`);
-add('external_write', `tabs.new tabs.duplicate tabs.move page.navigate page.back page.forward page.reload page.click page.fill`);
+add('external_write', `tabs.new tabs.duplicate tabs.move page.navigate page.back page.forward page.reload page.click page.fill page.clickAt page.press`);
 add('code_exec', 'page.evaluate');
+add('local_read', 'handoffs.list handoffs.get');
+add('local_write', 'handoffs.create handoffs.accept handoffs.complete');
+add('administration', 'tabs.setControlMode');
 add('cloud_spend', 'chat.send');
 add('local_read', 'chat.preview');
 add('administration', 'clients.create clients.list clients.revoke lists.install lists.status lists.rollback');

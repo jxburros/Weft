@@ -29,8 +29,10 @@ Human-only describes an unconditional administration gate; other commands may st
 | tabs.claim | Claim tab input control | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.takeover | Human takes control and revokes old versions | administration | Human only | GUI IPC, CLI, REST, MCP |
 | tabs.release | Release tab input control | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.setControlMode | Human sets the tab control mode: you-drive, assist (agent observes) or agent-drives | administration | Human only | GUI IPC, CLI, REST, MCP |
 | page.inspect | Inspect tab state and navigation version | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.readable | Read text and links from the current page | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.snapshot | Read a semantic/accessibility snapshot with frame-scoped element refs and coverage report | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.find | Find text in page; empty text clears results | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.zoom | Set page zoom factor | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | storage.info | Describe storage isolation and supported controls | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -44,9 +46,11 @@ Human-only describes an unconditional administration gate; other commands may st
 | page.title | Read the page title | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.content | Read the page HTML | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.evaluate | Evaluate JavaScript in the page (trusted automation only) | code_exec | Policy checked | GUI IPC, CLI, REST, MCP |
-| page.click | Click a CSS selector | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
-| page.fill | Fill an input and dispatch input/change events | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
-| page.screenshot | Capture a PNG as base64 | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.click | Click an element by snapshot ref or CSS selector | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.fill | Fill an input by snapshot ref or CSS selector and dispatch input/change events | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.clickAt | Click viewport coordinates (agents need raw input permission and a current observation) | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.press | Press one key in the focused element (agents need raw input permission) | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.screenshot | Capture a viewport, full-page, element or region PNG with capture metadata | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.pdf | Print a page to PDF as base64 | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | cookies.list | List cookies in a workspace session (human administration) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | cookies.set | Set a cookie in a workspace session (human administration) | administration | Human only | GUI IPC, CLI, REST, MCP |
@@ -125,3 +129,8 @@ Human-only describes an unconditional administration gate; other commands may st
 | lists.install | Human installs or updates a disabled, commit/hash-pinned community site list from supplied offline JSON bytes | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.status | Human inspects installed list pins, rule status and rollback availability without downloading | administration | Human only | GUI IPC, CLI, REST, MCP |
 | lists.rollback | Human restores the previous pinned list version with rules disabled for review | administration | Human only | GUI IPC, CLI, REST, MCP |
+| handoffs.create | Record a structured handoff with current tab state, exact evidence and next step; secrets are rejected | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| handoffs.list | List handoffs in a workspace | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| handoffs.get | Get one handoff record | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| handoffs.accept | Accept a handoff addressed to you; its tabs require fresh inspection before input | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| handoffs.complete | Close a handoff as completed, declined or cancelled | local_write | Policy checked | GUI IPC, CLI, REST, MCP |

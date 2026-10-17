@@ -7,6 +7,7 @@ import { workspaceSchemas, recordShapes } from './workspace-commands.js';
 import { acquireProfileLock, assertUnchanged, fileStamp, writeVerifiedJson, storageWarnings, syncDirectory } from './storage-safety.js';
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
+import { executeHandoffCommand, recordTakeover } from './handoffs.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -88,6 +89,8 @@ export class WorkspaceService {
         try { raw = JSON.parse(original); } catch { throw new Error('Workspace state is unreadable. Preserve workspace-state.json and restore from an export or backup.'); }
         this.data = migrateSchema(raw, { validate: validateStoredState });
         rejectSecretKeys(this.data);
+        // Handoffs were added without a schema bump; older stores start with none.
+        if (!Array.isArray(this.data.handoffs)) this.data.handoffs = [];
         if (raw.schemaVersion !== CURRENT_SCHEMA_VERSION) {
           assertUnchanged(this.path, this.stamp);
           const backup = `${this.path}.schema${raw.schemaVersion}-${digest(original)}.bak`;
@@ -101,7 +104,7 @@ export class WorkspaceService {
       } else {
         if (this.storageWarnings.some(warning => ['SYNC_CONFLICT_COPY', 'SYNC_PLACEHOLDER'].includes(warning.code))) throw new Error('STORE_CONFLICT: Workspace copies/placeholders require human review before creating a new store.');
         const initial = createWorkspace();
-        this.data = { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null } };
+        this.data = { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [] };
         this.save();
       }
     } catch (error) { this.lock.release(); throw error; }
@@ -143,7 +146,8 @@ export class WorkspaceService {
   persistSession(session) {
     const before = this.data.browserSession;
     this.data.browserSession = {
-      tabs: session.tabs.map(tab => ({ id: tab.id, workspaceId: tab.workspaceId, url: sanitizeUrl(tab.url) || 'about:blank', title: String(tab.title || '').slice(0, 1000), pinned: Boolean(tab.pinned), version: tab.version || 0, group: String(tab.group || '').slice(0, 100) })),
+      tabs: session.tabs.map(tab => ({ id: tab.id, workspaceId: tab.workspaceId, url: sanitizeUrl(tab.url) || 'about:blank', title: String(tab.title || '').slice(0, 1000), pinned: Boolean(tab.pinned), version: tab.version || 0, group: String(tab.group || '').slice(0, 100),
+        controller: tab.controller === 'human' ? 'human' : 'available', ...(tab.controller === 'human' && tab.assistant && { assistant: String(tab.assistant).slice(0, 200) }) })),
       activeId: session.activeId ?? null,
     };
     try { this.save(); } catch (error) { this.data.browserSession = before; throw error; }
@@ -193,6 +197,16 @@ export class WorkspaceService {
   }
 
 
+  executeHandoff(name, args = {}, context = {}) {
+    const run = this.queue.then(() => executeHandoffCommand(this, name, args, context));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+  recordTakeover(details) {
+    const run = this.queue.then(() => recordTakeover(this, details));
+    this.queue = run.catch(() => {});
+    return run;
+  }
   execute(name, args = {}, context = {}) {
     const run = this.queue.then(() => this.dispatch(name, args, context));
     this.queue = run.catch(() => {});
@@ -234,7 +248,7 @@ export class WorkspaceService {
       delete snapshot.storageWarnings;
       if (snapshot.siteLists) snapshot.siteLists = snapshot.siteLists.filter(item => item.workspaceId === workspaceId);
       snapshot.workspaces = snapshot.workspaces.filter(item => item.id === workspaceId);
-      for (const key of [...collections, 'activity', 'history']) snapshot[key] = snapshot[key].filter(item => item.workspaceId === workspaceId);
+      for (const key of [...collections, 'activity', 'history', 'handoffs']) snapshot[key] = (snapshot[key] ?? []).filter(item => item.workspaceId === workspaceId);
       snapshot.browserSession.tabs = snapshot.browserSession.tabs.filter(item => item.workspaceId === workspaceId);
       if (!snapshot.browserSession.tabs.some(tab => tab.id === snapshot.browserSession.activeId)) snapshot.browserSession.activeId = null;
       snapshot.activeWorkspaceId = workspaceId;
@@ -265,7 +279,7 @@ export class WorkspaceService {
       let result;
       if (collection === 'workspaces') result = this.mutateWorkspace(action, args, actor);
       else if (name === 'settings.update') {
-        this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model } };
+        this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }) };
         this.log(name, workspaceId, workspaceId, actor);
         result = this.data.settings;
       } else if (name === 'conversations.message') {
@@ -320,7 +334,7 @@ export class WorkspaceService {
       if (record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
       if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
-      for (const key of [...collections, 'activity', 'history']) this.data[key] = this.data[key].filter(item => item.workspaceId !== record.id);
+      for (const key of [...collections, 'activity', 'history', 'handoffs']) this.data[key] = (this.data[key] ?? []).filter(item => item.workspaceId !== record.id);
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
     } else if (action === 'duplicate') {
       const exported = this.exportWorkspace(record.id);
