@@ -312,3 +312,77 @@ test('callback exceptions redact credentials previously resolved in this process
     return true;
   });
 });
+
+test('cloud sends require itemized acknowledgement, reuse scoped consent, and save turn manifests', async t => {
+  const requests = [];
+  const manifests = [];
+  const fixtureData = await fixture(t, () => {}, {
+    fetchImpl: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return new Response(JSON.stringify({ choices: [{ message: { content: 'Cloud answer' } }] }));
+    },
+  });
+  const { providers, workspace, conversations, model, send, directory } = fixtureData;
+  workspace.recordTurnManifest = async (_id, manifest) => { manifests.push(structuredClone(manifest)); };
+  conversations.get('conversation-1').workspaceId = 'project-a';
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://models.example/v1', model: model.model });
+  const args = { conversationId: 'conversation-1', modelId: model.id, text: 'Hello', context: [{ id: 'ref-a', title: 'Chosen source', content: 'Reference' }, { title: 'Private source', content: 'Private value', localOnly: true }] };
+  const { disclosure } = await providers.execute('chat.preview', args);
+  assert.equal(disclosure.requiresAcknowledgement, true);
+  assert.equal(disclosure.items.find(item => item.title === 'Private source').withheld, true);
+  await assert.rejects(providers.execute('chat.send', args), /CLOUD_DISCLOSURE_REQUIRED/);
+  assert.equal(requests.length, 0);
+  assert.equal(conversations.get('conversation-1').messages.length, 0);
+  await providers.execute('chat.send', { ...args, disclosureAck: true });
+  assert.equal(JSON.stringify(requests).includes('Private value'), false);
+  assert.equal(manifests.at(-1).status, 'complete');
+  assert.deepEqual(manifests.at(-1).contextIds, ['ref-a']);
+  assert.equal(manifests.at(-1).requests[0].bytes, Buffer.byteLength(JSON.stringify(requests[0].body)));
+  await send();
+  assert.equal((await providers.execute('chat.preview', args)).disclosure.requiresAcknowledgement, false);
+  const reopened = await new Providers({ directory, workspace, env: {} }).init();
+  assert.equal((await reopened.execute('chat.preview', args)).disclosure.requiresAcknowledgement, false);
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://different.example/v1', model: model.model });
+  await assert.rejects(send(), /CLOUD_DISCLOSURE_REQUIRED/);
+});
+
+test('local-only context taints derived assistant history and cannot cross to cloud', async t => {
+  const requests = [];
+  const { providers, model, send, conversations } = await fixture(t, () => {}, {
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ choices: [{ message: { content: requests.length === 1 ? 'Sensitive derived answer' : 'Cloud answer' } }] }));
+    },
+  });
+  await send({ context: [{ title: 'Private source', content: 'Sensitive original', localOnly: true }] });
+  assert.equal(conversations.get('conversation-1').messages.every(message => message.localOnly), true);
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model });
+  await send({ disclosureAck: true });
+  assert.equal(JSON.stringify(requests[1]).includes('Sensitive'), false);
+});
+
+test('local-only search results are withheld from cloud tools and recorded in the manifest', async t => {
+  const requests = [];
+  const manifests = [];
+  const fixtureData = await fixture(t, () => {}, {
+    searchWorkspace: async () => [{ id: 'private', title: 'private', content: 'secret reference', localOnly: true }, { id: 'public', title: 'public', content: 'public reference' }],
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return new Response(JSON.stringify(requests.length === 1 ? toolReply('workspace_search', { query: 'reference' }) : { choices: [{ message: { content: 'Done' } }] }));
+    },
+  });
+  await enableTools(fixtureData);
+  const { providers, workspace, model, send } = fixtureData;
+  workspace.recordTurnManifest = async (_id, manifest) => manifests.push(structuredClone(manifest));
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model, tools: true });
+  await send({ allowReadTools: true, disclosureAck: true });
+  assert.equal(JSON.stringify(requests[1]).includes('secret reference'), false);
+  assert.equal(manifests.at(-1).tools[0].withheldLocalOnly, true);
+});
+
+test('concurrent sends cannot race during asynchronous preflight', async t => {
+  const { send } = await fixture(t, (_req, res) => reply(res, { choices: [{ message: { content: 'Done' } }] }));
+  const first = send();
+  await assert.rejects(send(), /already has a running/);
+  await first;
+});

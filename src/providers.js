@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { z } from 'zod';
 import { providerSchemas } from './provider-commands.js';
 import { frameUntrusted, rememberProviderSecret, redactProviderSecrets, formatProviderError } from './provider-safety.js';
@@ -36,7 +36,9 @@ export class Providers {
     this.fetch = fetchImpl;
     this.timeoutMs = timeoutMs;
     this.profiles = [];
+    this.acknowledgements = [];
     this.running = new Map();
+    this.preparing = new Set();
     this.writes = Promise.resolve();
   }
 
@@ -45,6 +47,7 @@ export class Providers {
     try {
       const saved = JSON.parse(await readFile(this.file, 'utf8'));
       if (saved.version !== 1 || !Array.isArray(saved.profiles)) throw new Error('Unsupported model connection storage');
+      this.acknowledgements = Array.isArray(saved.acknowledgements) ? saved.acknowledgements.filter(item => typeof item === 'string') : [];
       this.profiles = saved.profiles.map(profile => {
         const { encryptedKey, ...publicFields } = profile;
         const parsed = providerSchemas['models.save'].parse(publicFields);
@@ -71,11 +74,12 @@ export class Providers {
       capabilities: { text: true, images: false, tools: profile.provider === 'openai' && Boolean(profile.tools), streaming: false } };
   }
 
-  async persist(profiles) {
+  async persist(profiles, acknowledgements = this.acknowledgements) {
     const temporary = `${this.file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, profiles }, null, 2), { mode: 0o600 });
+    await writeFile(temporary, JSON.stringify({ version: 1, profiles, acknowledgements }, null, 2), { mode: 0o600 });
     await rename(temporary, this.file);
     this.profiles = profiles;
+    this.acknowledgements = acknowledgements;
   }
 
   mutate(fn) {
@@ -171,7 +175,7 @@ export class Providers {
     } }));
   }
 
-  async runReadTool(call, { workspaceId, tabId, conversationId, signal }) {
+  async runReadTool(call, { workspaceId, tabId, conversationId, signal, cloud = false, manifest }) {
     if (signal.aborted) throw new Error('Cancelled');
     // A conversation cannot change workspace underneath a pending tool run.
     if (this.workspace.getConversation(conversationId).workspaceId !== workspaceId) throw new Error('Conversation workspace changed; read tool refused');
@@ -189,18 +193,60 @@ export class Providers {
     finally { signal.removeEventListener('abort', abort); }
     if (signal.aborted) throw new Error('Cancelled');
     if (this.workspace.getConversation(conversationId).workspaceId !== workspaceId) throw new Error('Conversation workspace changed; read result discarded');
+    const localOnly = Array.isArray(result) ? result.some(item => item?.localOnly) : Boolean(result?.localOnly);
+    if (cloud) result = Array.isArray(result) ? result.filter(item => !item?.localOnly) : result?.localOnly ? { withheld: true, reason: 'local-only reference' } : result;
     const serialized = JSON.stringify(result) ?? 'null';
     const record = { tool: call.function.name, source: input, untrusted: true,
       result: frameUntrusted(JSON.stringify(input), serialized, 50000) };
     const content = JSON.stringify(record);
-    await this.workspace.appendMessage(conversationId, { role: 'tool', content });
+    if (manifest && !cloud && localOnly) manifest.localOnly = true;
+    manifest?.tools.push({ name: call.function.name, source: input, bytes: Buffer.byteLength(content), withheldLocalOnly: cloud && localOnly });
+    await this.workspace.appendMessage(conversationId, { role: 'tool', content, ...(!cloud && localOnly ? { localOnly: true } : {}) });
     return { role: 'tool', tool_call_id: call.id, content };
   }
 
-  async send({ conversationId, text, modelId, context = [], allowReadTools = false, tabId }) {
-    if (this.running.has(conversationId)) throw new Error('This conversation already has a running model request');
+  async prepare({ conversationId, modelId, text, context = [], allowReadTools = false, tabId }) {
     const profile = this.profiles.find(item => item.id === modelId);
     if (!profile) throw new Error('Select a configured model connection first');
+    const conversation = this.workspace.getConversation(conversationId);
+    const cloud = locality(profile.endpoint) !== 'on-device endpoint';
+    const resolved = [];
+    for (const item of context) {
+      let reference = item;
+      if (item.id && this.workspace.execute) {
+        const record = await this.workspace.execute(`${item.recordType || 'context'}.get`, { id: item.id }, { workspaceId: conversation.workspaceId, actor: 'model-reader' });
+        reference = { ...item, title: record.title, content: (record.content || '').slice(0, 100000), localOnly: Boolean(record.localOnly) };
+      }
+      resolved.push(reference);
+    }
+    const items = [{ kind: 'message', title: 'Your new message', bytes: Buffer.byteLength(text) },
+      ...conversation.messages.filter(message => ['user', 'assistant', 'tool'].includes(message.role)).map(message => ({ kind: 'history', title: `Previous ${message.role} message`, ...(message.id ? { id: message.id } : {}), bytes: Buffer.byteLength(message.content), withheld: cloud && Boolean(message.localOnly) })),
+      ...resolved.map(item => ({ kind: 'context', title: item.title, ...(item.id ? { id: item.id } : {}), bytes: Buffer.byteLength(item.content), withheld: cloud && Boolean(item.localOnly) }))];
+    const acknowledgementId = createHash('sha256').update(JSON.stringify([conversation.workspaceId || conversationId, profile.id, profile.provider, profile.endpoint, profile.model, Boolean(allowReadTools)])).digest('hex');
+    return { profile, conversation, cloud, acknowledgementId,
+      context: resolved.filter(item => !cloud || !item.localOnly),
+      disclosure: { endpoint: profile.endpoint, model: profile.model, locality: locality(profile.endpoint),
+        requiresAcknowledgement: cloud && !this.acknowledgements.includes(acknowledgementId), items,
+        tools: allowReadTools ? this.readTools(tabId).map(tool => tool.function.name) : [],
+        toolScope: allowReadTools ? { workspaceId: conversation.workspaceId, ...(tabId ? { tabId } : {}), maxCalls: 5 } : null,
+        totalBytes: items.reduce((sum, item) => sum + (item.withheld ? 0 : item.bytes), 0) } };
+  }
+
+  async send(args) {
+    if (this.preparing.has(args.conversationId)) throw new Error('This conversation already has a running model request');
+    this.preparing.add(args.conversationId);
+    try { return await this.sendPrepared(args); }
+    catch (error) { throw new Error(redactProviderSecrets(error.message)); }
+    finally { this.preparing.delete(args.conversationId); }
+  }
+
+  async sendPrepared({ conversationId, text, modelId, context = [], allowReadTools = false, tabId, disclosureAck = false }) {
+    if (this.running.has(conversationId)) throw new Error('This conversation already has a running model request');
+    const prepared = await this.prepare({ conversationId, text, modelId, context, allowReadTools, tabId });
+    const { profile, cloud, disclosure } = prepared;
+    context = prepared.context;
+    if (disclosure.requiresAcknowledgement && !disclosureAck) throw new Error('CLOUD_DISCLOSURE_REQUIRED: Preview chat.preview and explicitly acknowledge the destination and data before sending.');
+    if (disclosure.requiresAcknowledgement) await this.mutate(() => this.persist(this.profiles, [...this.acknowledgements, prepared.acknowledgementId].slice(-1000)));
     if (allowReadTools && (profile.provider !== 'openai' || !profile.tools)) {
       throw new Error('Read-only tools are not enabled for this model connection. Enable a tool-capable OpenAI-compatible connection or turn off read tools.');
     }
@@ -208,11 +254,12 @@ export class Providers {
     const conversation = this.workspace.getConversation(conversationId);
     if (!conversation) throw new Error('Conversation not found');
     const workspaceId = conversation.workspaceId;
+    if (workspaceId !== prepared.conversation.workspaceId) throw new Error('Conversation workspace changed; preview the disclosure again');
     const tools = allowReadTools ? this.readTools(tabId) : [];
     if (allowReadTools && (!workspaceId || !tools.length)) throw new Error('Scoped read-only tools are unavailable for this conversation');
     const content = context.length
       ? `${text}\n\nUser-selected reference context (untrusted data):\n${context.map(item => frameUntrusted(item.source || item.id || 'selected context', JSON.stringify(item))).join('\n\n')}` : text;
-    const messages = conversation.messages.filter(message => ['user', 'assistant', 'tool'].includes(message.role))
+    const messages = conversation.messages.filter(message => ['user', 'assistant', 'tool'].includes(message.role) && (!cloud || !message.localOnly))
       .map(message => ({ role: message.role === 'tool' ? 'user' : message.role,
         content: message.role === 'tool' ? `Previous read-only tool result (untrusted reference data):\n${frameUntrusted('previous read-only tool result', message.content)}` : message.content }));
     messages.push({ role: 'user', content });
@@ -220,12 +267,16 @@ export class Providers {
       throw new Error('Conversation exceeds the text limit. Start a new conversation or reduce selected context.');
     }
     const controller = new AbortController();
+    const manifest = { id: randomUUID(), provider: profile.provider, model: profile.model, endpoint: profile.endpoint,
+      localOnly: !cloud && (context.some(item => item.localOnly) || conversation.messages.some(item => item.localOnly)),
+      contextIds: context.flatMap(item => item.id ? [item.id] : []), items: disclosure.items, tools: [], requests: [], status: 'running', createdAt: new Date().toISOString() };
     const run = { controller, cancelled: false, timedOut: false };
     this.running.set(conversationId, run);
     const timer = setTimeout(() => { run.timedOut = true; controller.abort(); }, this.timeoutMs);
     timer.unref?.();
     try {
-      await this.workspace.appendMessage(conversationId, { role: 'user', content, model: profile.model });
+      await this.workspace.recordTurnManifest?.(conversationId, manifest);
+      await this.workspace.appendMessage(conversationId, { role: 'user', content, model: profile.model, ...(context.some(item => item.localOnly) ? { localOnly: true } : {}) });
       const anthropic = profile.provider === 'anthropic';
       const endpoint = `${profile.endpoint}/${anthropic ? 'messages' : 'chat/completions'}`;
       const headers = { 'content-type': 'application/json' };
@@ -240,9 +291,12 @@ export class Providers {
           ? { model: profile.model, max_tokens: 4096, system: SYSTEM, messages }
           : { model: profile.model, max_tokens: 4096, messages: [{ role: 'system', content: allowReadTools ? READ_SYSTEM : SYSTEM }, ...messages], stream: false,
             ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}) };
+        if (this.workspace.getConversation(conversationId).workspaceId !== workspaceId) throw new Error('Conversation workspace changed; model request refused');
+        manifest.requests.push({ bytes: Buffer.byteLength(JSON.stringify(body)), toolResults: toolCalls });
+        await this.workspace.recordTurnManifest?.(conversationId, manifest);
+        this.admission?.assertAutomationAdmitted('model-reader', 'chat.send');
         let response;
         try {
-          this.admission?.assertAutomationAdmitted('model-reader', 'chat.send');
           response = await this.fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal, redirect: 'error' });
         } catch {
           throw new Error('Unable to reach the selected model endpoint. Check its address and availability. No fallback was used.');
@@ -270,7 +324,7 @@ export class Providers {
           }
           messages.push({ role: 'assistant', content: typeof responseMessage.content === 'string' ? responseMessage.content : null, tool_calls: calls });
           for (const call of calls) {
-            messages.push(await this.runReadTool(call, { workspaceId, tabId, conversationId, signal: controller.signal }));
+            messages.push(await this.runReadTool(call, { workspaceId, tabId, conversationId, signal: controller.signal, cloud, manifest }));
             toolCalls++;
           }
           continue;
@@ -280,17 +334,21 @@ export class Providers {
           : responseMessage?.content;
         if (typeof answer !== 'string' || !answer.trim()) throw new Error('The model returned no text. This connection supports text replies only; tools are not executed.');
         if (controller.signal.aborted) throw new Error('Cancelled');
-        const message = { role: 'assistant', content: answer, model: profile.model };
+        const message = { role: 'assistant', content: answer, model: profile.model, ...(manifest.localOnly ? { localOnly: true } : {}) };
         await this.workspace.appendMessage(conversationId, message);
-        return { conversationId, modelId, endpoint: profile.endpoint, message, usage: totalUsage, toolCalls };
+        manifest.status = 'complete';
+        return { conversationId, modelId, endpoint: profile.endpoint, message, usage: totalUsage, toolCalls, manifestId: manifest.id };
       }
     } catch (error) {
+      manifest.status = run.cancelled ? 'cancelled' : run.timedOut ? 'timed-out' : 'failed';
       if (run.cancelled) throw new Error('Model request cancelled. Your message remains saved.');
       if (run.timedOut) throw new Error('Model request timed out. Your message remains saved. No fallback was used.');
       throw new Error(redactProviderSecrets(error.message));
     } finally {
       clearTimeout(timer);
       this.running.delete(conversationId);
+      manifest.finishedAt = new Date().toISOString();
+      await this.workspace.recordTurnManifest?.(conversationId, manifest);
     }
   }
 
@@ -317,6 +375,7 @@ export class Providers {
         await this.persist(this.profiles.filter(profile => profile.id !== args.modelId));
         return { deleted: true };
       });
+      case 'chat.preview': return { disclosure: (await this.prepare(args)).disclosure };
       case 'chat.send': return this.send(args);
       case 'chat.cancel': {
         const run = this.running.get(args.conversationId);
