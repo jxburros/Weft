@@ -114,6 +114,9 @@ only and are never evidence that a file or image was inspected; only image bytes
 recorded in the turn manifest's `visualInputs` were delivered to a model. Images
 are PNG only, at most 4 per turn, 2048 px per edge and 4 MiB; the desktop app
 downscales larger captures locally and records both hashes.
+A restricted capture original is never attached: its newest sanitized
+derivative is sent instead (provenance names `substitutedFor` and
+`derivedFrom`), or the item is `unavailable` when none exists.
 
 Context windows are planned per model: the new message and attachments are
 fixed, older history is omitted oldest-first (never summarized or rewritten) and
@@ -127,6 +130,36 @@ images, and its description returns to the selected model as untrusted text.
 Cloud destinations, images sent off-device and every fallback use require
 `disclosureAck: true` after preview. No request is ever retried against another
 provider or endpoint.
+
+## Captures, archives and sanitized derivatives
+
+`artifacts.capture` with `kind: "archive"` saves the rendered page and its
+resources as a manifest on a new immutable version (ADR-012). Read
+`capture.complete`, `capture.incomplete` and each `archive.resources[].status`
+(`stored`, `failed`, `missing`, `not-archived-script`, `omitted-size`,
+`omitted-budget`, `purged`); report an incomplete capture as incomplete.
+`readyTimeoutMs`, `maxDurationMs` and `maxResourceBytes` bound the capture.
+`artifacts.get` returns the manifest without resource bodies.
+`artifacts.compare` diffs two versions' text, resources and screenshots, and
+`artifacts.verify` re-checks stored SHA-256 digests. Digests show bytes are
+unchanged since capture; they do not prove what a site served or when. The
+offline preview is human-only.
+
+`artifacts.review` lists URL, query, path, title and source-field findings and
+pattern matches (masked); detection is assistance, not a classifier.
+`artifacts.redact` creates a sanitized derivative version (`preview: true`
+returns it without saving). A person decides separately whether an original is
+restricted (`artifacts.setAccess`) or its content purged
+(`artifacts.purgeContent`). Agents receive a restricted original as
+`{"withheld":"restricted_original","derivatives":[...]}` from every read,
+cannot review, compare or redact it, and do not find it in search.
+`artifacts.readOriginal` requires a grant with the `restricted_original` data
+class (never granted by default) and an exact one-time human approval for every
+read; standing approvals are refused.
+
+```json
+{"command":"artifacts.redact","args":{"id":"artifact_example","versionId":"version_example","text":[{"detector":"email"},{"literal":"Project Falcon","label":"codename"}],"regions":[{"x":40,"y":120,"width":300,"height":40,"label":"account number"}],"url":"origin-path","preview":true}}
+```
 
 ## Streaming and the turn lifecycle
 

@@ -651,8 +651,11 @@ export class Browser {
     session.setPermissionCheckHandler(() => false);
     session.on('will-download', (event, item) => { event.preventDefault?.(); item.cancel?.(); if (this.preview) this.preview.stats.downloadsBlocked++; });
     const handler = request => this.servePreview(request);
-    session.protocol.handle('https', handler);
-    session.protocol.handle('http', handler);
+    for (const scheme of ['https', 'http']) {
+      // A later Browser in the same process takes over the shared preview partition.
+      if (session.protocol.isProtocolHandled?.(scheme)) session.protocol.unhandle(scheme);
+      session.protocol.handle(scheme, handler);
+    }
     session.webRequest?.onBeforeRequest((details, callback) => {
       const allowed = /^(?:https?:|data:)/i.test(details.url);
       if (!allowed) this.previewRefused(details.url);
