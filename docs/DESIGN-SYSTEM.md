@@ -34,7 +34,13 @@ retained; no replacement brand or textile terminology has been introduced.
   goldens, native dialog Escape/focus restoration and naming, 200% text scale
   application bounds, reduced-motion emulation, cloud acknowledgement/cancel,
   storage-conflict notice, automation resume, export residue review, scoped
-  client creation/revocation, and token disposal on close.
+  client creation/revocation, token disposal on close, and Update Center flows
+  (no check on open, staged verification display, opt-in daily checks, install of
+  the exact staged version, kill-switch disabled controls).
+- `node --test test/release.test.js`: Windows installer sidebar/header bitmaps are
+  regenerated from `assets/tokens.json` and the committed logo exports by
+  `scripts/generate-installer-art.js` and must match the committed BMPs byte for
+  byte. Their appearance inside the real Windows installer has not been reviewed.
 
 Accessibility fixes include a skip link, named dialogs and command inputs,
 expanded state on panel controls, a conversation log, focus restoration when

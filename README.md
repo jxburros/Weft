@@ -34,6 +34,19 @@ Set `WEFT_PORT` to change the port. In PowerShell, use `$env:WEFT_TOKEN = ...`.
 A desktop display is required. On headless Linux, `xvfb-run -a npm start` provides
 a virtual display. Normal startup keeps Chromium's sandbox enabled.
 
+### Installers and updates
+
+Stable releases are packaged for Windows x64 (branded per-user NSIS installer),
+macOS arm64/x64 (dmg/zip) and Linux x64 (AppImage/deb) from GitHub Releases of
+`jxburros/Weft`. Settings > Updates shows the installed version, the stable
+channel and any verified staged update. Weft contacts GitHub only when you choose
+Check now or turn on daily checks; downloads are size- and SHA-512-verified and
+installed only when you choose. `WEFT_DISABLE_UPDATES=1` turns all update traffic
+off. Upgrades and uninstalls keep your workspaces unless you explicitly remove
+them. Release, signing and support details: [docs/RELEASING.md](docs/RELEASING.md).
+Code signing and notarization depend on credentials that are not yet configured,
+so current builds are labelled unsigned.
+
 ## What you can do
 
 - **Browse:** address/search bar, native Chromium pages, separate workspace
@@ -233,7 +246,7 @@ is in [implementation coverage](docs/IMPLEMENTATION.md).
 The largest remaining capabilities are the isolated credential/payment broker,
 fine-grained agent grants and autonomous execution, comprehensive storage
 block/session modes, a community-list management screen and any hosted moderation service, synchronization,
-and signed installers/automatic updates. Browser extension support is limited to unpacked
+and signed (rather than labelled-unsigned) installers verified on real machines. Browser extension support is limited to unpacked
 Manifest V3 extensions installed per workspace with audited permissions
 ([ADR-007](docs/decisions/007-extension-compatibility.md)); Weft plugins are
 described in [docs/PLUGINS.md](docs/PLUGINS.md). Provider key storage is not a credential
@@ -256,6 +269,8 @@ npm run evals
 npm run test:perf
 # Include actual Chromium and GUI tests on headless Linux:
 xvfb-run -a npm test
+# Package locally (outputs in dist/, see docs/RELEASING.md):
+npm run dist -- --linux AppImage
 ```
 
 No bundler or compilation step is needed. Tests cover command validation,

@@ -45,6 +45,9 @@ add('administration', `clients.create clients.list clients.update clients.revoke
 // Site storage modes, rule explanations, threat intelligence, downloads and external launches (#18, #19, #20).
 add('local_read', 'siteRules.explain storage.policy threats.status launches.list');
 add('administration', 'siteRules.review storage.setSiteMode storage.setDefaultMode threats.install threats.remove threats.configureProvider threats.update downloads.configureScanner launches.approve launches.deny');
+// Verified stable-only updates (#33, #54, #60): status is a read; network checks, install, rollback and settings are human-only.
+add('local_read', 'update.status');
+add('administration', 'update.check update.install update.rollback update.configure');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');

@@ -16,7 +16,11 @@
     "test:unit": "node scripts/test-unit.mjs",
     "test:docs": "node --test test/docs.test.js",
     "test:perf": "node --test perf/budgets.js",
-    "evals": "node evals/run.js"
+    "evals": "node evals/run.js",
+    "dist": "electron-builder --config electron-builder.config.cjs --publish never",
+    "dist:dir": "electron-builder --config electron-builder.config.cjs --dir --publish never",
+    "release:check": "node scripts/release/metadata.js",
+    "installer:art": "node scripts/generate-installer-art.js"
   },
   "repository": {
     "type": "git",
@@ -33,6 +37,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "electron": "44.9.0"
+    "electron": "44.9.0",
+    "electron-builder": "26.15.3"
   }
 }

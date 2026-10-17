@@ -203,3 +203,17 @@ application launches (`launches.approve`) are human-only. Agents may read
 prefetch/prerender requests are cancelled for every destination. Browser
 enforcement covers requests made by Weft's Chromium sessions only; your own
 HTTP clients, shells and tools are outside it and need their own controls.
+
+## Updates
+
+Agents can read update state with `update.status` (MCP `weft_browser`; also
+allowed for scoped `read` clients). It reports the installed version, channel,
+kill switch, staged update and health without contacting the network. Checking,
+installing, rolling back and configuring updates are human-only administration;
+automation receives a typed `permission_required` denial (`error.details.authority.reason`
+`human_only`) and should ask the person to use Settings > Updates. Update
+requests and check outcomes are recorded in durable activity.
+
+```sh
+weft update.status
+```

@@ -2,12 +2,13 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { commands, executeOutcome, errorOutcome, CommandError, normalizeCommand } from './commands.js';
+import { WEFT_VERSION } from './version.js';
 
 const groups = {
   tabs: ['tabs'], page: ['page'],
   workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs'],
-  artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches'], models: ['models', 'chat'],
+  artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {
   const actions = Object.keys(commands).filter(name => namespaces.includes(name.split('.')[0]));
@@ -23,7 +24,7 @@ mcpTools.push({ name: 'weft_reference', description: 'Get a command description,
 const legacyNames = Object.fromEntries(Object.keys(commands).map(name => [name.replaceAll('.', '_'), name]));
 
 export function createMcpServer(client) {
-  const server = new Server({ name: 'weft', version: '1.0.0' }, { capabilities: { tools: {} } });
+  const server = new Server({ name: 'weft', version: WEFT_VERSION }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: mcpTools }));
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     let outcome;

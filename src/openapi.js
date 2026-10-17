@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { commands } from './commands.js';
 import { turnFrameSchema } from './turn-relay.js';
+import { WEFT_VERSION } from './version.js';
 
 /** Generated from the same JSON schemas used by GUI, CLI, REST and MCP. */
 export function createOpenApiDocument(catalog = commands) {
@@ -21,7 +22,7 @@ export function createOpenApiDocument(catalog = commands) {
   }]));
   return {
     openapi: '3.1.0',
-    info: { title: 'Weft local browser API', version: '1.0.0', description: 'Authenticated loopback control plane. The token grants broad local automation access; human-only operations remain unavailable. Browser-origin requests are rejected. No remote TLS service or per-client scopes are provided.' },
+    info: { title: 'Weft local browser API', version: WEFT_VERSION, description: 'Authenticated loopback control plane. The token grants broad local automation access; human-only operations remain unavailable. Browser-origin requests are rejected. No remote TLS service or per-client scopes are provided.' },
     servers: [{ url: 'http://127.0.0.1:9222', description: 'Default; WEFT_PORT may change the port' }],
     security: [{ localBearer: [] }],
     paths: {

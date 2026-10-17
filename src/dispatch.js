@@ -7,11 +7,11 @@ import { raiseActionClass } from './autonomy.js';
 import { executeHookCommand, pluginCommandAdminDefinitions } from './plugin-commands.js';
 import { PluginRegistry } from './plugins/registry.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status'];
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, plugins = new PluginRegistry(), admission, authority, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, plugins = new PluginRegistry(), admission, authority, onEvent = () => {} }) {
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
 
@@ -72,6 +72,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     };
     context.resolvedWorkspaceId = target.workspaceId;
     if (command === 'guide.get') return getGuidance(args.topic);
+    if (command.startsWith('update.')) {
+      if (!updates) throw Object.assign(new Error('Updates are not available in this process'), { code: 'unavailable' });
+      return updates.execute(command, args, context);
+    }
     if (hookCommands.has(command)) return executeHookCommand(command, args, context, { plugins, call });
     if (command.startsWith('plugin.') || Object.hasOwn(pluginCommandAdminDefinitions, command)) {
       return plugins.execute(command, command.startsWith('plugin.') ? { ...args, workspaceId: target.workspaceId ?? args.workspaceId } : args, context, { call });

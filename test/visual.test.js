@@ -25,6 +25,8 @@ if (process.argv.includes("--visual-child")) {
   let window;
   let stopped = false, sent = null, exportArgs = null, clientArgs = null;
   const grants = [];
+  const updateCalls = [];
+  const updateStatus = {currentVersion:"1.0.0",channel:"stable",repository:"jxburros/Weft",install:{kind:"appimage",platform:"linux",arch:"x64",supported:true,method:"replace",reason:null},killSwitch:{active:false,variable:"WEFT_DISABLE_UPDATES"},automaticChecks:{enabled:false,intervalHours:24,stagesOnly:true,nextCheckAt:null},egress:{hosts:["github.com","objects.githubusercontent.com","release-assets.githubusercontent.com"],sends:"IP address, Weft version, platform and architecture (User-Agent). No workspace data, tokens or browsing data.",contactsNetwork:"only when you choose Check now"},lastCheck:null,staged:null,activation:{pending:null,health:null,history:[],failedVersions:[],rollback:{available:false,guidance:"Download the previous release from GitHub and verify it against SHA256SUMS.txt."}},warning:null};
   const run = async expression => {
     try { return await window.webContents.executeJavaScript(expression); }
     catch (error) { throw new Error(`${expression}: ${error.message}`); }
@@ -82,6 +84,15 @@ if (process.argv.includes("--visual-child")) {
       if(name==="clients.create") { clientArgs=args; const grant={...args,clientId:"client-fixture",expiresAt:1893456000000,revoked:false};grants.push(grant);return {...grant,token:"weft1.fixture-secret-token"}; }
       if(name==="clients.revoke") { grants.find(g=>g.clientId===args.clientId).revoked=true;return {revoked:true}; }
       if(name==="tabs.activate") return tabs[0];
+      if(name.startsWith("update.")) updateCalls.push([name,args]);
+      if(name==="update.status") return structuredClone(updateStatus);
+      if(name==="update.configure") { updateStatus.automaticChecks.enabled=args.automaticChecks; return structuredClone(updateStatus); }
+      if(name==="update.check") {
+        updateStatus.lastCheck={at:"2026-10-17T12:00:00.000Z",status:"staged",message:"Weft 1.1.0 was downloaded and verified. It installs only when you choose Install.",latestVersion:"1.1.0",automatic:false};
+        updateStatus.staged={version:"1.1.0",file:"Weft-1.1.0-x86_64.AppImage",size:128524649,sha512:"8rEgr2490uwZjPIerIGR3IcNvCzjsW+RyMS57E+nKZ+yQ3DbtMKQBshmzbRbP4q933KLSkUuTPykB1cgW4BN3w==",releaseTag:"v1.1.0",verifiedAt:"2026-10-17T12:00:00.000Z",verification:{sizeAndSha512:"verified_at_download",onDisk:"present",recheckedBeforeInstall:true},signature:{status:"platform_verified_on_open",subject:null,reason:"Linux packages are verified by release manifest size and SHA-512 only."},releaseUrl:"https://github.com/jxburros/Weft/releases/tag/v1.1.0"};
+        return {status:"staged",message:updateStatus.lastCheck.message};
+      }
+      if(name==="update.install") return {status:"restarting",message:"Weft 1.1.0 is installed and will restart now."};
       throw Error(`Unexpected fixture command ${name}`);
     };
     ipcMain.handle("weft:execute", (_event, name, args) => ({ result: fixtureExecute(name, args) }));
@@ -155,6 +166,28 @@ if (process.argv.includes("--visual-child")) {
     assert.equal(grants[0].revoked,true);
     await click('[data-action="close-dialog"]');
     await until('document.getElementById("safety-notices").hidden');
+    // Update Center: disclosed, human-triggered checks; installs only the staged version shown.
+    await click('[data-section="updates"]');
+    await until('document.getElementById("update-center")?.textContent.includes("Weft 1.0.0")');
+    assert.match(await run('document.getElementById("update-center").textContent'),/github\.com.*No workspace data/s);
+    assert.equal(await run('document.querySelector("[data-action=install-update]")'),null);
+    assert.deepEqual(updateCalls.map(([name])=>name),["update.status"],"opening the Update Center performs no check");
+    await click('[data-action="check-updates"]');
+    await until('document.querySelector("[data-action=install-update]") !== null');
+    assert.match(await run('document.getElementById("update-center").textContent'),/Size and SHA-512 match the release manifest/);
+    await run('document.getElementById("auto-updates").click()');
+    await until('document.getElementById("auto-updates").checked');
+    assert.equal(updateStatus.automaticChecks.enabled,true);
+    await click('[data-action="install-update"]');
+    await until('document.getElementById("toast").textContent.includes("restart")');
+    assert.deepEqual(updateCalls.filter(([name])=>name!=="update.status"),[["update.check",{}],["update.configure",{automaticChecks:true}],["update.install",{version:"1.1.0"}]]);
+    updateStatus.killSwitch.active=true;
+    await click('#settings-button');
+    await click('[data-section="updates"]');
+    await until('document.getElementById("update-center")?.textContent.includes("turned off by WEFT_DISABLE_UPDATES")');
+    assert.equal(await run('document.querySelector("[data-action=check-updates]").disabled'),true);
+    assert.equal(await run('document.querySelector("[data-action=install-update]").disabled'),true);
+    updateStatus.killSwitch.active=false;
     for(const theme of ["light","dark"]) {
       state.settings.theme=theme;
       state.materials=[];

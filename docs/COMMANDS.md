@@ -181,3 +181,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | launches.list | List external application/protocol launch requests blocked in this browser run | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | launches.approve | Human authorizes one pending external application launch after reviewing its source page and target | administration | Human only | GUI IPC, CLI, REST, MCP |
 | launches.deny | Human dismisses a pending external application launch request | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.status | Read installed version, stable channel, last check, staged update, verification, health and kill-switch state without network access | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| update.check | Human checks the fixed stable release channel now; a newer verified build is downloaded and staged but never installed | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.install | Human installs the verified staged update now; Weft hands off to the platform installer and restarts | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.rollback | Human restores the retained previous verified version where the platform allows | administration | Human only | GUI IPC, CLI, REST, MCP |
+| update.configure | Human turns disclosed background checks on or off (at most daily; they only download and stage) | administration | Human only | GUI IPC, CLI, REST, MCP |

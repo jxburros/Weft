@@ -14,7 +14,8 @@ heights changing the screenshot size. Captures reset transient status and move
 the pointer off controls. No provider or external network is used. The twelve
 committed goldens cover
 empty workspace, populated materials/sidebar, Ask Weft, settings, agent connections, and restricted
-destination in both themes. This tests browser-owned chrome, not page rendering.
+destination in both themes. The harness also drives the Update Center with
+fixture update states (no captures). This tests browser-owned chrome, not page rendering.
 
 Color-channel differences up to 12 are ignored. At most 0.3% of pixels may differ;
 a failing capture is retried once after settling. Larger differences write
