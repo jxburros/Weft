@@ -23,7 +23,7 @@ export function authorityError(code, message, authority) {
 }
 const BLOCK_COMMANDS = new Set(['browser.emergencyStop', 'approvals.reject']);
 const OVERRIDE_COMMANDS = new Set(['page.allowOnce', 'downloads.approve', 'tabs.takeover', 'browser.resumeAutomation', 'approvals.approve']);
-const GRANT_COMMANDS = new Set(['clients.create', 'clients.update', 'clients.revoke']);
+const GRANT_COMMANDS = new Set(['clients.create', 'clients.update', 'clients.revoke', 'collections.grant', 'collections.revoke']);
 const SELF_LOGGED = new Set(['approvals.approve', 'approvals.reject', 'activity.configure']);
 const POLICY_COMMANDS = new Set(['autonomy.update', 'activity.configure', 'settings.update', 'siteRules.create', 'siteRules.update', 'siteRules.delete', 'lists.install', 'lists.rollback']);
 
