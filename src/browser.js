@@ -1,6 +1,6 @@
 import electron from 'electron';
 import { AutomationAdmission } from './admission.js';
-import { OBSERVATION_WORLD, MASK_CSS, SENSITIVE_FOCUS_SCRIPT, credentialScript, observationScript, pageString, pngSize } from './page-observation.js';
+import { OBSERVATION_WORLD, MASK_CSS, SENSITIVE_FOCUS_SCRIPT, credentialScript, observationScript, paymentScript, pageString, pngSize } from './page-observation.js';
 
 const mutatingCommands = new Set(['page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.zoom', 'page.allowOnce', 'tabs.close', 'tabs.move', 'tabs.pin']);
 // Commands whose newly observable site block means the requested input did not complete.
@@ -1338,6 +1338,7 @@ export class Browser {
       let topOrigin = null;
       try { topOrigin = main?.origin && new URL(contents.getURL()).origin === main.origin ? main.origin : null; } catch { topOrigin = null; }
       if (!topOrigin || !credential.origins.includes(topOrigin)) throw refuse('origin_mismatch', 'This page is not on an origin authorized for this credential; nothing was filled');
+      if (credential.kind === 'payment_card') return await this.fillCard(tab, contents, main, topOrigin, version, epoch, args, credential, release, () => { released = true; });
       let target;
       if (args.ref != null) {
         const probe = await bounded(this.credentialFrameScript(contents, null, 'probe', { ref: args.ref, origin: topOrigin }), 5000);
@@ -1384,6 +1385,156 @@ export class Browser {
       this.endProtected(tab, token, released ? this.protectedCooldownMs : 0);
       this.releaseInput(tab, slot);
     }
+  }
+
+  /**
+   * Payment-card fill (ADR 019) inside the same exclusive protected operation as a login fill.
+   * Card fields may sit in the top frame or in payment-processor frames; every frame that holds
+   * card fields must be the top origin or an authorized frame origin. Filling never submits:
+   * purchase authorization is the separate payments.submit command with its own approval.
+   */
+  async fillCard(tab, contents, main, topOrigin, version, epoch, args, credential, release, markReleased) {
+    const refuse = (reason, message, code = 'target_mismatch') => Object.assign(failure(code, message, { credential: reason }), { notStarted: true });
+    if (args.submit === true) throw refuse('card_submit_separate', 'Card filling never submits a purchase; a person approves the payment and payments.submit clicks the pay control', 'invalid_arguments');
+    if (args.ref != null) throw refuse('not_card_field', 'Card fills find the card fields themselves; omit ref', 'invalid_arguments');
+    const found = [];
+    for (const frame of [main, ...(main.framesInSubtree ?? []).filter(item => item !== main)]) {
+      if (frame.isDestroyed?.()) continue;
+      let probe = null;
+      try { probe = await bounded(this.credentialFrameScript(contents, frame, 'cardProbe', { origin: frame.origin }), 5000); } catch { continue; }
+      const fields = Object.fromEntries(Object.entries(probe?.fields ?? {}).filter(([kind, count]) => ['number', 'expiry', 'expMonth', 'expYear', 'cvc', 'name'].includes(kind) && count > 0));
+      if (Object.keys(fields).length) found.push({ frame, origin: frame.origin, top: frame === main, fields, authorized: frame.origin === topOrigin || credential.frameOrigins.includes(frame.origin) });
+    }
+    if (found.some(item => !item.authorized)) throw refuse('frame_origin_not_authorized', 'Card fields are in a frame whose origin is not authorized for this card; nothing was filled');
+    const totals = {};
+    for (const item of found) for (const [kind, count] of Object.entries(item.fields)) totals[kind] = (totals[kind] ?? 0) + count;
+    if (!totals.number) throw refuse('no_card_form', 'No visible card-number field was found on the authorized page', 'not_found');
+    if (Object.values(totals).some(count => count > 1)) throw refuse('ambiguous_card_form', 'Several card forms are present; nothing was filled', 'ambiguous_target');
+    markReleased();
+    const secret = await release(topOrigin, found.map(item => item.origin));
+    const unchanged = () => tab.version === version && contents.mainFrame === main && main.origin === topOrigin && !contents.isLoadingMainFrame?.() && !contents.debugger?.isAttached?.()
+      && found.every(item => !item.frame.isDestroyed?.() && item.frame.origin === item.origin);
+    const filled = [];
+    try {
+      if ((tab.controlEpoch ?? 0) !== epoch) throw refuse('interrupted', 'Tab control changed before the fill; nothing was filled', 'action_interrupted');
+      if (!unchanged()) throw refuse('navigated', 'The page changed between the origin check and the fill; nothing was filled');
+      // From here card details may be in the page: residue protections apply even if a frame script reports a failure.
+      tab.credentialFill = { document: tab.documentSerial ?? 0, at: Date.now(), top: found.some(item => item.top), kind: 'payment_card' };
+      for (const item of found) {
+        // Each frame receives only the values for the fields it holds.
+        const values = { origin: item.origin, number: item.fields.number ? secret.number : '', cvc: item.fields.cvc ? secret.cvc : '', name: item.fields.name ? secret.name || '' : '',
+          expMonth: item.fields.expiry || item.fields.expMonth ? secret.expMonth : '', expYear: item.fields.expiry || item.fields.expYear ? secret.expYear : '' };
+        const result = await bounded(this.credentialFrameScript(contents, item.frame, 'cardFill', values), 8000);
+        if (!result?.ok) throw Object.assign(failure('command_failed', 'The card form changed during the fill; check the page before continuing', { credential: ['navigated', 'no_card_form', 'ambiguous_card_form'].includes(result?.reason) ? result.reason : 'fill_failed' }));
+        filled.push(...result.filled);
+      }
+    } finally { for (const key of Object.keys(secret)) secret[key] = ''; }
+    return { status: 'filled', kind: 'payment_card', fields: [...new Set(filled)], submit: 'not_requested', frame: found.length === 1 && found[0].top ? 'top' : 'subframes', frames: found.length, origin: topOrigin,
+      navigation: 'none', outcome: 'unverified', notice: 'Card details were filled inside a protected operation. Nothing was submitted: the purchase needs a person to approve the payment terms, then payments.submit.' };
+  }
+
+  /** Run a payment script: isolated world for the top frame, the frame's own world for a checkout subframe (Electron offers no isolated world there). */
+  paymentFrameScript(contents, frame, op, args = {}) {
+    const code = paymentScript(op, args);
+    if (frame && frame !== contents.mainFrame) return frame.executeJavaScript(code, op === 'click');
+    return typeof contents.executeJavaScriptInIsolatedWorld === 'function'
+      ? contents.executeJavaScriptInIsolatedWorld(OBSERVATION_WORLD, [{ code }], op === 'click') : contents.executeJavaScript(code, op === 'click');
+  }
+
+  /**
+   * Read checkout terms (ADR 019): the top-level origin from the browser process (cross-checked
+   * with the committed URL), the one checkout frame with the expected origin, and the rendered
+   * text of each configured element. Page text is returned as data for the payment service to parse.
+   */
+  async readCheckout(tab, { frameOrigin = null, selectors }) {
+    const contents = tab.view.webContents;
+    const main = contents.mainFrame;
+    let topOrigin = null;
+    try { topOrigin = main?.origin && new URL(contents.getURL()).origin === main.origin ? main.origin : null; } catch { topOrigin = null; }
+    let frame = main;
+    if (frameOrigin && frameOrigin !== topOrigin) {
+      const matches = (main?.framesInSubtree ?? []).filter(item => item !== main && !item.isDestroyed?.() && item.origin === frameOrigin);
+      if (matches.length !== 1) return { topOrigin, url: contents.getURL(), frameOrigin: null, frameCount: matches.length, fields: {}, frame: null };
+      frame = matches[0];
+    }
+    const read = await bounded(this.paymentFrameScript(contents, frame, 'read', { selectors }), 5000);
+    const scriptOrigin = read?.origin ?? null;
+    return { topOrigin, url: contents.getURL(), frameOrigin: frame?.origin && scriptOrigin === frame.origin ? frame.origin : null, frameUrl: read?.href ?? null, fields: read?.fields ?? {}, frame };
+  }
+
+  /** payments.propose: resolve snapshot refs to selectors (top frame only) and read the checkout as it is now. */
+  async paymentObserve(args, context, { frameOrigin = null, targets }) {
+    const name = 'payments.propose';
+    this.admission.assertAutomationAdmitted(context.actor, name);
+    const human = isHuman(context.actor);
+    const tab = this.tab(args.tabId);
+    if (args.workspaceId != null && tab.workspaceId !== args.workspaceId) throw failure('target_mismatch', 'Tab belongs to a different workspace');
+    if (!human) this.assertNotProtected(name, args);
+    await this.assertObservable(tab, name, context);
+    const contents = tab.view.webContents;
+    if (tab.blocked) throw failure('site_blocked', 'The tab shows a blocked destination');
+    if (contents.isLoadingMainFrame?.()) throw stale('navigation_in_progress', 'The checkout is still loading; inspect it again when it has loaded');
+    if (args.expectedVersion != null && args.expectedVersion !== tab.version) throw stale('version', 'Stale tab version; inspect current state');
+    const selectors = {};
+    const refs = {};
+    for (const [field, target] of Object.entries(targets)) { if (target?.selector) selectors[field] = target.selector; else if (target?.ref) refs[field] = target.ref; }
+    if (Object.keys(refs).length) {
+      if (frameOrigin) throw failure('invalid_arguments', 'Snapshot refs identify top-frame elements; use CSS selectors for a checkout inside a frame');
+      if (!human) for (const ref of Object.values(refs)) this.assertRef(tab, { ref }, context.actor);
+      const resolved = await bounded(this.paymentFrameScript(contents, contents.mainFrame, 'resolve', { refs }), 5000);
+      for (const field of Object.keys(refs)) {
+        const selector = resolved?.selectors?.[field];
+        if (!selector) throw stale('ref_not_resolvable', `The ${field} ref is not an element of the top-level document (frames and shadow roots need a CSS selector)`);
+        selectors[field] = selector;
+      }
+    }
+    const { frame: _frame, ...observation } = await this.readCheckout(tab, { frameOrigin, selectors });
+    return { ...observation, selectors, version: tab.version };
+  }
+
+  /**
+   * payments.submit: the purchase click (ADR 019). Serialized with all tab input. Re-reads the
+   * checkout immediately before the click and hands it to `verify` (which refuses changed
+   * terms); `onAttempt` durably records the attempt before the click. Errors carry
+   * `paymentStage`: not_clicked (provably nothing clicked) or click_unknown.
+   */
+  async paymentSubmit(args, context, { frameOrigin = null, selectors, verify, onAttempt }) {
+    const name = 'payments.submit';
+    const human = isHuman(context.actor);
+    // Every refusal before the attempt is recorded precedes any effect: a one-time approval is given back.
+    const before = work => { try { return work(); } catch (error) { if (error && typeof error === 'object' && !error.paymentChanged) error.notStarted = true; throw error; } };
+    const tab = before(() => {
+      this.admission.assertAutomationAdmitted(context.actor, name);
+      const target = this.tab(args.tabId);
+      if (args.workspaceId != null && target.workspaceId !== args.workspaceId) throw failure('target_mismatch', 'Tab belongs to a different workspace');
+      if (!human) this.assertNotProtected(name, args);
+      return target;
+    });
+    const refuse = (code, message, details) => Object.assign(failure(code, message, details), { notStarted: true });
+    const slot = await this.acquireInput(tab, name, context.actor, human).catch(error => { error.notStarted = true; throw error; });
+    try {
+      this.checkControl(tab, args, context, name);
+      const contents = tab.view.webContents;
+      if (tab.blocked) throw refuse('site_blocked', 'The tab shows a blocked destination; nothing was submitted');
+      if (contents.isLoadingMainFrame?.()) throw refuse('stale_state', 'The checkout is still loading; inspect it again when it has loaded', { reason: 'navigation_in_progress' });
+      const version = tab.version, epoch = tab.controlEpoch ?? 0, main = contents.mainFrame;
+      const observation = await this.readCheckout(tab, { frameOrigin, selectors }).catch(error => { error.notStarted = true; throw error; });
+      const { frame } = observation;
+      verify(observation);
+      await onAttempt();
+      const unchanged = tab.version === version && (tab.controlEpoch ?? 0) === epoch && contents.mainFrame === main && main?.origin === observation.topOrigin
+        && frame && !frame.isDestroyed?.() && frame.origin === observation.frameOrigin && !contents.isLoadingMainFrame?.();
+      if (!unchanged) throw Object.assign(failure('action_interrupted', 'The checkout changed while the attempt was being recorded; nothing was clicked'), { paymentStage: 'not_clicked' });
+      const navigation = this.watchNavigation(tab, tab.blocked);
+      let clicked;
+      try { clicked = await bounded(this.paymentFrameScript(contents, frame, 'click', { selector: selectors.submit, origin: observation.frameOrigin }), 8000); }
+      catch (error) { navigation.cancel(); throw Object.assign(error, { paymentStage: 'click_unknown' }); }
+      if (!clicked?.ok) { navigation.cancel(); return { clicked: false, reason: ['navigated', 'missing', 'ambiguous', 'disabled'].includes(clicked?.reason) ? clicked.reason : 'missing' }; }
+      const observed = await navigation.wait(1500);
+      let url = null;
+      try { url = contents.getURL(); } catch { url = null; }
+      return { clicked: true, url, navigation: !observed ? 'none' : observed.blocked ? 'blocked' : observed.download ? 'download' : observed.committed ? 'committed' : observed.committed === false && !observed.pending ? 'failed' : 'started' };
+    } finally { this.releaseInput(tab, slot); }
   }
 
   closeWorkspace(workspaceId) {

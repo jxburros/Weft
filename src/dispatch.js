@@ -9,11 +9,11 @@ import { executeHookCommand, pluginCommandAdminDefinitions } from './plugin-comm
 import { PluginRegistry } from './plugins/registry.js';
 import { TaskRuntime, RUNTIME_COMMANDS } from './task-runtime.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'payments.status'];
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, plugins = new PluginRegistry(), admission, authority, tasks, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, plugins = new PluginRegistry(), admission, authority, tasks, onEvent = () => {} }) {
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
   // The credential broker contributes task-grant evidence and the approval preview for credentials.fill; nothing else.
@@ -24,6 +24,14 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
   // Durable task runtime (ADR 016): task steps re-enter this dispatcher as the task's bound identity.
   tasks ??= new TaskRuntime({ workspace, browser, admission, clients, providers, credentials, onEvent });
   const runtimeCommands = new Set(RUNTIME_COMMANDS);
+  // Payments (ADR 019) bind payments.submit approvals to the payment's terms, reconcile uncertain submissions for the
+  // task runtime, and void unsubmitted payments when their task closes.
+  if (payments) {
+    authority.approvalBinding ??= (...input) => payments.approvalBinding(...input);
+    payments.attach({ authority, tasks, clients });
+    const previous = workspace?.onTaskTransition;
+    if (workspace) workspace.onTaskTransition = notice => { previous?.(notice); payments.onTaskTransition(notice); };
+  }
 
   /** Catalog metadata, with plugins.invoke raised to the invoked plugin operation's manifest-derived class. */
   const specFor = (command, args) => {
@@ -169,6 +177,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (hookCommands.has(command)) return executeHookCommand(command, args, context, { plugins, call });
     if (command.startsWith('plugin.') || Object.hasOwn(pluginCommandAdminDefinitions, command)) {
       return plugins.execute(command, command.startsWith('plugin.') ? { ...args, workspaceId: target.workspaceId ?? args.workspaceId } : args, context, { call });
+    }
+    if (command.startsWith('payments.')) {
+      if (!payments) throw Object.assign(new Error('Payments are not available in this process'), { code: 'unavailable' });
+      return payments.execute(command, args, context);
     }
     if (command.startsWith('credentials.')) {
       if (!credentials) throw Object.assign(new Error('The credential broker is not available in this process'), { code: 'unavailable' });

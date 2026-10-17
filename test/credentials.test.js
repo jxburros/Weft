@@ -132,12 +132,12 @@ test('agents see opaque references and masked identifiers; the vault file holds 
   const f = await fixture(t);
   const created = await f.create({ frameOrigins: ['https://login.example.test'] });
   assert.equal(created.error, null);
-  assert.deepEqual(f.prompts, [{ label: 'Example account', origins: [ORIGIN], workspaceId: f.workspaceId }], 'the dialog is told what the secret is for, nothing else');
+  assert.deepEqual(f.prompts, [{ kind: 'login', label: 'Example account', origins: [ORIGIN], workspaceId: f.workspaceId }], 'the dialog is told what the secret is for, nothing else');
   assert.match(created.result.id, /^cred_/);
   assert.equal(created.result.account, 'j***e@example.com');
   const listed = await f.dispatch('credentials.list', { workspaceId: f.workspaceId }, agent);
   assert.equal(listed.error, null);
-  assert.deepEqual(Object.keys(listed.result[0]).sort(), ['account', 'createdAt', 'expiresAt', 'frameOrigins', 'id', 'integrity', 'label', 'origins', 'provider', 'purpose', 'revision', 'revokedAt', 'status', 'taskGrants', 'updatedAt', 'workspaceId'].sort());
+  assert.deepEqual(Object.keys(listed.result[0]).sort(), ['account', 'createdAt', 'expiresAt', 'frameOrigins', 'id', 'integrity', 'kind', 'label', 'origins', 'provider', 'purpose', 'revision', 'revokedAt', 'status', 'taskGrants', 'updatedAt', 'workspaceId'].sort());
   assert.equal(listed.result[0].status, 'active');
   const raw = readFileSync(join(f.directory, 'credentials', 'vault', 'vault.json'), 'utf8');
   for (const value of [SECRET, USERNAME]) {

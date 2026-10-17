@@ -60,6 +60,13 @@ add('administration', 'tasks.reassign tasks.review tasks.reconcile tasks.retrySt
 add('local_read', 'credentials.status credentials.list credentials.get');
 add('credential_use', 'credentials.fill');
 add('administration', 'credentials.create credentials.update credentials.revoke credentials.delete credentials.grantTask credentials.revokeGrant credentials.configureProvider');
+// Payment authorization (#7, ADR 019): proposing records terms and queues an approval (local work); submitting is the once-only
+// payment class; reading a virtual card's transactions is an external read; reconciliation, retries and card issuance are human-only.
+add('local_read', 'payments.status payments.list payments.get');
+add('local_write', 'payments.propose payments.cancel');
+add('external_read', 'payments.checkCharges');
+add('payment', 'payments.submit');
+add('administration', 'payments.reconcile payments.retry payments.issueCard payments.closeCard payments.configureProvider');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -108,7 +115,7 @@ export function sensitiveCategoriesForCommand(name) {
 /** Resource a command writes: decides which client write scope applies. Derived from namespace so new commands are covered. */
 export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
-  if (['tabs', 'page', 'downloads'].includes(namespace) || name === 'credentials.fill') return 'tabs';
+  if (['tabs', 'page', 'downloads'].includes(namespace) || ['credentials.fill', 'payments.submit'].includes(name)) return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
   if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions'].includes(namespace)) return 'browser';
   return 'records';
@@ -125,6 +132,7 @@ const dataOverrides = {
   'chat.send': ['conversations', 'workspace_records'], 'conversations.message': ['conversations'],
   'workspace.snapshot': ['workspace_records', 'conversations', 'browsing_history', 'activity'],
   'search.query': ['workspace_records', 'conversations'],
+  'payments.propose': ['page_content'], 'payments.status': [], 'payments.checkCharges': ['workspace_records'],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];

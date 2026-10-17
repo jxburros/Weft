@@ -27,7 +27,7 @@ export const CREDENTIAL_REASONS = Object.freeze(['not_found', 'revoked', 'expire
   'provider_unavailable', 'provider_failed', 'provider_disabled', 'invalid_entry', 'locked', 'vault_full', 'unsupported', 'grant_exhausted', 'approval_required',
   'unprotected_storage', 'entry_cancelled', 'broker_unavailable', 'protected_operation', 'credential_residue', 'credential_revealed', 'tab_blocked',
   'navigation_in_progress', 'debugger_attached', 'frame_origin_not_authorized', 'no_login_form', 'ambiguous_login_form', 'not_login_field', 'navigated',
-  'interrupted', 'fill_failed']);
+  'interrupted', 'fill_failed', 'no_card_form', 'ambiguous_card_form', 'card_submit_separate', 'not_card_field']);
 const REASON_CODES = { not_found: 'not_found', revoked: 'permission_required', expired: 'permission_required', integrity_failed: 'unavailable', workspace_mismatch: 'target_mismatch',
   origin_mismatch: 'target_mismatch', frame_origin_mismatch: 'target_mismatch', provider_unavailable: 'unavailable', provider_failed: 'unavailable', provider_disabled: 'unavailable',
   invalid_entry: 'invalid_arguments', locked: 'unavailable', vault_full: 'command_failed', unsupported: 'command_failed', grant_exhausted: 'permission_required',
@@ -57,13 +57,14 @@ export const credentialCommandDefinitions = {
   'credentials.list': ['List credential references in a workspace: opaque ids, labels, purposes, exact authorized origins, masked account identifiers, expiry and status (never secret values)', {
     workspaceId, includeInactive: z.boolean().optional().describe('Include revoked, expired and integrity-failed references.') }],
   'credentials.get': ['Read one credential reference (metadata only, never the secret)', { id, workspaceId }],
-  'credentials.fill': ['Fill the login form on an exactly authorized origin from a credential reference inside an exclusive protected operation (needs an exact one-time human approval or a task grant); returns sanitized status only', {
+  'credentials.fill': ['Fill the login form (or, for a payment card, the card fields; never submits a purchase) on an exactly authorized origin from a credential reference inside an exclusive protected operation (needs an exact one-time human approval or a task grant); returns sanitized status only', {
     id, tabId: z.number().int().positive(), workspaceId, expectedVersion: z.number().int().positive().optional(),
     ref: z.string().regex(/^f\d{1,6}e\d{1,9}$/).optional().describe('Password field (or its form) from your latest page.snapshot; omit to use the single login form on the page.'),
     snapshotId: z.string().max(64).optional().describe('Snapshot that supplied the ref; must be your latest.'),
-    submit: z.boolean().optional().describe('Submit the login form after filling (default false).') }],
-  'credentials.create': ['Human creates a credential reference; the secret is typed only into a browser-owned dialog, never passed as a command argument', {
-    workspaceId, label: z.string().min(1).max(120), purpose: z.string().min(1).max(300), origins: z.array(origin).min(1).max(10),
+    submit: z.boolean().optional().describe('Submit the login form after filling (default false). Refused for payment cards: purchases go through payments.submit.') }],
+  'credentials.create': ['Human creates a credential reference (a sign-in or a payment card); the secret is typed only into a browser-owned dialog, never passed as a command argument', {
+    workspaceId, kind: z.enum(['login', 'payment_card']).default('login').describe('login: username and password; payment_card: card details for checkout fields on the listed merchant origins (local vault only).'),
+    label: z.string().min(1).max(120), purpose: z.string().min(1).max(300), origins: z.array(origin).min(1).max(10),
     frameOrigins: z.array(origin).max(10).optional().describe('Extra origins of embedded login frames allowed to receive the credential; the top-level page must still match origins.'),
     expiresAt: isoDate.optional().describe('When the reference stops working (ISO date-time).'), provider: z.enum(['local', 'onepassword']).default('local'),
     reference: z.strictObject({ password: z.string().max(500).describe('1Password secret reference, op://vault/item/field.'), username: z.string().max(500).optional().describe('Optional op:// reference for the username.') }).optional(),
@@ -254,12 +255,14 @@ export class CredentialService {
   approvalPreview(command, args) {
     if (command !== 'credentials.fill') return null;
     const entry = this.cache.find(item => item.id === args.id);
+    if (entry?.kind === 'payment_card') return { 'Payment card': `${entry.label} (${entry.account ?? 'card'})`, 'Fill only on': [...entry.origins, ...entry.frameOrigins].join(', '), 'Purpose': entry.purpose,
+      'Submits a purchase': 'No. Card filling never pays; a purchase needs its own payment approval (payments.submit).' };
     return entry ? { 'Credential': `${entry.label} (${entry.account ?? 'no account identifier'})`, 'Authorized origins': entry.origins.join(', '), 'Purpose': entry.purpose, 'Submit after fill': args.submit === true }
       : { 'Credential': `${args.id} (not in the open vault; the fill is refused if it does not exist)` };
   }
   describe(entry, human = false) {
     const grants = this.grants.filter(grant => grant.credentialId === entry.id && grant.status === 'active');
-    return { id: entry.id, workspaceId: entry.workspaceId, label: entry.label, purpose: entry.purpose, origins: [...entry.origins], frameOrigins: [...entry.frameOrigins],
+    return { id: entry.id, workspaceId: entry.workspaceId, kind: entry.kind ?? 'login', label: entry.label, purpose: entry.purpose, origins: [...entry.origins], frameOrigins: [...entry.frameOrigins],
       provider: entry.provider, account: entry.account, status: entry.state, integrity: entry.integrity, createdAt: entry.createdAt, updatedAt: entry.updatedAt,
       expiresAt: entry.expiresAt, revokedAt: entry.revokedAt, revision: entry.revision,
       taskGrants: human ? grants.map(grant => ({ id: grant.id, taskId: grant.taskId, usesLeft: grant.usesLeft, expiresAt: grant.expiresAt })) : grants.length };
@@ -361,9 +364,11 @@ export class CredentialService {
     }
   }
   async create(args) {
-    const input = { workspaceId: args.workspaceId, label: args.label, purpose: args.purpose, origins: args.origins, frameOrigins: args.frameOrigins ?? [],
+    const kind = args.kind ?? 'login';
+    const input = { workspaceId: args.workspaceId, kind, label: args.label, purpose: args.purpose, origins: args.origins, frameOrigins: args.frameOrigins ?? [],
       expiresAt: args.expiresAt ?? null, provider: args.provider, reference: args.reference ?? null, accountLabel: args.accountLabel ?? null };
     this.validateOrigins(input);
+    if (kind === 'payment_card' && (input.provider !== 'local' || input.reference)) throw Object.assign(credentialError('invalid_entry'), { message: 'Payment cards are stored only in the Weft vault' });
     if (input.expiresAt && !(Date.parse(input.expiresAt) > this.clock())) throw Object.assign(credentialError('invalid_entry'), { message: 'expiresAt must be in the future' });
     if (input.provider === 'onepassword' && !input.reference) throw Object.assign(credentialError('invalid_entry'), { message: 'A 1Password reference (op://vault/item/field) is required' });
     if (input.provider === 'onepassword' && !this.providers.onepassword?.enabled) throw credentialError('provider_disabled');
@@ -372,14 +377,29 @@ export class CredentialService {
     if (input.provider === 'local') {
       if (typeof this.promptSecret !== 'function') throw credentialError('unsupported');
       // The value is typed into a browser-owned dialog and goes from there to the broker; it is never a command argument.
-      secret = await this.promptSecret({ label: input.label, origins: input.origins, workspaceId: input.workspaceId });
-      if (!secret || typeof secret.password !== 'string' || !secret.password) throw credentialError('entry_cancelled');
+      secret = await this.promptSecret({ kind, label: input.label, origins: input.origins, workspaceId: input.workspaceId });
+      if (kind === 'payment_card' ? !secret || typeof secret.number !== 'string' || !secret.number : !secret || typeof secret.password !== 'string' || !secret.password) throw credentialError('entry_cancelled');
     }
     try {
       const entry = await this.call('create', { input, secret }, { create: true });
       await this.refresh();
       return this.describe(entry, true);
-    } finally { if (secret) { secret.password = ''; secret.username = ''; } }
+    } finally { if (secret) for (const key of Object.keys(secret)) if (typeof secret[key] === 'string') secret[key] = ''; }
+  }
+  /**
+   * Store a card issued by a virtual-card provider (ADR 019). Main-process only (no command): the
+   * issuer's response goes straight to the broker; the caller receives metadata and a masked label.
+   */
+  async storeIssuedCard(input, card) {
+    const entryInput = { workspaceId: input.workspaceId, kind: 'payment_card', label: input.label, purpose: input.purpose, origins: input.origins, frameOrigins: input.frameOrigins ?? [],
+      expiresAt: input.expiresAt ?? null, provider: 'local', reference: null, accountLabel: input.accountLabel ?? null };
+    this.validateOrigins(entryInput);
+    if (!this.protection().protected) throw credentialError('unprotected_storage');
+    try {
+      const entry = await this.call('create', { input: entryInput, secret: { number: card.number, expMonth: card.expMonth, expYear: card.expYear, cvc: card.cvc, name: card.name ?? '' } }, { create: true });
+      await this.refresh();
+      return this.describe(entry, true);
+    } finally { for (const key of Object.keys(card)) if (typeof card[key] === 'string') card[key] = ''; }
   }
   async fill(args, context) {
     const human = ['human', 'admin'].includes(context.actor);
@@ -395,7 +415,7 @@ export class CredentialService {
     }
     if (!this.browser) throw credentialError('broker_unavailable');
     const result = await this.browser.credentialFill(args, context, {
-      credential: { origins: entry.origins, frameOrigins: entry.frameOrigins },
+      credential: { kind: entry.kind ?? 'login', origins: entry.origins, frameOrigins: entry.frameOrigins },
       release: async (topOrigin, frameOrigin) => {
         if (grant) {
           // A task grant use is spent when the secret is released, not when the command is admitted.
@@ -405,7 +425,8 @@ export class CredentialService {
           if (grant.usesLeft === 0) grant.status = 'used';
           this.saveGrants();
         }
-        return this.call('release', { id: entry.id, request: { workspaceId: entry.workspaceId, topOrigin, frameOrigin } });
+        // A card fill names every frame that holds card fields; the broker checks each one.
+        return this.call('release', { id: entry.id, request: { workspaceId: entry.workspaceId, topOrigin, ...(Array.isArray(frameOrigin) ? { frameOrigins: frameOrigin } : { frameOrigin }) } });
       },
     });
     return { ...result, id: entry.id, label: entry.label, account: entry.account, ...(grant && { taskGrant: { id: grant.id, usesLeft: grant.usesLeft } }) };

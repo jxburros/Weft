@@ -8,7 +8,7 @@ const groups = {
   tabs: ['tabs'], page: ['page'],
   workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],
-  artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials'], models: ['models', 'chat'],
+  artifacts: ['artifacts'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials', 'payments'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {
   const actions = Object.keys(commands).filter(name => namespaces.includes(name.split('.')[0]));

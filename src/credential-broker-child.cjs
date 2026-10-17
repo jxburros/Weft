@@ -50,11 +50,48 @@ function maskAccount(value) {
 
 const canonical = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item)
   ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item);
-/** Security-relevant metadata authenticated by the seal: editing the file invalidates the entry. */
+/**
+ * Security-relevant metadata authenticated by the seal: editing the file invalidates the entry.
+ * Payment-card entries (ADR 019) also bind their kind, brand and last four digits; login entries
+ * keep the original associated data so existing vaults stay valid.
+ */
 function associatedData(entry) {
   return Buffer.from(canonical({ v: VAULT_VERSION, id: entry.id, workspaceId: entry.workspaceId, label: entry.label, purpose: entry.purpose,
     origins: entry.origins, frameOrigins: entry.frameOrigins, provider: entry.provider, account: entry.account, createdAt: entry.createdAt,
-    expiresAt: entry.expiresAt, revokedAt: entry.revokedAt, revision: entry.revision }));
+    expiresAt: entry.expiresAt, revokedAt: entry.revokedAt, revision: entry.revision,
+    ...(entry.kind && entry.kind !== 'login' ? { kind: entry.kind, brand: entry.brand ?? null, last4: entry.last4 ?? null } : {}) }));
+}
+
+/** Luhn-valid 12-19 digit card number, a month and an unexpired year, a 3-4 digit security code. Values never leave this process except on release. */
+function validateCard(secret, now) {
+  if (!secret || typeof secret !== 'object') throw fail('invalid_entry');
+  const number = String(secret.number ?? '').replace(/[\s-]/g, '');
+  const month = Number(secret.expMonth);
+  let year = Number(secret.expYear);
+  const cvc = String(secret.cvc ?? '');
+  const name = String(secret.name ?? '').slice(0, 100);
+  if (!/^\d{12,19}$/.test(number) || !/^\d{3,4}$/.test(cvc) || !Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year)) throw fail('invalid_entry');
+  if (year < 100) year += 2000;
+  let sum = 0;
+  for (let index = 0; index < number.length; index++) {
+    let digit = Number(number[number.length - 1 - index]);
+    if (index % 2 === 1) { digit *= 2; if (digit > 9) digit -= 9; }
+    sum += digit;
+  }
+  const today = new Date(now);
+  if (sum % 10 !== 0 || year > today.getUTCFullYear() + 30 || year * 12 + month < today.getUTCFullYear() * 12 + today.getUTCMonth() + 1) throw fail('invalid_entry');
+  return { number, expMonth: month, expYear: year, cvc, name };
+}
+function cardBrand(number) {
+  const prefix = Number(number.slice(0, 4));
+  if (/^4/.test(number)) return 'Visa';
+  if (/^5[1-5]/.test(number) || (prefix >= 2221 && prefix <= 2720)) return 'Mastercard';
+  if (/^3[47]/.test(number)) return 'American Express';
+  if (/^(6011|65|64[4-9])/.test(number)) return 'Discover';
+  if (/^35(2[89]|[3-8])/.test(number)) return 'JCB';
+  if (/^(36|38|30[0-5])/.test(number)) return 'Diners Club';
+  if (/^62/.test(number)) return 'UnionPay';
+  return 'Card';
 }
 function seal(key, entry, payload) {
   const iv = crypto.randomBytes(12);
@@ -153,7 +190,16 @@ class Vault {
     if (input.expiresAt != null && !(Date.parse(input.expiresAt) > this.clock())) throw fail('invalid_entry');
     let payload;
     let account = input.accountLabel ? String(input.accountLabel).slice(0, 120) : null;
-    if (provider === 'local') {
+    const card = input.kind === 'payment_card';
+    let cardMeta = {};
+    if (card) {
+      // Payment cards are kept only in this vault (no external provider); the security code never leaves it except on release.
+      if (provider !== 'local') throw fail('invalid_entry');
+      const value = validateCard(secret, this.clock());
+      payload = { kind: 'payment_card', ...value };
+      cardMeta = { kind: 'payment_card', brand: cardBrand(value.number), last4: value.number.slice(-4) };
+      account = account ?? `${cardMeta.brand} •••• ${cardMeta.last4}`;
+    } else if (provider === 'local') {
       if (!secret || typeof secret.password !== 'string' || !secret.password || secret.password.length > 4096 || (secret.username != null && (typeof secret.username !== 'string' || secret.username.length > 512))) throw fail('invalid_entry');
       payload = { kind: 'local', username: secret.username || '', password: secret.password };
       account = account ?? maskAccount(secret.username);
@@ -164,9 +210,10 @@ class Vault {
     const now = new Date(this.clock()).toISOString();
     const entry = { id: `cred_${crypto.randomUUID()}`, workspaceId: String(input.workspaceId).slice(0, 200), label: String(input.label).slice(0, 120),
       purpose: String(input.purpose).slice(0, 300), origins, frameOrigins, provider, account, createdAt: now, updatedAt: now,
-      expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null, revokedAt: null, revision: 1 };
+      expiresAt: input.expiresAt ? new Date(input.expiresAt).toISOString() : null, revokedAt: null, revision: 1, ...cardMeta };
     entry.seal = seal(this.key, entry, payload);
     if (payload.password) payload.password = '';
+    if (card) { payload.number = ''; payload.cvc = ''; }
     this.entries.push(entry);
     this.save();
     return this.describe(entry);
@@ -221,10 +268,13 @@ class Vault {
     if (entry.revokedAt || payload.revoked) throw fail('revoked');
     if (entry.expiresAt && Date.parse(entry.expiresAt) <= this.clock()) throw fail('expired');
     let top;
-    let frame;
-    try { top = normalizeOrigin(request.topOrigin); frame = normalizeOrigin(request.frameOrigin); } catch { throw fail('origin_mismatch'); }
+    let frames;
+    // A login fill names one target frame; a card fill names every frame that holds card fields.
+    const requested = Array.isArray(request.frameOrigins) ? request.frameOrigins.slice(0, 10) : [request.frameOrigin];
+    try { top = normalizeOrigin(request.topOrigin); frames = requested.map(normalizeOrigin); } catch { throw fail('origin_mismatch'); }
     if (!entry.origins.includes(top)) throw fail('origin_mismatch');
-    if (frame !== top && !entry.frameOrigins.includes(frame)) throw fail('frame_origin_mismatch');
+    if (!frames.length || frames.some(frame => frame !== top && !entry.frameOrigins.includes(frame))) throw fail('frame_origin_mismatch');
+    if (payload.kind === 'payment_card') return { number: payload.number, expMonth: payload.expMonth, expYear: payload.expYear, cvc: payload.cvc, name: payload.name };
     if (payload.kind === 'local') return { username: payload.username, password: payload.password };
     const adapter = this.providers[payload.kind];
     if (!adapter) throw fail('provider_disabled');
@@ -232,7 +282,7 @@ class Vault {
   }
 }
 
-module.exports = { normalizeOrigin, maskAccount, associatedData, seal, open, Vault, OnePasswordCli, REASONS };
+module.exports = { normalizeOrigin, maskAccount, associatedData, seal, open, Vault, OnePasswordCli, REASONS, validateCard, cardBrand };
 
 if (require.main === module) {
   let vault = null;

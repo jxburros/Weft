@@ -128,14 +128,18 @@ export class Authority {
       if (grant?.grantId) { grantId = grant.grantId; result = { decision: 'auto_preapproved', reason: 'task_credential_grant' }; }
     }
     if (result.decision === 'approval') {
-      const fingerprint = approvalFingerprint({ command, args, actor: base.actor, workspaceId: target.workspaceId, tabId: target.tabId, destination });
+      // A module may bind a command's approval to its own terms (payments: merchant, amounts, currency, recurrence; ADR 019).
+      // The hook can also refuse first (unknown or no longer submittable records) so no useless request is queued.
+      const binding = this.approvalBinding?.(command, args, context, target) ?? null;
+      const fingerprint = binding?.fingerprint ?? approvalFingerprint({ command, args, actor: base.actor, workspaceId: target.workspaceId, tabId: target.tabId, destination });
       const match = this.approvals.match({ fingerprint, actor: base.actor, command, workspaceId: target.workspaceId, destination, taskId: context.taskId, actionClass }, id => this.taskOpen(id));
       if (match.approvalId) { approvalId = match.approvalId; approvedOnce = Boolean(match.approvedOnce); result = evaluateAutonomy({ ...evidence, ...match }); }
       if (result.decision === 'approval') {
         const request = this.approvals.request({ fingerprint, actor: base.actor, clientId: context.clientId, command, args, actionClass,
           categories: sensitiveCategoriesForCommand(command), workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId, destination, reason: result.reason, level: effective,
           previewExtra: this.approvalPreview?.(command, args) ?? null,
-          ...(context.sensitiveValues?.length ? { preview: { ...withholdValues(previewArgs(args), context.sensitiveValues), ...(this.approvalPreview?.(command, args) ?? {}) } } : {}) });
+          ...(context.sensitiveValues?.length ? { preview: { ...withholdValues(previewArgs(args), context.sensitiveValues), ...(this.approvalPreview?.(command, args) ?? {}) } } : {}),
+          ...(binding?.preview ? { preview: binding.preview } : {}) });
         this.record({ ...base, type: 'approval', decision: 'approval', reason: result.reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args) });
         throw authorityError('approval_required', `${command} needs human approval in the Weft window (request ${request.id}). Retry the identical command after approval; changed arguments need a new approval.`,
           { decision: 'approval', reason: result.reason, actionClass, level: effective, approvalId: request.id, fingerprint, expiresAt: new Date(request.expiresAt).toISOString() });
@@ -200,7 +204,8 @@ export class Authority {
   }
   /** Give back a one-time approval consumed by a command that a pre-execution check refused before any effect. */
   restoreApproval(decision, { command, context, target, error }) {
-    if (!decision?.approvedOnce || !decision.approvalId || error?.notStarted !== true) return false;
+    // A refusal that voided the approval itself (changed payment terms) never gives it back.
+    if (!decision?.approvedOnce || !decision.approvalId || error?.notStarted !== true || error?.approvalInvalidated === true) return false;
     const restored = this.approvals.restore(decision.approvalId);
     this.record({ type: 'approval', command, actor: context.actor ?? 'automation', clientId: context.clientId, workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId,
       actionClass: decision.actionClass, decision: 'approve', reason: restored ? 'approval_restored' : 'approval_expired', outcome: 'recorded', approvalId: decision.approvalId,

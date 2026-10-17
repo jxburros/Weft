@@ -18,8 +18,8 @@ import { sanitizeUrl } from './workspace.js';
 export const RUNTIME_COMMANDS = Object.freeze(Object.keys(taskCommandDefinitions));
 const FORBIDDEN_STEP_COMMANDS = new Set([...RUNTIME_COMMANDS, 'chat.send', 'chat.cancel', 'handoffs.create', 'browser.close', 'browser.emergencyStop', 'browser.resumeAutomation']);
 // Browser commands that need a current inspection and expectedVersion from an automation identity.
-const INPUT_COMMANDS = new Set(['credentials.fill', 'page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.zoom', 'tabs.close', 'tabs.move', 'tabs.pin']);
-const TAB_COMMANDS = name => name.startsWith('page.') || ['artifacts.capture', 'credentials.fill'].includes(name);
+const INPUT_COMMANDS = new Set(['credentials.fill', 'payments.submit', 'page.navigate', 'page.back', 'page.forward', 'page.reload', 'page.stop', 'page.evaluate', 'page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.zoom', 'tabs.close', 'tabs.move', 'tabs.pin']);
+const TAB_COMMANDS = name => name.startsWith('page.') || ['artifacts.capture', 'credentials.fill', 'payments.propose', 'payments.submit'].includes(name);
 // Refusals that happen before any effect: the step did not run and may be attempted again safely.
 const NOT_STARTED_CODES = new Set(['approval_required', 'permission_required', 'human_required', 'site_blocked', 'stale_state', 'lease_conflict', 'tab_busy', 'ambiguous_target',
   'target_mismatch', 'invalid_arguments', 'unknown_command', 'not_found', 'idempotency_conflict', 'unsupported_capability']);

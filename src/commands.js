@@ -18,6 +18,7 @@ import { downloadSafetyCommandDefinitions } from './download-safety.js';
 import { updateCommandDefinitions } from './updater.js';
 import { taskCommandDefinitions } from './task-commands.js';
 import { credentialCommandDefinitions, CREDENTIAL_ADMIN_COMMANDS, CREDENTIAL_REASONS } from './credentials.js';
+import { paymentCommandDefinitions, PAYMENT_ADMIN_COMMANDS, PAYMENT_REASONS, PAYMENT_CHANGES } from './payments.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -124,6 +125,7 @@ const definitions = {
   ...updateCommandDefinitions,
   ...taskCommandDefinitions,
   ...credentialCommandDefinitions,
+  ...paymentCommandDefinitions,
 };
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
@@ -137,7 +139,7 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
   'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
-  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete', ...CREDENTIAL_ADMIN_COMMANDS,
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete', ...CREDENTIAL_ADMIN_COMMANDS, ...PAYMENT_ADMIN_COMMANDS,
   'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
@@ -218,7 +220,7 @@ export function toCommandError(error, commandName, input) {
   const message = error?.message || 'Command failed';
   const known = { unauthorized: 401, permission_required: 403, invalid_arguments: 400, invalid_json: 400,
     unknown_command: 400, idempotency_conflict: 409, already_committed: 409, component_integrity: 422, approval_required: 403, tab_busy: 409, action_interrupted: 409, site_blocked: 403, ambiguous_target: 400, target_mismatch: 403, human_required: 403, stale_state: 409, lease_conflict: 409, cancelled: 409, emergency_stop: 409,
-    timeout: 504, not_found: 404, duplicate_risk: 409, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
+    timeout: 504, not_found: 404, duplicate_risk: 409, terms_changed: 409, merchant_changed: 409, request_too_large: 413, unsupported_media_type: 415, unavailable: 503,
     command_failed: 422, unsupported: 422, transport_error: 503, unsupported_capability: 422 };
   let code = error?.code === 'SITE_BLOCKED' ? 'site_blocked' : Object.hasOwn(known, error?.code) ? error.code : 'command_failed';
   if (code === 'command_failed') {
@@ -255,6 +257,9 @@ export function toCommandError(error, commandName, input) {
   if (code === 'stale_state' && word(error.details?.reason)) details.reason = error.details.reason;
   // Credential refusals carry one fixed status word; never origins, values or page data.
   if (CREDENTIAL_REASONS.includes(error?.details?.credential)) details.credential = error.details.credential;
+  // Payment refusals (ADR 019): one fixed reason word and, for changed terms, which fixed term names differ; never amounts, origins or page text.
+  if (PAYMENT_REASONS.includes(error?.details?.payment)) details.payment = error.details.payment;
+  if (['terms_changed', 'merchant_changed'].includes(code) && Array.isArray(error.details?.changed)) details.changed = error.details.changed.filter(item => PAYMENT_CHANGES.includes(item));
   if (code === 'stale_state' && Array.isArray(error.details?.changed)) details.changed = error.details.changed.filter(item => ['url', 'width', 'height', 'scrollX', 'scrollY', 'devicePixelRatio'].includes(item));
   if (code === 'action_interrupted' && error.details) details.interrupted = { command: Object.hasOwn(commands, error.details.command) ? error.details.command : null, cancellable: false };
   if (code === 'tab_busy' && error.details) details.queued = Number.isSafeInteger(error.details.queued) ? error.details.queued : 0;
@@ -303,7 +308,7 @@ export function normalizeCommand(name, args = {}) {
   return { command, args: output, normalized };
 }
 export const exitCodes = Object.freeze({ invalid_arguments: 2, invalid_json: 2, unknown_command: 2,
-  stale_state: 3, idempotency_conflict: 3, duplicate_risk: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
+  stale_state: 3, idempotency_conflict: 3, duplicate_risk: 3, terms_changed: 3, merchant_changed: 3, already_committed: 3, lease_conflict: 3, tab_busy: 3, action_interrupted: 7, site_blocked: 4, permission_required: 4, approval_required: 5, human_required: 4, target_mismatch: 4, ambiguous_target: 2, unauthorized: 4, cancelled: 6,
   emergency_stop: 6, timeout: 7, transport_error: 7, unavailable: 7, unsupported_capability: 8 });
 export const resultExitCode = outcome => outcome.error ? (exitCodes[outcome.error.code] || 1) : 0;
 export const resultHttpStatus = outcome => outcome.error ? (outcome.error.httpStatus || ({ invalid_arguments: 400, unknown_command: 400, invalid_json: 400, stale_state: 409, lease_conflict: 409, permission_required: 403, human_required: 403, approval_required: 403, emergency_stop: 409, cancelled: 409, ambiguous_target: 400, target_mismatch: 403 }[outcome.error.code]) || 422) : 200;

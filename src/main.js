@@ -22,6 +22,7 @@ import { UpdateService, createElectronTransport, createWindowsSignatureVerifier,
 import { WEFT_VERSION } from './version.js';
 import { CredentialService, safeStorageProtector } from './credentials.js';
 import { promptCredentialSecret } from './credential-entry.js';
+import { PaymentService } from './payments.js';
 
 let browser;
 let workspace;
@@ -141,8 +142,12 @@ app.whenReady().then(async () => {
   credentials = new CredentialService({ directory: join(app.getPath('userData'), 'credentials'), protector: safeStorageProtector(safeStorage), browser, workspace,
     promptSecret: request => promptCredentialSecret(window, request) });
   credentials.start().catch(error => console.warn(`Weft credential vault: ${error.message}`));
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, admission, onEvent: event => events.emit('event', event) });
-  // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain.
+  // Payment authorization (ADR 019): records outside workspace-data like the vault; virtual cards stay off until a person configures them.
+  const payments = new PaymentService({ directory: join(app.getPath('userData'), 'payments'), browser, workspace, credentials, protector: safeStorageProtector(safeStorage) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, payments, admission, onEvent: event => events.emit('event', event) });
+  // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain
+  // (a payment click that was in flight becomes uncertain on its payment record too).
+  payments.init();
   await dispatch.tasks.init();
   dispatch.tasks.start();
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
