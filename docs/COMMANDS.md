@@ -123,7 +123,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | settings.get | Get non-secret application preferences | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | settings.update | Update application preferences; credentials are not accepted | administration | Human only | GUI IPC, CLI, REST, MCP |
 | search.query | Search project records and saved text locally (BM25, fused with opt-in local embeddings when enabled); page mode adds coverage and verified absence | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
-| search.status | Report lexical and optional embedding index coverage for a workspace | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| search.status | Report lexical and optional embedding index coverage for a workspace, including background index rebuild progress | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| search.indexing | Human pauses or resumes the background full-text index rebuild; searches stay partial while it is paused | administration | Human only | GUI IPC, CLI, REST, MCP |
 | search.configureEmbeddings | Human enables or disables optional embeddings for a workspace using an existing model connection endpoint | administration | Human only | GUI IPC, CLI, REST, MCP |
 | search.reindex | Queue every record in a workspace for embedding and process the queue now | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | conversations.message | Append a durable conversation message | local_write | Policy checked | GUI IPC, CLI, REST, MCP |

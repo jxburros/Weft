@@ -37,6 +37,9 @@ if (harness) {
     const server = createServer((request, response) => {
       response.setHeader('content-type', 'text/html');
       if (request.url === '/form') { response.end('<!doctype html><title>Form</title><main><input name="q" value=""></main>'); return; }
+      // A cross-site subframe (localhost vs 127.0.0.1): Chromium puts it in its own process.
+      if (request.url === '/frame-host') { response.end(`<!doctype html><title>Framed</title><main><iframe src="http://localhost:${server.address().port}/inner"></iframe></main>`); return; }
+      if (request.url === '/inner') { response.end('<!doctype html><title>Inner</title><input name="inner" value="">'); return; }
       response.end(`<!doctype html><title>Page ${request.url.slice(1)}</title><main style="height:5000px">Long page ${request.url}</main>`);
     });
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -55,6 +58,16 @@ if (harness) {
       const form = await open('/form');
       const leased = await open('/leased');
       const tasked = await open('/tasked');
+      // Subframes, including cross-origin ones, are checked for unsaved input too (#30).
+      const framed = await open('/frame-host');
+      const framedContents = () => browser.tab(framed.id).view.webContents;
+      const innerFrame = () => framedContents().mainFrame.framesInSubtree.find(frame => frame !== framedContents().mainFrame && /\/inner$/.test(frame.url));
+      await until(() => innerFrame(), 'cross-origin frame loaded');
+      assert.notEqual(innerFrame().origin, framedContents().mainFrame.origin, 'the subframe is cross-origin');
+      assert.deepEqual(await browser.pageStateBlockers(framedContents()), [], 'an untouched framed page has nothing to lose');
+      await innerFrame().executeJavaScript('document.querySelector("input").value = "draft typed in a cross-origin frame"');
+      assert.deepEqual(await browser.pageStateBlockers(framedContents()), ['unsaved_input'], 'edited input inside a cross-origin frame blocks suspension');
+      await dispatch('tabs.close', { tabId: framed.id }, human);
       const current = await open('/current');
       await dispatch('page.evaluate', { tabId: scroll.id, expression: 'scrollTo(0, 1200); scrollY' }, human);
       await dispatch('page.evaluate', { tabId: form.id, expression: 'document.querySelector("input").value = "unsent draft"' }, human);

@@ -36,8 +36,22 @@ Reference run (Linux container, Node 22, 2026-10-17): 10k-record update
 (JSON store: ~2.3 s), 500-capture initial write ~1.6-2.3 s, note update
 ~55-100 ms, annotation ~15-30 ms, ranked search ~25-40 ms, reopen ~150-300 ms.
 Encrypted profile (injected OS key store, production recovery-key KDF): enable
-~4.7 s, update ~40 ms, first search ~0.8 s, repeated search ~13 ms, export
-~160 ms, reopen ~370 ms, data-key rotation ~2.3 s.
+~3.7-4.7 s, update ~40-50 ms, background in-memory index rebuild ~1.0 s after
+enabling and ~1.1 s after unlock (11k records, 1k captures), first search after
+it ~8 ms, repeated search ~7-13 ms, export ~160-200 ms, reopen and unlock
+~370-400 ms (the index rebuild is no longer part of it), data-key rotation
+~1.9-2.3 s.
+
+## Deferred search indexing (#30)
+
+`test/indexing.test.js` seeds 12,000 notes and marks the index as an older
+version. Reference run (same Linux container): opening with a current index
+~500 ms, opening with a pending rebuild ~630 ms (one 30 ms batch plus recreating
+the index tables), a synchronous rebuild of the same store ~730 ms; a write
+during the rebuild ~80 ms. The test enforces only that opening adds less than
+three quarters of the synchronous rebuild time, and that searches during the
+rebuild are partial with coverage. Background batches are about 10 ms or 500
+records; commands and I/O run between them.
 
 ## Responsiveness in real Electron (#30)
 

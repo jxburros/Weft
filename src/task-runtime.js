@@ -668,7 +668,7 @@ export class TaskRuntime {
     const spec = commands[command];
     const external = spec.effect === 'external';
     const op = { id: `op_${randomUUID()}`, stepId: step.id, kind, command, actor: context.actor, external, actionClass: spec.actionClass, status: 'attempted', attemptedAt: now(),
-      summary: summarizeArgs(args), ...(args.requestId ? { requestId: args.requestId } : {}), ...(kind === 'model' ? { conversationId: args.conversationId, modelId: args.modelId } : {}) };
+      summary: summarizeArgs(args, command), ...(args.requestId ? { requestId: args.requestId } : {}), ...(kind === 'model' ? { conversationId: args.conversationId, modelId: args.modelId } : {}) };
     await this.update(task.id, record => {
       record.operations = [...(record.operations ?? []), op];
       if (record.operations.length > MAX_OPERATIONS) {

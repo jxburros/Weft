@@ -79,7 +79,7 @@ add('administration', 'artifacts.setAccess artifacts.purgeContent artifacts.prev
 // Integration contracts (#14) and optional hybrid retrieval (#67): discovery, replay and chunked transfer.
 add('local_read', 'weft.capabilities events.list search.status transfers.read transfers.list conversations.messages artifacts.versions');
 add('local_write', 'search.reindex transfers.begin transfers.append transfers.commit transfers.abort');
-add('administration', 'search.configureEmbeddings');
+add('administration', 'search.configureEmbeddings search.indexing');
 // Workspace encryption (#26, ADR 014): status is a metadata read that works while locked; the lifecycle is human-only.
 add('local_read', 'encryption.status');
 add('administration', 'encryption.enable encryption.lock encryption.unlock encryption.configure encryption.rotate encryption.checkRecoveryKey encryption.disable');

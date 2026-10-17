@@ -2,7 +2,9 @@
  * Optional per-workspace embedding index (ADR 018, issue #67). Derived data in the workspace
  * database: float32 vectors as BLOBs, exact cosine search, an incremental queue filled in the
  * same transaction as the record change, and per-workspace configuration. Vectors are never
- * exported; backups copy them with the database.
+ * exported; backups copy them with the database. In an encrypted profile (ADR 014) each chunk's
+ * text digest and vector are one AES-256-GCM envelope under a key derived from the index key, and
+ * the on-disk digest column is keyed, so unlocking only decrypts: nothing is re-embedded.
  */
 export const VECTOR_INDEX_VERSION = 1;
 /** Exact search keeps every vector of a workspace in memory; beyond this, indexing stops and coverage says so. */
@@ -35,6 +37,19 @@ export function chunkText(text, { size = CHUNK_CHARS, overlap = CHUNK_OVERLAP, m
 }
 
 export const toBlob = vector => new Uint8Array(Float32Array.from(vector).buffer);
+/** Authenticated context of one stored chunk: moving a sealed vector to another record, chunk, model or size fails. */
+export const vectorAad = row => [row.workspace_id, row.collection, row.record_id, row.version_id ?? '', row.chunk, row.model_key, row.dims].join('\u0000');
+/** Seal one plaintext chunk row (hex text digest and raw vector bytes) for an encrypted profile. */
+export function sealVectorRow(keys, row, digest, bytes) {
+  return { digest: keys.vectorDigest(digest), blob: keys.sealVector(vectorAad(row), Buffer.concat([Buffer.from(digest, 'hex'), Buffer.from(bytes)])) };
+}
+/** Open one sealed chunk row: the plaintext text digest and raw vector bytes, checked against the keyed digest column. */
+export function openVectorRow(keys, row) {
+  const payload = keys.openVector(vectorAad(row), row.vector);
+  const digest = payload.subarray(0, 32).toString('hex');
+  if (payload.length < 36 || keys.vectorDigest(digest) !== row.text_sha256) throw Object.assign(new Error('ENCRYPTION_INTEGRITY: an embedding vector does not match its row. Nothing was changed; reindex embeddings or restore from a verified backup.'), { code: 'component_integrity' });
+  return { digest, bytes: new Uint8Array(payload.subarray(32)) };
+}
 export const fromBlob = blob => new Float32Array(Uint8Array.from(blob).buffer);
 /** Unit-normalize so cosine similarity is a dot product; rejects empty, non-finite or zero vectors. */
 export function normalize(vector) {
@@ -54,30 +69,37 @@ export class VectorIndex {
     this.cache = new Map();
   }
   /**
-   * Create or upgrade the tables. With `memory` (encrypted profiles, ADR 014) vectors and the queue
-   * live only in the attached in-memory database: any on-disk copy is dropped, and every record of a
-   * workspace with embeddings enabled is queued again so vectors are rebuilt after unlock. The
-   * per-workspace configuration (connection, model name, locality) stays on disk like other model
-   * connection settings.
+   * Create or upgrade the tables. With `keys` (encrypted profile, ADR 014) vectors and the queue stay in the
+   * database, each vector sealed with the profile's vector key. A profile encrypted before vectors were sealed kept
+   * them in memory only; it has none on disk, so its embedded workspaces are queued once (unchanged chunks are then
+   * embedded once more and never again). The per-workspace configuration (connection, model name, locality) stays on
+   * disk like other model connection settings.
    */
-  ensure(getInfo, setInfo, { memory = false, now = Date.now() } = {}) {
+  ensure(getInfo, setInfo, { keys = null, now = Date.now() } = {}) {
     const current = getInfo('vectorIndexVersion') === String(VECTOR_INDEX_VERSION);
     if (!current) this.db.exec('DROP TABLE IF EXISTS main.vector_chunks; DROP TABLE IF EXISTS main.vector_queue; DROP TABLE IF EXISTS main.vector_config;');
     this.db.exec(`CREATE TABLE IF NOT EXISTS main.vector_config(workspace_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, model_id TEXT, provider TEXT, endpoint TEXT, embedding_model TEXT, model_key TEXT,
       locality TEXT, egress_acknowledged INTEGER NOT NULL DEFAULT 0, min_similarity REAL NOT NULL, dims INTEGER, updated_at TEXT NOT NULL, last_error TEXT);`);
-    if (memory) this.db.exec('DROP TABLE IF EXISTS main.vector_chunks; DROP TABLE IF EXISTS main.vector_queue;');
-    const schema = memory ? 'mem' : 'main';
-    this.db.exec(`CREATE TABLE IF NOT EXISTS ${schema}.vector_chunks(rowid INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', chunk INTEGER NOT NULL,
+    this.db.exec(`CREATE TABLE IF NOT EXISTS main.vector_chunks(rowid INTEGER PRIMARY KEY, workspace_id TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', chunk INTEGER NOT NULL,
         chunk_start INTEGER NOT NULL, chunk_end INTEGER NOT NULL, text_sha256 TEXT NOT NULL, model_key TEXT NOT NULL, dims INTEGER NOT NULL, vector BLOB NOT NULL, UNIQUE(collection, record_id, version_id, chunk));
-      CREATE INDEX IF NOT EXISTS ${schema}.vector_chunks_workspace ON vector_chunks(workspace_id, model_key);
-      CREATE TABLE IF NOT EXISTS ${schema}.vector_queue(collection TEXT NOT NULL, record_id TEXT NOT NULL, workspace_id TEXT NOT NULL, enqueued_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+      CREATE INDEX IF NOT EXISTS main.vector_chunks_workspace ON vector_chunks(workspace_id, model_key);
+      CREATE TABLE IF NOT EXISTS main.vector_queue(collection TEXT NOT NULL, record_id TEXT NOT NULL, workspace_id TEXT NOT NULL, enqueued_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
         PRIMARY KEY(collection, record_id)) WITHOUT ROWID;
-      CREATE INDEX IF NOT EXISTS ${schema}.vector_queue_workspace ON vector_queue(workspace_id);`);
+      CREATE INDEX IF NOT EXISTS main.vector_queue_workspace ON vector_queue(workspace_id);`);
     if (!current) setInfo('vectorIndexVersion', String(VECTOR_INDEX_VERSION));
-    this.memory = memory;
+    this.keys = keys;
     this.loadConfigs();
-    if (memory) for (const [workspaceId, config] of this.configs) if (config.enabled === 1) this.requeueWorkspace(workspaceId, now);
+    if (keys && getInfo('vectorsSealed') !== '1') {
+      for (const [workspaceId, config] of this.configs) if (config.enabled === 1) this.requeueWorkspace(workspaceId, now);
+      setInfo('vectorsSealed', '1');
+    }
   }
+  /** Stored form of one chunk: plaintext digest and floats, or a sealed envelope under a keyed digest. */
+  encode(row, digest, vector) {
+    const bytes = toBlob(vector);
+    return this.keys ? sealVectorRow(this.keys, row, digest, bytes) : { digest, blob: bytes };
+  }
+  decode(row) { return this.keys ? openVectorRow(this.keys, row) : { digest: row.text_sha256, bytes: row.vector }; }
   loadConfigs() {
     this.configs = new Map(this.db.prepare('SELECT * FROM vector_config').all().map(row => [row.workspace_id, row]));
   }
@@ -132,7 +154,7 @@ export class VectorIndex {
   }
   /** Queue every indexed record of the workspace; unchanged chunks are reused by text digest. */
   requeueWorkspace(workspaceId, now) {
-    // From the record table, not the search index: an encrypted profile builds its in-memory index lazily. Records that
+    // From the record table, not the search index: an encrypted profile builds its in-memory index in the background. Records that
     // have nothing to embed are dropped from the queue when processed.
     this.db.prepare(`INSERT INTO vector_queue(collection, record_id, workspace_id, enqueued_at) SELECT collection, id, workspace_id, ? FROM main.records WHERE workspace_id = ? AND collection <> 'workspaces'
       ON CONFLICT(collection, record_id) DO UPDATE SET enqueued_at = excluded.enqueued_at, attempts = 0, last_error = NULL`).run(now, workspaceId);
@@ -149,23 +171,31 @@ export class VectorIndex {
     this.db.prepare('UPDATE vector_queue SET attempts = attempts + 1, last_error = ? WHERE collection = ? AND record_id = ?').run(String(message).slice(0, 300), collection, recordId);
   }
   dequeue(collection, recordId) { this.db.prepare('DELETE FROM vector_queue WHERE collection = ? AND record_id = ?').run(collection, recordId); }
+  /**
+   * Stored chunks of one record with their plaintext text digest and vector bytes (opened for an encrypted profile), for
+   * reuse when the record is embedded again. A chunk that fails authentication is not reused: re-embedding replaces it.
+   */
   chunks(collection, recordId) {
-    return this.db.prepare('SELECT version_id, chunk, text_sha256, model_key, dims, vector, chunk_start, chunk_end FROM vector_chunks WHERE collection = ? AND record_id = ?').all(collection, recordId);
+    return this.db.prepare('SELECT workspace_id, collection, record_id, version_id, chunk, text_sha256, model_key, dims, vector, chunk_start, chunk_end FROM vector_chunks WHERE collection = ? AND record_id = ?').all(collection, recordId)
+      .flatMap(row => { try { const { digest, bytes } = this.decode(row); return [{ ...row, text_sha256: digest, vector: bytes }]; } catch (error) { if (error.code === 'component_integrity') return []; throw error; } });
   }
   count(workspaceId, modelKey) { return this.db.prepare('SELECT count(*) AS count FROM vector_chunks WHERE workspace_id = ? AND model_key = ?').get(workspaceId, modelKey).count; }
   /** Replace every chunk of one record (all its documents) with the supplied rows. */
   replace(collection, recordId, workspaceId, rows) {
     this.db.prepare('DELETE FROM vector_chunks WHERE collection = ? AND record_id = ?').run(collection, recordId);
     const insert = this.db.prepare('INSERT INTO vector_chunks(workspace_id, collection, record_id, version_id, chunk, chunk_start, chunk_end, text_sha256, model_key, dims, vector) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-    for (const row of rows) insert.run(workspaceId, collection, recordId, row.versionId, row.chunk, row.start, row.end, row.sha256, row.modelKey, row.vector.length, toBlob(row.vector));
+    for (const row of rows) {
+      const { digest, blob } = this.encode({ workspace_id: workspaceId, collection, record_id: recordId, version_id: row.versionId, chunk: row.chunk, model_key: row.modelKey, dims: row.vector.length }, row.sha256, row.vector);
+      insert.run(workspaceId, collection, recordId, row.versionId, row.chunk, row.start, row.end, digest, row.modelKey, row.vector.length, blob);
+    }
     this.cache.delete(workspaceId);
   }
   /** Every vector of one workspace for one model, cached until the workspace's vectors change. */
   matrix(workspaceId, modelKey) {
     const cached = this.cache.get(workspaceId);
     if (cached?.modelKey === modelKey) { this.cache.delete(workspaceId); this.cache.set(workspaceId, cached); return cached; }
-    const rows = this.db.prepare('SELECT collection, record_id, version_id, chunk_start, chunk_end, dims, vector FROM vector_chunks WHERE workspace_id = ? AND model_key = ? ORDER BY rowid').all(workspaceId, modelKey);
-    const entry = { modelKey, rows: rows.map(({ vector, ...row }) => ({ ...row, vector: fromBlob(vector) })) };
+    const rows = this.db.prepare('SELECT workspace_id, collection, record_id, version_id, chunk, chunk_start, chunk_end, text_sha256, model_key, dims, vector FROM vector_chunks WHERE workspace_id = ? AND model_key = ? ORDER BY rowid').all(workspaceId, modelKey);
+    const entry = { modelKey, rows: rows.map(row => ({ collection: row.collection, record_id: row.record_id, version_id: row.version_id, chunk_start: row.chunk_start, chunk_end: row.chunk_end, dims: row.dims, vector: fromBlob(this.decode(row).bytes) })) };
     this.cache.set(workspaceId, entry);
     // Bound memory: keep matrices for the few most recently searched workspaces.
     while (this.cache.size > 4) this.cache.delete(this.cache.keys().next().value);

@@ -91,6 +91,30 @@ test('activity summaries exclude secrets and minimize personal data', () => {
   assert.equal(minimizeUrl('not a url'), '[invalid url]');
 });
 
+test('activity summaries keep identifiers only in id fields and only the origin of service URLs', () => {
+  // Identifier-shaped names (plugins, packages, formats, extractors, files) are reduced to a character count.
+  const named = summarizeArgs({ name: 'acme_q3-acquisition-plan', format: 'acme-board-pack', extractor: 'patient_records-v2', filename: 'mate_0123456789.pdf',
+    id: 'mate_0123456789', workspaceId: 'ws_0123456789', command: 'materials.create', note: 'task_0123456789' }, 'plugins.invoke');
+  for (const key of ['name', 'format', 'extractor', 'filename', 'note']) assert.equal(typeof named[key], 'object', key);
+  assert.deepEqual(named.name, { chars: 24 });
+  assert.equal(named.id, 'mate_0123456789');
+  assert.equal(named.workspaceId, 'ws_0123456789');
+  assert.equal(named.command, 'materials.create');
+  assert.deepEqual(summarizeArgs({ command: 'Delete the Q3 plan now' }).command, { chars: 22 }, 'a free-text command field is not kept');
+  // Service references, model endpoints and other API URLs identify private resources by path: only the origin remains.
+  const service = summarizeArgs({ url: 'https://git.example.com/acme/secret-merger/issues/42?token=abc' }, 'services.create');
+  assert.equal(service.url, 'https://git.example.com/…');
+  assert.equal(summarizeArgs({ endpoint: 'http://10.0.0.5:11434/v1/private-model' }, 'models.save').endpoint, 'http://10.0.0.5:11434/…');
+  assert.equal(summarizeArgs({ baseUrl: 'https://issuer.example/accounts/acct_42' }, 'payments.configureProvider').baseUrl, 'https://issuer.example/…');
+  assert.equal(summarizeArgs({ sourceUrl: 'https://lists.example/team/blocklist.json' }, 'lists.subscribe').sourceUrl, 'https://lists.example/…');
+  assert.equal(summarizeArgs({ url: 'https://api.example.com/' }, 'services.update').url, 'https://api.example.com/');
+  // Page navigation keeps its path (minimized, without query or fragment), as before.
+  assert.equal(summarizeArgs({ url: 'https://news.example/story/1?ref=x' }, 'page.navigate').url, 'https://news.example/story/1');
+  const text = JSON.stringify([named, service]);
+  for (const leaked of ['acquisition', 'board-pack', 'patient', 'secret-merger', 'issues/42', 'token']) assert.doesNotMatch(text, new RegExp(leaked));
+  assert.equal(minimizeUrl('https://a.example/x/y', { path: false }), 'https://a.example/…');
+});
+
 test('cursor pagination walks newest-first without duplicates and filters by type, outcome and workspace', t => {
   const log = new ActivityLog({ directory: temp(t) });
   for (let i = 0; i < 120; i++) log.append({ type: i % 3 ? 'command' : 'decision', outcome: i % 3 ? 'completed' : 'denied', workspaceId: i % 2 ? 'ws_a' : 'ws_b', command: 'materials.list' });

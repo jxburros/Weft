@@ -15,6 +15,7 @@ import { ServiceCredentials } from '../src/linked-sources.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { EventLog } from '../src/server.js';
+import { PaymentService } from '../src/payments.js';
 import { fakeSafeStorage, kdfParams } from './encryption-helpers.js';
 import { fakeEndpoint, json } from './model-test-helpers.js';
 
@@ -54,10 +55,11 @@ function rows(directory, sql) {
   try { return db.prepare(sql).all(); } finally { db.close(); }
 }
 
-test('(a) embedding vectors of an encrypted profile live only in memory and are rebuilt after unlock', async t => {
+test('(a) embedding vectors of an encrypted profile are sealed at rest: enabling, locking and unlocking re-embed nothing', async t => {
   const directory = profile(t);
   const service = open(t, directory);
-  const server = await fakeEndpoint(t, (req, res, body) => json(res, { model: body.model, embeddings: body.input.map(text => [/sedan|automobile/i.test(text) ? 1 : 0, 0.1]) }));
+  const inputs = [];
+  const server = await fakeEndpoint(t, (req, res, body) => { inputs.push(...body.input); json(res, { model: body.model, embeddings: body.input.map(text => [/sedan|automobile/i.test(text) ? 1 : 0, 0.1]) }); });
   const providers = await new Providers({ directory, workspace: service, env: {} }).init();
   t.after(() => providers.close());
   const connection = await providers.execute('models.save', { name: 'Local', provider: 'ollama', endpoint: server.base, model: 'chat' });
@@ -65,30 +67,66 @@ test('(a) embedding vectors of an encrypted profile live only in memory and are 
   service.attachRetrieval(retrieval);
   t.after(() => retrieval.close());
   const note = await service.execute('materials.create', { title: 'NEEDLE-VECTOR-NOTE', content: 'The sedan needs tires.' });
+  await service.execute('materials.create', { title: 'Second note', content: 'Bicycle chain oil.' });
   await service.execute('search.configureEmbeddings', { enabled: true, modelId: connection.id, embeddingModel: 'fake-embed' }, human);
   await retrieval.drain();
-  assert.ok(rows(directory, 'SELECT count(*) AS n FROM vector_chunks')[0].n > 0, 'a plaintext profile stores vectors in the database');
+  const contentRequests = () => inputs.filter(text => text !== 'Weft embedding check' && text !== 'automobile');
+  const embedded = contentRequests().length;
+  assert.ok(embedded >= 2);
+  const plain = rows(directory, 'SELECT text_sha256, vector FROM vector_chunks ORDER BY rowid');
+  assert.ok(plain.length >= 2, 'a plaintext profile stores vectors in the database');
 
   await enable(service);
-  assert.deepEqual(rows(directory, "SELECT name FROM sqlite_master WHERE name IN ('vector_chunks', 'vector_queue')"), [], 'no vector table remains on disk');
-  assert.equal(rows(directory, "SELECT count(*) AS n FROM vector_config")[0].n, 1, 'the embedding setting survives (connection metadata, no content)');
   await retrieval.drain();
-  const memory = () => service.storage.db.prepare('SELECT count(*) AS n FROM mem.vector_chunks').get().n;
-  assert.ok(memory() > 0, 'vectors are rebuilt in memory');
+  assert.equal(contentRequests().length, embedded, 'enabling encryption seals existing vectors instead of re-embedding them');
+  const sealed = rows(directory, 'SELECT text_sha256, vector FROM vector_chunks ORDER BY rowid');
+  assert.equal(sealed.length, plain.length, 'vectors stay on disk, sealed');
+  for (const [index, row] of sealed.entries()) {
+    assert.notEqual(row.text_sha256, plain[index].text_sha256, 'the text digest on disk is keyed');
+    assert.equal(Buffer.from(row.vector).includes(Buffer.from(plain[index].vector)), false, 'the vector bytes are not on disk in the clear');
+  }
+  assert.deepEqual(plaintextHits(directory, ['NEEDLE-VECTOR-NOTE', ...plain.map(row => Buffer.from(row.vector)), ...plain.map(row => row.text_sha256)]), []);
   const hits = await service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human);
-  assert.equal(hits[0].id, note.id);
-  const blob = service.storage.db.prepare('SELECT vector FROM mem.vector_chunks LIMIT 1').get().vector;
-  assert.deepEqual(plaintextHits(directory, ['NEEDLE-VECTOR-NOTE', Buffer.from(blob)]), []);
+  assert.equal(hits[0].id, note.id, 'sealed vectors are opened for search');
 
-  // Locked: nothing to embed and no store; unlocking queues everything again in memory.
+  // Lock and unlock: vectors are decrypted on demand; no text goes to the endpoint again.
   await enc(service, 'encryption.lock');
   await retrieval.drain();
   await assert.rejects(service.execute('search.query', { query: 'automobile' }, human), error => error.code === 'locked');
   await enc(service, 'encryption.unlock', { method: 'passphrase', secret: 'correct horse battery staple' });
-  assert.equal(memory(), 0);
   await retrieval.drain();
-  assert.ok(memory() > 0);
-  assert.deepEqual(rows(directory, "SELECT name FROM sqlite_master WHERE name IN ('vector_chunks', 'vector_queue')"), []);
+  assert.equal(contentRequests().length, embedded, 'unlocking causes zero embedding requests for unchanged content');
+  assert.equal((await service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human))[0].id, note.id);
+  assert.equal(retrieval.status(service.activeWorkspaceId).vector.pending, 0);
+
+  // A changed record re-embeds only its own changed chunk.
+  await service.execute('materials.update', { id: note.id, changes: { content: 'The automobile needs new tires.' } });
+  await retrieval.drain();
+  assert.equal(contentRequests().length, embedded + 1);
+
+  // A sealed vector moved to another row fails authentication instead of being used.
+  const db = new DatabaseSync(join(directory, 'workspace.sqlite'));
+  try {
+    const [first, second] = db.prepare('SELECT rowid, vector FROM vector_chunks ORDER BY rowid LIMIT 2').all();
+    db.prepare('UPDATE vector_chunks SET vector = ? WHERE rowid = ?').run(first.vector, second.rowid);
+  } finally { db.close(); }
+  service.storage.vectors.cache.clear();
+  await assert.rejects(service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human), error => error.code === 'component_integrity');
+  // Reindexing replaces the damaged chunk (its text is embedded again); intact chunks are reused.
+  await service.execute('search.reindex', {}, human);
+  const count = contentRequests().length;
+  assert.equal(count, embedded + 2);
+  assert.equal((await service.execute('search.query', { query: 'automobile', mode: 'hybrid' }, human))[0].id, note.id);
+
+  // Turning encryption off opens the vectors back into plaintext rows; still nothing is re-embedded.
+  await enc(service, 'encryption.disable', { acknowledgePlaintext: true });
+  await retrieval.drain();
+  assert.equal(contentRequests().length, count);
+  const reopened = rows(directory, 'SELECT text_sha256 FROM vector_chunks');
+  assert.ok(reopened.every(row => /^[0-9a-f]{64}$/.test(row.text_sha256)));
+  await service.execute('materials.update', { id: note.id, changes: { title: 'NEEDLE-VECTOR-NOTE renamed' } });
+  await retrieval.drain();
+  assert.ok(contentRequests().length <= count + 1, 'unchanged chunks are still reused after disabling');
 });
 
 test('(b) resource archive bodies and manifests are sealed components and records; verification still works', async t => {
@@ -174,4 +212,71 @@ test('(d) chunked upload parts stay in memory for encrypted profiles and locking
   // Export packages stay explicit plaintext exports.
   await enc(service, 'encryption.unlock', { method: 'passphrase', secret: 'correct horse battery staple' });
   await assert.rejects(service.execute('workspaces.exportPackage', { id: service.activeWorkspaceId, name: 'pkg' }, human), error => /acknowledgePlaintext|plaintext/i.test(error.message));
+});
+
+test('(e) payment records are sealed with the profile keys, follow enable, rotation, lock, restore and disable, and are unreadable while locked', async t => {
+  const root = profile(t);
+  const directory = join(root, 'workspace-data');
+  mkdirSync(directory);
+  const service = open(t, directory);
+  const payments = new PaymentService({ directory: join(root, 'payments'), workspace: service });
+  const file = () => JSON.parse(readFileSync(join(root, 'payments', 'payments.json'), 'utf8'));
+  const record = (id, status) => ({ id, status, workspaceId: service.activeWorkspaceId, tabId: 1, attempt: 1, merchant: { name: 'Needle Shop', origin: 'https://needle-merchant.example' },
+    destination: { url: 'https://needle-merchant.example/needle-checkout' }, purpose: 'NEEDLE-PAYMENT-PURPOSE', currency: 'USD', ceilingMinor: 6000, recurrence: { type: 'none' },
+    observed: { totalMinor: 4999 }, attempts: [{ status: 'attempted', at: new Date().toISOString() }], history: [] });
+  payments.init();
+  payments.commit(() => { payments.records.push(record('pay_00000000-0000-4000-8000-000000000001', 'proposed')); });
+  assert.equal(file().version, 1, 'a plaintext profile keeps plaintext payment records');
+  const needles = ['needle-merchant.example', 'NEEDLE-PAYMENT-PURPOSE', 'needle-checkout'];
+  assert.ok(plaintextHits(join(root, 'payments'), needles).length > 0);
+
+  await enable(service);
+  assert.equal(file().version, 2);
+  assert.match(file().sealed, /^wfe1\.1\.0\./, 'one AES-GCM envelope under data key version 1');
+  assert.deepEqual(plaintextHits(join(root, 'payments'), needles), [], 'no plaintext payment data remains in the payments folder');
+  assert.equal(payments.records.length, 1);
+  // An attempt in flight when the profile locks becomes uncertain at the next unlock (the sweep needs the key).
+  payments.commit(() => { payments.records.push(record('pay_00000000-0000-4000-8000-000000000002', 'submitting')); });
+  await enc(service, 'encryption.lock');
+  assert.throws(() => payments.records, error => error.code === 'locked', 'payment reads are blocked while locked');
+  assert.equal(payments.holdsTab(1), false);
+  assert.throws(() => new PaymentService({ directory: join(root, 'payments'), workspace: service }).records, error => error.code === 'locked');
+  await enc(service, 'encryption.unlock', { method: 'passphrase', secret: 'correct horse battery staple' });
+  assert.equal(payments.records.find(item => item.id.endsWith('2')).status, 'uncertain');
+  const backup = await service.execute('backups.create', { note: 'before rotation' });
+
+  // Data-key rotation re-seals the file before the old key is dropped.
+  await enc(service, 'encryption.rotate', { target: 'dataKey' });
+  assert.match(file().sealed, /^wfe1\.2\.0\./);
+  payments.records = null;
+  assert.equal(payments.records.length, 2);
+  // Restoring a backup whose keyring predates the rotation: the records held in memory are sealed under the restored keys.
+  await service.execute('backups.restore', { id: backup.id });
+  assert.match(file().sealed, /^wfe1\.1\.0\./);
+  payments.records = null;
+  assert.equal(payments.records.length, 2);
+
+  // Tampering is detected, never silently accepted.
+  const saved = file();
+  const tampered = Buffer.from(saved.sealed.split('.').pop(), 'base64');
+  tampered[20] ^= 1;
+  writeFileSync(join(root, 'payments', 'payments.json'), JSON.stringify({ ...saved, sealed: `${saved.sealed.split('.').slice(0, 3).join('.')}.${tampered.toString('base64')}` }));
+  payments.records = null;
+  assert.throws(() => payments.records, error => error.code === 'component_integrity');
+  writeFileSync(join(root, 'payments', 'payments.json'), JSON.stringify(saved));
+  payments.records = null;
+
+  // A plaintext file found in an encrypted profile (an interrupted enable or disable) is sealed at the next load.
+  writeFileSync(join(root, 'payments', 'payments.json'), JSON.stringify({ version: 1, records: payments.records }));
+  payments.records = null;
+  assert.equal(payments.records.length, 2);
+  assert.equal(file().version, 2);
+  assert.deepEqual(plaintextHits(join(root, 'payments'), needles), []);
+
+  // Turning encryption off writes plaintext payment records again.
+  await enc(service, 'encryption.disable', { acknowledgePlaintext: true });
+  assert.equal(file().version, 1);
+  assert.equal(file().records.length, 2);
+  payments.records = null;
+  assert.equal(payments.records.length, 2);
 });

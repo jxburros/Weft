@@ -18,30 +18,42 @@ const secretKey = { test: name => exactSecretKey.test(name) || /token|secret|pas
 const digest = value => createHash('sha256').update(value).digest('hex');
 const short = (value, max = 300) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, max);
 
-/** Strip credentials, query and fragment: keep origin and path only (personal-data minimization). */
-export function minimizeUrl(value) {
+/**
+ * Strip credentials, query and fragment: keep origin and path only (personal-data minimization).
+ * With `path: false` (service, API and endpoint URLs) only the origin is kept; a non-root path is shown as "/…".
+ */
+export function minimizeUrl(value, { path = true } = {}) {
   try {
     const url = new URL(value);
     if (url.href === 'about:blank') return 'about:blank';
     if (!['http:', 'https:'].includes(url.protocol)) return `${url.protocol}…`;
+    if (!path) return `${url.origin}${url.pathname && url.pathname !== '/' ? '/…' : '/'}`;
     return `${url.origin}${url.pathname.length > 200 ? `${url.pathname.slice(0, 200)}…` : url.pathname}`;
   } catch { return '[invalid url]'; }
 }
+// URLs of services, APIs, model endpoints, list sources and update feeds identify private resources by their path: keep the origin only.
+const SERVICE_URL_KEY = /endpoint|base_?url|webhook|callback|registry|feed|^source/i;
+const SERVICE_URL_COMMAND = /^(?:services|sources|models|providers|search|lists|community|threats|update|plugins|extensions|payments\.configureProvider)\b/;
+// Only identifier fields keep identifier-shaped values; names (plugin, package, format, extractor, file names) never do.
+const ID_KEY = /(?:^id$|Id$)/;
+const ENUM_KEY = /(?:^id$|Id$|status|kind|category|role|mode|level|topic|provider|action|type|scope|behavior|^method$|^target$)/;
+const COMMAND_NAME = /^[a-z][a-zA-Z]{0,30}(?:\.[a-zA-Z]{1,40}){1,2}$/;
 /**
  * Generic, privacy-minimizing argument summary usable for any command: IDs, numbers,
- * booleans and short enum-like strings are kept; URLs lose query/fragment; free text
- * becomes a character count; secret-named fields are dropped entirely.
+ * booleans and short enum-like strings are kept; URLs lose query/fragment (service and
+ * endpoint URLs also lose their path); names and other free text become a character
+ * count; secret-named fields are dropped entirely.
  */
-export function summarizeArgs(args) {
+export function summarizeArgs(args, command = '') {
   if (!args || typeof args !== 'object' || Array.isArray(args)) return {};
   const summary = {};
+  const serviceCommand = SERVICE_URL_COMMAND.test(String(command ?? ''));
   for (const [key, value] of Object.entries(args).slice(0, 30)) {
     if (secretKey.test(key) || ['data', 'fileBase64', 'pngBase64'].includes(key)) continue;
     if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) summary[key] = value;
     else if (typeof value === 'string') {
-      if (/url|endpoint|href|source/i.test(key) || /^https?:\/\//i.test(value)) summary[key] = minimizeUrl(value);
-      // Identifier-shaped values are kept only in identifier-named fields: free text such as a one-word note never is.
-      else if ((idPattern.test(value) && /(^id$|Id$|^name$|^command$|^format$|^extractor$)/.test(key)) || /^[a-z][a-z0-9_.-]{0,39}$/i.test(value) && /(^id$|Id$|status|kind|category|role|mode|level|topic|provider|action|type|scope|behavior|^method$|^target$)/.test(key)) summary[key] = value.slice(0, 100);
+      if (/url|endpoint|href|source/i.test(key) || /^https?:\/\//i.test(value)) summary[key] = minimizeUrl(value, { path: !(serviceCommand || SERVICE_URL_KEY.test(key)) });
+      else if ((idPattern.test(value) && ID_KEY.test(key)) || (/^[a-z][a-z0-9_.-]{0,39}$/i.test(value) && ENUM_KEY.test(key)) || (key === 'command' && COMMAND_NAME.test(value))) summary[key] = value.slice(0, 100);
       else summary[key] = { chars: value.length };
     } else if (Array.isArray(value)) summary[key] = { items: value.length };
     else if (value && typeof value === 'object') summary[key] = { fields: Object.keys(value).filter(name => !secretKey.test(name)).slice(0, 20) };

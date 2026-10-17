@@ -86,12 +86,16 @@ test('encrypted profile: enabling on a 10k-record store, writes, first and repea
   service.save();
   await budget(t, 'enable encryption in place (11k records, 1k captures)', 30000, () => service.executeEncryption('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' }, human));
   await budget(t, 'encrypted write with 10k records', 5000, () => service.execute('materials.update', { id: 'material-perf-9999', changes: { content: 'Updated last record' } }));
-  const first = await budget(t, 'encrypted first search (builds the in-memory index)', 5000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
+  // The in-memory index is rebuilt in background batches after enabling/unlocking (#30); searches meanwhile are partial.
+  await budget(t, 'encrypted background index rebuild (11k records, 1k captures)', 15000, () => service.indexingIdle());
+  const first = await budget(t, 'encrypted first search', 2000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
   assert.equal(first.length, 200);
   await budget(t, 'encrypted repeated search across 1k captures', 2000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
   await budget(t, 'encrypted export (acknowledged plaintext)', 5000, () => service.execute('workspaces.export', { id: service.activeWorkspaceId, acknowledgePlaintext: true }));
   service.close();
-  service = await budget(t, 'reopen and unlock encrypted store (OS key)', 5000, () => new WorkspaceService({ directory, keyProtector }));
+  service = await budget(t, 'reopen and unlock encrypted store (OS key; index rebuild deferred)', 5000, () => new WorkspaceService({ directory, keyProtector }));
+  assert.ok((await service.execute('search.query', { query: 'searchable-needle', page: { limit: 5 } })).coverage, 'search answers during the rebuild');
+  await budget(t, 'encrypted background index rebuild after unlock', 15000, () => service.indexingIdle());
   assert.equal((await service.execute('materials.get', { id: 'material-perf-9999' })).content, 'Updated last record');
   await budget(t, 'data-key rotation re-encrypting 11k records and 1k components', 60000, () => service.executeEncryption('encryption.rotate', { target: 'dataKey' }, human));
 });

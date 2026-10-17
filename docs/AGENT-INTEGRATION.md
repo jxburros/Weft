@@ -280,7 +280,9 @@ workspace scope as live delivery. Event types are registered in
 `src/server.js` (`command`, `navigation`, `workspace`, `activity`, `task`,
 `handoff`, `policy`, `artifact`, `turn`, `approval`, plus `registerEventType`);
 `turn` events report `started`, `completed`, `partial`, `interrupted` or
-`failed` with turn and conversation IDs, never model text.
+`failed` with turn and conversation IDs, never model text. `indexing` events
+report a background search-index rebuild (`started`, `progress`, `paused`,
+`resumed`, `completed`, `failed`) with `processed` and `total` record counts.
 
 ## Blocked destinations and browser-owned policy
 
@@ -338,7 +340,9 @@ or model-spend budget on your connection and it is spent, the outcome is
 `budget_exhausted` (HTTP 429, CLI exit 4) with `error.details.budget`; with a
 spend budget, a model connection without a configured price is refused because
 its spend cannot be measured. `resources.status` shows limits, running and queued
-work and your budgets. Task-runtime steps take a slot and count against budgets
+work and your budgets. A command whose deadline passed while it was still running
+keeps its slot until it actually finishes (`agentCommands.afterDeadline` counts
+them), so expect `resource_busy` until then. Task-runtime steps take a slot and count against budgets
 like your own commands (a busy step pauses the task; a spent budget pauses it with
 a `grant` blocker), while reads a plugin or export hook makes for your command
 reuse its slot.
@@ -431,8 +435,9 @@ person confirmed that (`acknowledgePlaintext: true` on `workspaces.export`,
 `workspaces.exportPackage` and `workspaces.exportAs`, all human-only).
 Locking also discards unfinished upload sessions and the retained event log
 (a replay from before the lock reports the gap reason `locked`); embedding
-vectors of an encrypted profile are rebuilt in memory after unlock, so search
-coverage may report pending documents for a while. Saved sign-ins use their own
+vectors of an encrypted profile are sealed at rest and only decrypted after
+unlock (nothing is re-embedded), while the full-text index is rebuilt in the
+background, so search results report partial lexical coverage for a while. Saved sign-ins use their own
 vault and key (ADR 017), but `credentials.fill` and every other command also
 answer `locked` while the workspace data is locked.
 
@@ -630,6 +635,17 @@ the result adds `coverage` (what is indexed and which documents have no
 embedding yet, with reasons) and `absence`, which is `verified: true` only when
 every indexed document was searched by every enabled index. `search.status`
 reports the same coverage.
+
+The full-text index can be rebuilding in the background (after an upgrade that
+changes its format, or after an encrypted profile is unlocked). Searching never
+waits for it: results are real but may be incomplete. In page mode the result
+has `partial: true` and `coverage.lexical` with `complete: false`,
+`unindexedRecords` and `indexing` progress, and `absence.verified` is false;
+without `page` the result is still a list, but the outcome `status` is
+`partial` and carries an outcome-level `coverage`. Treat such results as
+partial, and check `search.status` (or wait for an `indexing` event with status
+`completed`) before relying on completeness. Only a person can pause or resume a
+rebuild (`search.indexing`).
 
 ```sh
 weft search.query '{"query":"vendor contract renewal","page":{"limit":10}}'

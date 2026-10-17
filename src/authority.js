@@ -93,7 +93,7 @@ export class Authority {
     if (human(context)) return { decision: 'auto', reason: 'trusted_human', actionClass };
     const deny = (reason, message, extra = {}) => {
       const authority = { decision: 'deny', reason, actionClass, ...extra };
-      this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args) });
+      this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args, command) });
       return authorityError('permission_required', message, authority);
     };
     const humanOnly = Boolean(spec.humanOnly) || actionClass === 'administration';
@@ -106,7 +106,7 @@ export class Authority {
           resource: resourceForCommand(command), dataClasses: [...(spec.dataClasses ?? dataClassesForCommand(command)), ...(args.allowReadTools || args.attachments?.some(item => item.kind === 'tab') ? ['page_content'] : [])], createsWorkspace: ['workspaces.create', 'workspaces.duplicate'].includes(command) });
       } catch (error) {
         const reason = error.details?.authority?.reason ?? 'client_scope';
-        this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args) });
+        this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args, command) });
         throw Object.assign(error, { notStarted: true, details: { authority: { decision: 'deny', reason, actionClass } } });
       }
       const taskId = this.clients?.current?.(context.clientId)?.taskId ?? context.taskId;
@@ -142,7 +142,7 @@ export class Authority {
           previewExtra: this.approvalPreview?.(command, args) ?? null, onceOnly: restrictedData,
           ...(context.sensitiveValues?.length ? { preview: { ...withholdValues(previewArgs(args), context.sensitiveValues), ...(this.approvalPreview?.(command, args) ?? {}) } } : {}),
           ...(binding?.preview ? { preview: binding.preview } : {}) });
-        this.record({ ...base, type: 'approval', decision: 'approval', reason: result.reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args) });
+        this.record({ ...base, type: 'approval', decision: 'approval', reason: result.reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args, command) });
         throw authorityError('approval_required', `${command} needs human approval in the Weft window (request ${request.id}). Retry the identical command after approval; changed arguments need a new approval.`,
           { decision: 'approval', reason: result.reason, actionClass, level: effective, approvalId: request.id, fingerprint, expiresAt: new Date(request.expiresAt).toISOString() });
       }
@@ -173,7 +173,7 @@ export class Authority {
       try { this.clients.assertBudget?.(context.clientId, subs.length); }
       catch (error) {
         const reason = error.details?.authority?.reason ?? 'client_scope';
-        this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args) });
+        this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args, 'batch.execute') });
         throw Object.assign(error, { notStarted: true, details: { authority: { decision: 'deny', reason, actionClass } } });
       }
     }
@@ -183,7 +183,7 @@ export class Authority {
     if (pending.length) {
       const approvalClass = pending.reduce((current, decision) => raiseActionClass(current, decision.actionClass), 'local_read');
       if (subs.length > 20) {
-        this.record({ ...base, type: 'decision', decision: 'deny', reason: 'batch_too_large_for_approval', outcome: 'denied', summary: summarizeArgs(args) });
+        this.record({ ...base, type: 'decision', decision: 'deny', reason: 'batch_too_large_for_approval', outcome: 'denied', summary: summarizeArgs(args, 'batch.execute') });
         throw authorityError('permission_required', 'A batch that needs human approval may contain at most 20 commands so the approval shows every one; split it', { decision: 'deny', reason: 'batch_too_large_for_approval', actionClass: approvalClass, level });
       }
       const fingerprint = approvalFingerprint({ command: 'batch.execute', args, actor, workspaceId: target.workspaceId, tabId: null, destination: null });
@@ -191,11 +191,11 @@ export class Authority {
       if (match.approvalId) { approvalId = match.approvalId; approvedOnce = true; }
       else {
         const shown = { commands: `${subs.length} commands, applied all-or-nothing` };
-        subs.forEach((sub, index) => { shown[`${index + 1}. ${sub.command}`] = JSON.stringify(summarizeArgs(sub.args)).slice(0, 400); });
+        subs.forEach((sub, index) => { shown[`${index + 1}. ${sub.command}`] = JSON.stringify(summarizeArgs(sub.args, sub.command)).slice(0, 400); });
         const request = this.approvals.request({ fingerprint, actor, clientId: context.clientId, command: 'batch.execute', args, actionClass: approvalClass,
           categories: [...new Set(subs.flatMap(sub => sensitiveCategoriesForCommand(sub.command)))], workspaceId: target.workspaceId, tabId: null, taskId: context.taskId,
           destination: null, reason: pending[0].reason, level, preview: shown });
-        this.record({ ...base, type: 'approval', decision: 'approval', reason: pending[0].reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args) });
+        this.record({ ...base, type: 'approval', decision: 'approval', reason: pending[0].reason, outcome: 'pending_approval', approvalId: request.id, summary: summarizeArgs(args, 'batch.execute') });
         throw authorityError('approval_required', `batch.execute needs human approval in the Weft window (request ${request.id}). Retry the identical batch after approval; any change to its commands or arguments needs a new approval.`,
           { decision: 'approval', reason: pending[0].reason, actionClass: approvalClass, level, approvalId: request.id, fingerprint, expiresAt: new Date(request.expiresAt).toISOString() });
       }
@@ -246,7 +246,7 @@ export class Authority {
     this.record({ type, command, actor: context.actor ?? 'automation', clientId: context.clientId, workspaceId: outcome.workspaceId, tabId: outcome.tabId, taskId: context.taskId,
       targetId, version, actionClass, decision: decision?.decision, reason: decision?.reason ?? (outcome.error ? code : undefined), outcome: label,
       irreversible: effect === 'irreversible' || external, external, approvalId: decision?.approvalId,
-      summary: { ...summarizeArgs(args), ...(type === 'artifact' && { versions: Array.isArray(result.versions) ? result.versions.length : undefined }),
+      summary: { ...summarizeArgs(args, command), ...(type === 'artifact' && { versions: Array.isArray(result.versions) ? result.versions.length : undefined }),
         ...(batch && { commands: batch.map(item => item.command).slice(0, 100) }), ...(replayed && { replayed: true }), ...(typeof args?.requestId === 'string' && { requestId: args.requestId.slice(0, 128) }) },
       detail: outcome.error ? `${code}: ${outcome.error.message}` : replayed ? 'Replayed the stored result of an earlier identical request; nothing was applied again.'
         : dryRun ? 'Dry run: validated and previewed; nothing was applied.' : external ? 'Accepted by the browser or provider; the external result is not verified by this record.' : undefined });
@@ -257,7 +257,7 @@ export class Authority {
         this.record({ type: 'record', command: item.command, actor: context.actor ?? 'automation', clientId: context.clientId, workspaceId: item.workspaceId ?? outcome.workspaceId, taskId: context.taskId,
           targetId: typeof applied?.id === 'string' ? applied.id : typeof item.args?.id === 'string' ? item.args.id : undefined, actionClass: actionClassForCommand(item.command), decision: decision?.decision,
           outcome: 'completed', irreversible: effectForCommand(item.command) === 'irreversible', approvalId: decision?.approvalId,
-          summary: { ...summarizeArgs(item.args), batchIndex: index, batchSize: batch.length, ...(typeof args?.requestId === 'string' && { requestId: args.requestId.slice(0, 128) }) },
+          summary: { ...summarizeArgs(item.args, item.command), batchIndex: index, batchSize: batch.length, ...(typeof args?.requestId === 'string' && { requestId: args.requestId.slice(0, 128) }) },
           detail: 'Applied as part of an atomic batch.execute transaction.' });
       });
     }
@@ -266,7 +266,7 @@ export class Authority {
   recordAttempt({ command, args, context, target, decision }) {
     if (effectForCommand(command) !== 'external' || human(context)) return;
     this.record({ type: 'command', command, actor: context.actor ?? 'automation', clientId: context.clientId, workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId,
-      actionClass: decision.actionClass, decision: decision.decision, reason: decision.reason, outcome: 'attempted', external: true, irreversible: true, approvalId: decision.approvalId, summary: summarizeArgs(args) });
+      actionClass: decision.actionClass, decision: decision.decision, reason: decision.reason, outcome: 'attempted', external: true, irreversible: true, approvalId: decision.approvalId, summary: summarizeArgs(args, command) });
   }
 
   execute(name, input, context) {

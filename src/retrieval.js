@@ -249,7 +249,8 @@ export class Retrieval {
   status(workspaceId, { listLimit = 50 } = {}) {
     const storage = this.workspace.storage;
     const config = this.vectors?.config(workspaceId) ?? null;
-    const lexical = { documents: storage.documentCount(workspaceId), complete: true };
+    // Lexical coverage includes any background index rebuild still in progress (#30).
+    const lexical = storage.lexicalCoverage(workspaceId);
     if (!config?.enabled) return { workspaceId, lexical, vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
     const onDevice = config.locality === 'on-device endpoint';
     const rows = this.vectors.coverage(workspaceId, config.model_key);

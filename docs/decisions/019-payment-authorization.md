@@ -205,7 +205,9 @@ access), `no_virtual_card`.
 
 Payment records live in `<profile>/payments/payments.json` (fsynced atomic
 writes), outside `workspace-data`, like the vault: workspace exports and backups
-do not include them. They hold no card numbers or security codes. Activity
+do not include them. With workspace encryption on (ADR 014) the file is one
+AES-256-GCM envelope sealed with the profile's current data key (format 2);
+see "Integration with later decisions". They hold no card numbers or security codes. Activity
 entries record proposals, approvals, attempts, outcomes, invalidations,
 cancellations and card issuance with ids, merchant origin, amounts in minor
 units, currency, recurrence type and at most the last four digits; never a card
@@ -238,9 +240,23 @@ Merged with ADR 012-015 and 018:
   observation is a text read, not a queued capture. A tab with a payment that
   awaits approval or is being submitted is never suspended, and proposing on a
   suspended tab is refused until it is inspected (which reloads it).
-- **Encryption (ADR 014).** Payment records are outside workspace encryption
-  (documented in the ADR 014 coverage table and in Settings); every payment
-  command answers `locked` while the workspace is locked.
+- **Encryption (ADR 014).** Amended after integration: payment records are
+  sealed with the workspace keys when encryption is on. `payments.json` format 2
+  holds `{version: 2, profileId, sealed}`, where `sealed` uses the same envelope
+  as sealed settings (`wfe1.<keyVersion>.0.<base64>`, AAD bound to the domain
+  `payments/records`, the profile id and the key version). Records load lazily,
+  so a locked profile never opens them: every payment command answers `locked`
+  and the service itself refuses reads. Enabling encryption seals the records
+  and overwrites the plaintext file's blocks (best effort, a hard link keeps the
+  old inode reachable until the sealed file replaced it); disabling writes
+  plaintext before the store is decrypted; a data-key rotation re-seals before
+  the old key is removed; a backup restore re-seals the records held in memory
+  under the restored keyring. A plaintext file found in an encrypted profile is
+  an interrupted enable or disable and is sealed at the next unlock. The
+  interrupted-submission sweep (`submitting` becomes `uncertain`) runs at
+  startup when the records are readable, otherwise at unlock, before any caller
+  can reach payments; a submission still in flight when a person locks is
+  waited for (up to 15 s) and, if unfinished, reported `uncertain` at unlock.
 
 ## Consequences and limits
 
@@ -281,6 +297,10 @@ Merged with ADR 012-015 and 018:
   the payment class, unsupported provider outcomes, task-runtime integration
   with the payment reconciler, and a SIGKILL during the click followed by restart
   and virtual-card reconciliation (`test/fixtures/payment-crash-child.mjs`).
+- `test/encryption-integration.test.js` (e): payment records sealed with the
+  workspace keys through enable, lock (reads refused), the unlock sweep,
+  data-key rotation, a restore across a rotation, tampering, an interrupted
+  migration and disable.
 - `test/payments-browser.test.js` (real Chromium under Xvfb): payment-card vault
   entry; proposal with a snapshot ref; card fill across the top frame and a
   processor frame with every observation route refused during the protected

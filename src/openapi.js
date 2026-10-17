@@ -61,6 +61,7 @@ export function createOpenApiDocument(catalog = commands) {
           idempotency: { type: 'object', required: ['requestId', 'replayed'], description: 'Present when the command was called with requestId; replayed is true when the stored result of an earlier identical request was returned instead of applying again.', properties: { requestId: { type: 'string' }, replayed: { type: 'boolean' } } },
           request: { type: 'object', description: 'Authenticated request linkage echoed by the dispatcher.', properties: { apiVersion: { const: 1 }, requestId: { type: ['string', 'null'] }, actor: { type: ['string', 'null'] }, clientId: { type: ['string', 'null'] }, taskId: { type: ['string', 'null'] }, deadlineMs: { type: ['integer', 'null'] } } },
           deadline: { type: 'object', description: 'Present when the command completed just after its deadline.', properties: { deadlineMs: { type: 'integer' }, exceeded: { const: true } } },
+          coverage: { type: 'object', description: 'Present on a partial list result whose items are real but not exhaustive, for example search.query while the search index is rebuilt in the background (lexical.complete false, unindexedRecords, indexing progress).' },
           result: {}, error: { anyOf: [{ type: 'null' }, { $ref: '#/components/schemas/CommandError' }] },
         } },
         ApiError: { $ref: '#/components/schemas/CommandOutcome' },

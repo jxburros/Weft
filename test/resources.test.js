@@ -212,3 +212,31 @@ test('agents cannot suspend a tab a person or another actor holds', async t => {
   assert.equal(refused.error.code, 'lease_conflict');
   assert.equal(f.browser.tab(1).suspended, undefined);
 });
+
+test('a command still running after its deadline keeps its concurrency slot until it settles', async t => {
+  const f = await fixture(t);
+  await f.dispatch('settings.update', { resources: { maxPerClient: 1 } }, human);
+  const agent = await f.grant({});
+  // Deadline timers are unref'd; keep the test's event loop alive while the PDF hangs.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
+  const started = Date.now();
+  // The PDF never finishes on its own: the deadline passes while it is running.
+  const late = await f.dispatch('page.pdf', { workspaceId: f.workspaceId, tabId: 1 }, { ...agent, deadlineMs: 50 });
+  assert.equal(late.error.code, 'deadline_exceeded');
+  assert.equal(late.error.details.effect, 'uncertain');
+  assert.ok(Date.now() - started < 5000, 'deadline_exceeded is still returned promptly');
+  assert.equal(f.prints.length, 1, 'the capture is still running in the browser');
+  // The client limit counts the timed-out command: a second command is refused instead of exceeding the limit.
+  const refused = await f.dispatch('tabs.list', { workspaceId: f.workspaceId }, agent);
+  assert.equal(refused.error.code, 'resource_busy');
+  assert.equal(refused.error.details.busy.resource, 'client');
+  const status = f.dispatch.scheduler.status();
+  assert.equal(status.agentCommands.running, 1);
+  assert.equal(status.agentCommands.afterDeadline, 1, 'status shows the slot is held by a command past its deadline');
+  // Once the underlying work settles the slot is released.
+  f.prints.shift()();
+  for (let i = 0; i < 20 && f.dispatch.scheduler.active.size; i++) await tick();
+  assert.equal(f.dispatch.scheduler.active.size, 0);
+  assert.equal((await f.dispatch('tabs.list', { workspaceId: f.workspaceId }, agent)).execution, 'succeeded');
+});

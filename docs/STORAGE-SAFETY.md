@@ -19,7 +19,11 @@ workspace encryption: [ADR 014](decisions/014-workspace-encryption-and-key-manag
 | `encryption-keyring.json` | Present only when workspace encryption is on: wrapped keys, never an unwrapped key |
 
 Without workspace encryption all of these contain plaintext project content
-(including the search index). Files and folders are created owner-only where
+(including the search index). The search index is derived data: when its
+format version changes it is rebuilt in bounded background batches after the
+store opens, the rebuild position is saved with each batch (`store_info`
+`searchIndexRebuild`) so a restart resumes it, and searches report partial
+coverage until it finishes. Files and folders are created owner-only where
 the OS supports it. See [Encryption at rest](#encryption-at-rest) for what
 changes when a person turns encryption on.
 
@@ -62,7 +66,9 @@ key, the passphrase and the OS key means the data is gone. Then:
 | `records.doc`, `state_meta` values (except `schemaVersion`), retained request results | AES-256-GCM envelopes `wfe1.<keyVersion>.<revision>.…` bound to collection, id, revision and key version |
 | Request fingerprints | Keyed HMAC, so guessable arguments cannot be confirmed |
 | `components/` | Sealed files named by a keyed locator (no plaintext digests on disk); content SHA-256 re-verified after decryption |
-| Search index | Not on disk: an in-memory FTS5 database built on the first search after unlock |
+| Search index | Not on disk: an in-memory FTS5 database rebuilt in bounded background batches after unlock; searches report partial coverage until it finishes |
+| Embedding vectors (`vector_chunks`) | On disk, each chunk's text digest and vector sealed with an index-derived key (AAD: workspace, record, version, chunk, model, dimensions); the digest column is a keyed HMAC. Unlock only decrypts; nothing is re-embedded |
+| Payment records (`<profile>/payments/payments.json`, outside `workspace-data`) | One envelope sealed with the current data key (format 2); unreadable while locked; re-sealed on data-key rotation and restore; a plaintext file left by an interrupted enable/disable is sealed at the next unlock |
 | Backups | Sealed snapshot, sealed components and a copy of the keyring (manifest format 2) |
 | `recovery/` copies made afterwards | Copies of the sealed database |
 | Plaintext left from before | Listed by `encryption.status {inventory: true}` and when enabling; older backups and recovery copies can be overwritten and removed on request; export packages are only listed |

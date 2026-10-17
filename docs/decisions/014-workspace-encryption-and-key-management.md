@@ -41,8 +41,9 @@ encryption remains the recommended complement.
   derives keys from names, tokens or provider credentials.
 - **Search**: the FTS5 index is **never written to disk** for an encrypted
   profile. It lives in an attached `:memory:` database (with `temp_store =
-  MEMORY`), is built from the decrypted documents on the first search after
-  unlock and is discarded on lock. An encrypted on-disk shadow index was
+  MEMORY`), is rebuilt from the decrypted documents in bounded background
+  batches after unlock (ADR 015; searches meanwhile report partial lexical
+  coverage) and is discarded on lock. An encrypted on-disk shadow index was
   rejected: an encrypted FTS index cannot be queried, and a per-token blind
   index leaks term frequencies.
 - **Locked state** is a typed `locked` outcome on every surface; only a person
@@ -170,28 +171,31 @@ contracts with embeddings (ADR 018):
 | --- | --- |
 | Resource archive manifests (URLs, statuses) and archived bodies (#16) | Manifests are part of the sealed artifact record; bodies (`bodyBase64`) are sealed components under keyed names. The offline preview decrypts into memory only (an in-memory, network-less partition) and closes on lock. Chromium's transient MHTML serialization during capture is overwritten with zeros before removal (best effort, like every overwrite). |
 | Sanitized derivatives, restricted originals and purge (#17) | Versions and redaction metadata are sealed records. `artifacts.purgeContent` releases the sealed components; FTS rows of a purged or restricted version live only in the in-memory index. Overwrite is best effort, not secure erasure. |
-| Embedding vectors and their queue (#67) | Never on disk: enabling encryption drops the on-disk `vector_chunks`/`vector_queue` tables before the vacuum; afterwards both live in the attached in-memory database, and every record of a workspace with embeddings enabled is queued again at unlock, so vectors are rebuilt (for an endpoint that is not on this device this re-sends text the person already acknowledged). The per-workspace embedding setting (connection id, endpoint, model name, locality) stays on disk like other model connection settings. The queue does not run while locked. |
+| Embedding vectors and their queue (#67) | Amended: sealed at rest. Each chunk's text digest and float32 vector are one AES-256-GCM envelope under a key derived (HKDF) from the index key (stable across data-key rotation); the AAD binds profile, workspace, collection, record, version, chunk, model key and dimensions, and the on-disk digest column is an HMAC under a second index-derived key, so a guessed chunk text cannot be confirmed. Enabling encryption seals existing vectors inside the migration transaction and disabling opens them, so neither, nor lock/unlock, re-embeds anything: unlock only decrypts, and unchanged chunks are never sent to an endpoint again. A chunk that fails authentication is refused for search (`component_integrity`) and replaced, by re-embedding that chunk, on `search.reindex`. A profile encrypted before this change (vectors were memory-only) queues its embedded workspaces once at the first unlock. The queue (record identifiers, attempt counts, error text) and the per-workspace embedding setting (connection id, endpoint, model name, locality) stay on disk unsealed, like other identifiers and model connection settings. The queue does not run while locked. |
 | Linked-source paths and fingerprints, cached service content (#22), shared collections and grants (#21), citations and quote selectors (#23), origin records (#66), conflicts | Inside sealed records and settings; cached service bodies are sealed components. Service credentials stay in their own OS-protected file, as before. |
 | Chunked upload parts (#14) | Material and artifact upload parts are held in memory (never in `transfers/uploads/`), zeroed when committed, aborted, expired or the profile locks. Package uploads and export packages are plaintext by nature: exports need `acknowledgePlaintext`, and package folders are listed in the plaintext-copy inventory. |
 | Events (#14) | Metadata-only and in memory; locking drops the retained log, and a replay from before the lock reports the gap reason `locked`. `events.list`, MCP resources and every other command answer `locked`. |
 | Credential vault (#6) | Separate vault and key (ADR 017), outside `workspace-data`; it is not part of workspace encryption or backups. `credentials.*` commands, like every command, answer `locked` while the workspace data is locked. |
 | Task runtime (#8, #10) | Plans, timelines, operation records and workflow run state are sealed task-record fields; sensitive run parameters are memory-only. Locking pauses runtime tasks (`profile_locked`) and stops scheduling; the startup sweep runs at unlock and only a person continues (ADR 016). |
 | Resume records and tab groups (#24) | Sealed records like other workspace data, included in backups; excluded from exports (they describe this profile's tabs, listed in `excluded`). Browser-session and history writes commit only their own rows, still sealed. A headless session (#11) of a manual-unlock profile starts locked: `display.status` and stdout say a person must attach (`weft attach`) and unlock; `display.status`/`display.show` work while locked, everything else answers `locked`. |
-| Payment records (#7, ADR 019) | **Not covered.** `<profile>/payments/payments.json` sits outside `workspace-data` like the credential vault and holds the verified merchant origin, checkout path, observed amounts, currency, recurrence and approval/attempt history (never card numbers or codes; the optional issuer key is wrapped by OS-protected storage). It is listed under "not encrypted" in Settings. Card details live in the separately encrypted credential vault. While the workspace is locked every `payments.*` command answers `locked`; the startup sweep that marks an in-flight click `uncertain` runs regardless, because it touches only the payment file. Sealing payment records with the profile key is a possible follow-up. |
+| Payment records (#7, ADR 019) | Amended: sealed. `<profile>/payments/payments.json` sits outside `workspace-data` (it is not in workspace backups) but, with encryption on, is one AES-256-GCM envelope under the current data key (format 2, same envelope and AAD convention as sealed settings, domain `payments/records`). It is unreadable while locked (every `payments.*` command and the service itself answer `locked`); enabling seals it and overwrites the plaintext copy (best effort), disabling writes plaintext first, data-key rotation re-seals it before the old key is dropped, and a restore re-seals it under the restored keyring. A plaintext file inside an encrypted profile is treated as an interrupted migration and sealed at the next unlock (not rejected). The interrupted-click sweep runs at unlock for a locked profile. Card details stay in the separately encrypted credential vault; the optional issuer key stays wrapped by OS-protected storage. Settings lists payment records under "encrypted". |
 | Scheduled work | Freshness checks, community-list checks, the embedding queue and automatic backups wait while locked; plugin processes and model turns stop at lock. |
 
 ## Not covered (documented, not claimed)
 
 - Identifiers, collection names, workspace ids, record counts and order,
   component sizes, file timestamps, command names and request ids. The activity
-  log keeps identifier-shaped `name` arguments (plugin, package, format and
-  similar names) and URL origins and paths, for example of a service reference.
+  log keeps identifier-shaped values only in id fields (names of plugins,
+  packages, formats, extractors and files become character counts), page URL
+  origins and paths, and only the origin of service, endpoint, list, provider
+  and update URLs (amended after integration).
 - Chromium partitions: cookies, caches, site storage, service workers,
   downloads. Chromium encrypts cookies with the OS key store on some platforms;
   Weft does not rely on or claim it.
 - The durable activity log (`activity-log.jsonl`): command names, actors, ids,
-  URL origins and paths, character counts — minimized, never record content
-  (identifier-shaped free text is now reduced to a character count too).
+  page URL origins and paths, service URL origins, character counts —
+  minimized, never record content or names (identifier-shaped free text and
+  names are reduced to a character count).
   Approval previews (`approvals.json`, bounded and expiring), client grants,
   autonomy policy, model connection settings (keys are separately OS-encrypted),
   plugin/extension state, threat-intelligence and download-safety files.
@@ -221,7 +225,8 @@ dependency. It therefore belongs in core; no plugin hook was widened for it.
 
 ## Verification
 
-`test/encryption.test.js` (protector backends incl. `basic_text`, foreign
+`test/encryption-integration.test.js` (sealed vectors and payment records, see the
+coverage table), `test/encryption.test.js` (protector backends incl. `basic_text`, foreign
 account and unavailable store; recovery-key checksum; keyring unwrap per
 method, wrong/tampered secrets and KDF downgrade; AAD binding and tamper
 detection; rewrap and rotations), `test/encryption-store.test.js` (no plaintext

@@ -22,6 +22,8 @@ import { RRF_K, documentKey, reciprocalRankFusion } from './retrieval.js';
 import { createKeyProtector, lockedError } from './encryption.js';
 import { ProfileEncryption } from './profile-encryption.js';
 import { encryptionSchemas } from './encryption-commands.js';
+// Same registered symbol as commands.js PARTIAL_COVERAGE (not imported here to avoid an import cycle).
+const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
 import { applyTransition, appendTimeline, isHumanContext, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
@@ -38,7 +40,7 @@ const REPLAYED = Symbol.for('weft.replayed');
 const WORKFLOW_EXECUTABLE = ['steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
-const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview']);
 // activity.list is served by the durable activity log (src/activity-log.js) through the dispatcher.
 const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'workspaces.list', 'workspaces.get', 'workspaces.export', 'artifacts.versions', 'conversations.messages',
@@ -205,6 +207,8 @@ export class WorkspaceService {
     // Workspace encryption (ADR 014). Hooks are set by the app: stop work before lock, restore tabs after unlock.
     this.encryption = new ProfileEncryption({ directory, protector: keyProtector ?? createKeyProtector(), ...(encryption.kdf && { kdfParams: encryption.kdf }), clock });
     this.encryptionHooks = { beforeLock: async () => {}, afterUnlock: async () => {} };
+    // Profile files outside workspace-data that are sealed with the same keys (payment records, ADR 019) follow every key change.
+    this.sealedStores = new Set();
     this.locked = false;
     try {
       this.refreshStorageWarnings();
@@ -275,6 +279,71 @@ export class WorkspaceService {
       this.data = data;
       if (legacyTasks.length) this.save();
     } catch (error) { storage.close(); throw error; }
+    this.startIndexing();
+  }
+
+  // ---- Background search indexing (#30) ----------------------------------------------
+  /**
+   * A new or changed full-text index (FTS version change, or an encrypted profile's in-memory index after
+   * unlock) is rebuilt in bounded batches (at most ~10 ms or 500 records each) between commands, never while
+   * opening the workspace or handling a command. One short batch runs now so small stores are complete at once.
+   * Searches meanwhile return partial results with coverage; search.status reports progress and a person can
+   * pause and resume it (search.indexing).
+   */
+  startIndexing() {
+    const storage = this.storage;
+    if (!storage?.indexing) return;
+    if (this.indexingPaused) storage.indexing.paused = true;
+    else {
+      try { storage.indexStep({ maxRecords: 2000, budgetMs: 30 }); } catch (error) { this.indexingFailed(storage, error); return; }
+      if (!storage.indexing) return;
+    }
+    this.emitIndexing(storage.indexing.paused ? 'paused' : 'started', storage);
+    this.scheduleIndexing();
+  }
+  scheduleIndexing() {
+    const storage = this.storage;
+    if (this.indexTimer || this.closed || this.locked || !storage?.indexing || storage.indexing.paused || storage.indexing.error) return;
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = null;
+      if (this.storage !== storage || !storage.db || this.locked || !storage.indexing || storage.indexing.paused) return;
+      let step;
+      try { step = storage.indexStep(); } catch (error) { this.indexingFailed(storage, error); return; }
+      if (step.complete) { this.emitIndexing('completed', storage, { processed: step.total, total: step.total }); return; }
+      const percent = Math.floor((step.done / Math.max(1, step.total)) * 10);
+      if (percent > (storage.indexing.reported ?? 0)) { storage.indexing.reported = percent; this.emitIndexing('progress', storage); }
+      this.scheduleIndexing();
+    }, 0);
+    this.indexTimer.unref?.();
+  }
+  indexingFailed(storage, error) {
+    if (!storage.indexing) return;
+    storage.indexing.error = String(error.message).slice(0, 300);
+    this.onWarning({ code: 'SEARCH_INDEX_FAILED', message: `Search indexing stopped: ${error.message}. Searches stay partial; restart Weft to retry.` });
+    this.emitIndexing('failed', storage);
+  }
+  emitIndexing(status, storage, counts = null) {
+    const state = storage.indexing;
+    try { this.onIndexingEvent?.({ type: 'indexing', status, processed: counts?.processed ?? state?.done ?? 0, total: counts?.total ?? state?.total ?? 0, createdAt: new Date(this.clock()).toISOString() }); } catch { /* events are best effort */ }
+  }
+  /** Pause or resume the background rebuild (human administration). A paused plaintext rebuild resumes at the next start. */
+  indexingControl(action) {
+    this.indexingPaused = action === 'pause';
+    const storage = this.storage;
+    if (storage?.indexing) {
+      const changed = storage.indexing.paused !== this.indexingPaused;
+      storage.indexing.paused = this.indexingPaused;
+      if (changed) this.emitIndexing(this.indexingPaused ? 'paused' : 'resumed', storage);
+      if (!this.indexingPaused) { storage.indexing.error = null; this.scheduleIndexing(); }
+    }
+    return { action, paused: this.indexingPaused, indexing: this.storage.indexingStatus(),
+      notice: this.indexingPaused ? 'Search index rebuilding is paused. Searches return partial results until it is resumed (or Weft restarts).' : 'Search index rebuilding runs in the background between commands.' };
+  }
+  /** Resolves when the background rebuild has finished (or is paused or failed); for tools and tests. */
+  async indexingIdle({ timeoutMs = 60000 } = {}) {
+    const until = Date.now() + timeoutMs;
+    while (this.storage?.indexing && !this.storage.indexing.paused && !this.storage.indexing.error && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 5));
+    return this.storage?.indexingStatus?.() ?? null;
   }
   /** Lossless one-time move from the JSON store; the original bytes are preserved under recovery/. */
   migrateLegacy(legacy, assertOwned) {
@@ -314,6 +383,7 @@ export class WorkspaceService {
   close() {
     this.closed = true;
     clearInterval(this.backupTimer);
+    clearTimeout(this.indexTimer);
     this.storage?.close();
     this.encryption.forget();
     this.lock.release();
@@ -699,6 +769,9 @@ export class WorkspaceService {
     return forCaller(collection, this.output(record), context);
   }
   attachRetrieval(retrieval) { this.retrieval = retrieval; }
+  /** A profile store outside workspace-data sealed with this profile's keys: told about enable, disable, rotation, lock, unlock and restore. */
+  attachSealedStore(store) { this.sealedStores.add(store); return store; }
+  sealedStoreStep(step) { for (const store of this.sealedStores) store[step]?.(); }
   /** search.* commands: reads and embedding administration outside the write queue. */
   async searchCommand(name, input, context) {
     // A locked encrypted profile has no open store or decrypted index (ADR 014).
@@ -711,6 +784,8 @@ export class WorkspaceService {
     const args = workspaceSchemas[name].parse(input);
     const { workspaceId } = this.authorize(name, args, context);
     if (name === 'search.query') return this.searchQuery(args, workspaceId, context);
+    if (name === 'search.indexing') return this.indexingControl(args.action);
+    if (name === 'search.status' && !this.retrieval) return { workspaceId, lexical: this.storage.lexicalCoverage(workspaceId), vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
     if (!this.retrieval) throw Object.assign(new Error('Embeddings are unavailable in this process'), { code: 'unavailable' });
     return this.retrieval.execute(name, args, { ...context, workspaceId });
   }
@@ -754,17 +829,24 @@ export class WorkspaceService {
         score: Number((fused ?? -row.score).toFixed(6)), match: lexicalRank ? row.match : 'semantic', citation,
         ...(row.shared && { shared: row.shared }), ...(vector.used && { ranking: { method: 'rrf', k: RRF_K, lexicalRank: lexicalRank ?? null, vectorRank: vectorRank ?? null, similarity: similarity === undefined ? null : Number(similarity.toFixed(6)) } }) };
     });
-    if (!args.page) return results;
+    if (!args.page) {
+      // Unpaged results stay a list; while the index is rebuilt the outcome is partial and carries the lexical coverage.
+      const lexical = this.storage.indexing ? this.storage.lexicalCoverage(workspaceId) : null;
+      if (lexical && !lexical.complete) Object.defineProperty(results, PARTIAL_COVERAGE, { value: { lexical } });
+      return results;
+    }
     const next = offset + results.length;
-    const coverage = this.retrieval ? this.retrieval.status(workspaceId, { listLimit: 20 }) : { workspaceId, lexical: { documents: this.storage.documentCount(workspaceId), complete: true }, vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
+    const coverage = this.retrieval ? this.retrieval.status(workspaceId, { listLimit: 20 }) : { workspaceId, lexical: this.storage.lexicalCoverage(workspaceId), vector: { enabled: false, embedded: 0, pending: 0, unembedded: [], unembeddedCount: 0 } };
     const searched = ['lexical', ...(vector.used ? ['vector'] : [])];
+    const lexicalComplete = coverage.lexical.complete !== false;
     const vectorComplete = !coverage.vector.enabled || (vector.used && coverage.vector.unembeddedCount === 0);
-    const absence = offset === 0 && !results.length ? { verified: vectorComplete, searched,
-      reason: vectorComplete ? 'No indexed document in this workspace matched; every indexed document was searched.' : !vector.used && coverage.vector.enabled ? `Vector search was not used (${vector.reason}); only lexical matching was checked.` : `${coverage.vector.unembeddedCount} document(s) have no embedding yet; they were checked lexically only.` } : null;
+    const absence = offset === 0 && !results.length ? { verified: lexicalComplete && vectorComplete, searched,
+      reason: !lexicalComplete ? `The search index is still being rebuilt (${coverage.lexical.unindexedRecords} record(s) in this workspace not indexed yet); the absence is not verified.`
+        : vectorComplete ? 'No indexed document in this workspace matched; every indexed document was searched.' : !vector.used && coverage.vector.enabled ? `Vector search was not used (${vector.reason}); only lexical matching was checked.` : `${coverage.vector.unembeddedCount} document(s) have no embedding yet; they were checked lexically only.` } : null;
     return { items: results, nextCursor: next < ordered.length && results.length ? encodeCursor('search.query', scope, next) : null,
       total: vector.used ? ordered.length : this.storage.searchCount({ workspaceId, query: args.query }) + sharedRows.length, mode: vector.used ? 'hybrid' : 'lexical',
       vector: { used: vector.used, reason: vector.used ? null : vector.reason, ...(vector.error ? { error: vector.error } : {}) },
-      ...(mode !== 'lexical' && coverage.vector.enabled && !vector.used ? { partial: true } : {}),
+      ...((mode !== 'lexical' && coverage.vector.enabled && !vector.used) || !lexicalComplete ? { partial: true } : {}),
       coverage: { lexical: coverage.lexical, vector: coverage.vector }, absence };
   }
   /** Lexical rows of records shared into a workspace (active collection membership only), tagged with their collection. */
@@ -1668,6 +1750,7 @@ export class WorkspaceService {
   }
   restoreFrom(id) {
     const previousWorkspaces = new Set(this.data.workspaces.map(item => item.id));
+    this.sealedStoreStep('beforeRestore');
     this.storage.close();
     let result;
     let failure;
@@ -1679,6 +1762,7 @@ export class WorkspaceService {
     const encryption = this.encryption.adoptRestored(keys);
     if (encryption === 'locked') {
       this.storage = null; this._data = null; this.locked = true;
+      this.sealedStoreStep('afterRestore');
       if (failure) throw failure;
       return Promise.resolve().then(async () => {
         await this.encryptionHooks.beforeLock?.({ persist: false });
@@ -1689,6 +1773,7 @@ export class WorkspaceService {
     catch (error) { throw fail('command_failed', `RESTORE_INCOMPLETE: ${failure?.message || error.message}. Restart Weft to finish recovery; originals are preserved under ${RECOVERY_DIR}/.`); }
     if (failure) throw failure;
     this.storage.sweepOrphans();
+    this.sealedStoreStep('afterRestore');
     result.encryption = this.storage.encrypted ? 'encrypted' : 'plaintext';
     // A backup taken mid-rotation carries both data keys; finish re-encrypting under the newest.
     if (this.encryption.keyring?.rotation) this.resumeRotation().catch(() => {});
@@ -1762,6 +1847,7 @@ export class WorkspaceService {
       if (this.encryption.keyring) throw fail('invalid_arguments', 'This profile is already encrypted');
       const recoveryKey = this.encryption.enable(this.storage, { passphrase: passphrase ?? null, unlockMode, onStep: context.onStep });
       this.reopenStorage();
+      this.sealedStoreStep('afterEnable');
       const removed = removePlaintextCopies ? this.encryption.removePlaintextCopies() : [];
       const remaining = this.encryption.plaintextCopies();
       this.log('encryption.enable', this.activeWorkspaceId, null, 'human', `Workspace encryption on; unlock: ${unlockMode}${removed.length ? `; ${removed.length} plaintext copies overwritten and removed` : ''}`);
@@ -1777,6 +1863,7 @@ export class WorkspaceService {
     return this.exclusive(() => {
       this.assertUnlocked();
       if (this.encryption.keyring?.rotation) throw fail('invalid_arguments', 'Finish the data-key rotation before turning encryption off');
+      this.sealedStoreStep('beforeDisable');
       this.encryption.disable(this.storage, { onStep: context.onStep });
       this.reopenStorage();
       this.log('encryption.disable', this.activeWorkspaceId, null, 'human', 'Workspace encryption turned off; data rewritten as plaintext');
@@ -1795,6 +1882,7 @@ export class WorkspaceService {
     if (!this.encryption.enabled) throw fail('invalid_arguments', 'Turn on workspace encryption before locking');
     if (this.locked) return { locked: true, alreadyLocked: true };
     await this.encryptionHooks.beforeLock?.({ persist: true });
+    for (const store of this.sealedStores) await store.beforeLock?.();
     return this.exclusive(() => {
       if (this.locked) return { locked: true, alreadyLocked: true };
       try { this.log('encryption.lock', this.activeWorkspaceId, null, 'human', 'Workspace data locked'); this.save(); } catch { /* locking proceeds */ }
@@ -1815,6 +1903,9 @@ export class WorkspaceService {
       try { this.openStorage(); this.storage.sweepOrphans(); }
       catch (error) { this.storage?.close(); this.storage = null; this._data = null; this.encryption.forget(); throw error; }
       this.locked = false;
+      // The store opened while still marked locked: start its background index rebuild now.
+      this.scheduleIndexing();
+      this.sealedStoreStep('afterUnlock');
       try { this.log('encryption.unlock', this.activeWorkspaceId, null, 'human', `Unlocked with ${method === 'os' ? 'the OS key' : method === 'passphrase' ? 'the passphrase' : 'the recovery key'}`); this.save(); } catch { /* unlocked regardless */ }
       return { unlocked: true, method };
     });
@@ -1843,6 +1934,7 @@ export class WorkspaceService {
       }
       return this.exclusive(() => {
         this.assertUnlocked();
+        this.sealedStoreStep('beforeFinishRotation');
         this.encryption.finishDataKeyRotation();
         this.storage.compact();
         this.log('encryption.rotate', this.activeWorkspaceId, null, 'human', `Data key rotation complete: ${reencrypted} values and components re-encrypted under version ${this.encryption.keyring.currentVersion}`);

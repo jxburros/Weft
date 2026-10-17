@@ -12,7 +12,7 @@ export const MODEL_IMAGE_LIMITS = Object.freeze({ maxBytes: 4 * 1024 * 1024, max
 export const RESOURCE_DEFAULTS = Object.freeze({
   maxAgentCommands: 8, maxPerClient: 4, maxPerTask: 2,
   captureConcurrency: 1, captureQueueLimit: 8,
-  idleSuspendMinutes: 30, memoryBudgetMb: null, maxCaptureEdge: CAPTURE_LIMITS.defaultMaxEdge,
+  idleSuspendMinutes: 30, memoryBudgetMb: null, systemMemoryPressure: true, maxCaptureEdge: CAPTURE_LIMITS.defaultMaxEdge,
 });
 export const resourceSettingsShape = z.strictObject({
   maxAgentCommands: z.number().int().min(1).max(64).optional().describe('Agent commands that may run at once across all clients (default 8).'),
@@ -22,6 +22,7 @@ export const resourceSettingsShape = z.strictObject({
   captureQueueLimit: z.number().int().min(0).max(50).optional().describe('Agent captures that may wait; more are refused with resource_busy (default 8).'),
   idleSuspendMinutes: z.number().int().min(0).max(1440).optional().describe('Suspend eligible background tabs idle this long; 0 disables (default 30).'),
   memoryBudgetMb: z.number().int().min(64).max(65536).nullable().optional().describe('When page renderers exceed this, eligible background tabs are suspended least recently used first; null disables.'),
+  systemMemoryPressure: z.boolean().optional().describe('Also suspend a few idle background tabs when the operating system reports memory pressure (Linux pressure-stall data and available memory; available memory on Windows; a conservative free-page heuristic on macOS). Default true.'),
   maxCaptureEdge: z.number().int().min(16).max(CAPTURE_LIMITS.absoluteMaxEdge).optional().describe('Largest capture width or height in pixels for any caller (default 4096).'),
 }).describe('Resource scheduling limits (human only).');
 
@@ -71,9 +72,13 @@ export class ResourceScheduler {
     check('client', limits.maxPerClient, all.filter(item => item.clientKey === clientKey).length);
     if (context.taskId) check('task', limits.maxPerTask, all.filter(item => item.taskId === context.taskId).length);
     const token = Symbol(command);
-    this.active.set(token, { clientKey, taskId: context.taskId ?? null, command, actor: String(context.actor).slice(0, 64), startedAt: this.clock() });
+    const entry = { clientKey, taskId: context.taskId ?? null, command, actor: String(context.actor).slice(0, 64), startedAt: this.clock(), afterDeadline: false };
+    this.active.set(token, entry);
     let released = false;
-    return () => { if (!released) { released = true; this.active.delete(token); } };
+    const release = () => { if (!released) { released = true; this.active.delete(token); } };
+    // A command whose deadline passed while it still runs keeps its slot until it settles; status shows it as such.
+    release.overdue = () => { entry.afterDeadline = true; };
+    return release;
   }
 
   isCapture(command) { return CAPTURE_COMMANDS.has(command); }
@@ -159,7 +164,7 @@ export class ResourceScheduler {
     const all = [...this.active.values()];
     const visible = job => !context.workspaceIds || context.workspaceIds.includes(job.workspaceId);
     return { limits: this.limits(),
-      agentCommands: { running: all.length, byCommand: Object.entries(all.reduce((acc, item) => ({ ...acc, [item.command]: (acc[item.command] ?? 0) + 1 }), {})).map(([command, count]) => ({ command, count })) },
+      agentCommands: { running: all.length, afterDeadline: all.filter(item => item.afterDeadline).length, byCommand: Object.entries(all.reduce((acc, item) => ({ ...acc, [item.command]: (acc[item.command] ?? 0) + 1 }), {})).map(([command, count]) => ({ command, count })) },
       captures: { running: this.running, queued: this.queue.length, jobs: this.list(context.workspaceIds ? { workspaceIds: context.workspaceIds } : {}).filter(visible).slice(0, 50) } };
   }
 }
