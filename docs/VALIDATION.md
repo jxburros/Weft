@@ -25,6 +25,13 @@ archive extraction support. Loopback URL tests deliberately reject DNS names eve
 if they might currently resolve to loopback; control-plane authorization never
 relies on mutable DNS answers.
 
+Extension compatibility evidence (`test/extensions-browser.test.js`, summarized
+in ADR-004) comes from Electron 44.9.0 / Chromium 152 on Linux under Xvfb. Run
+it again after any Electron upgrade before changing the allowed extension
+permission set; macOS and Windows behaviour has not been observed. Plugin
+sandbox tests rely on Node's permission model as shipped with the running Node
+or Electron version.
+
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
 malware-feed, payment-provider, or multi-user deployment validation. Those items
 remain open until their issue-specific acceptance criteria have evidence.

@@ -24,6 +24,26 @@ alone is not a shipped capability.
 - Added canonical contributor instructions, a thin Claude overlay, product
   identity and architecture decisions for encryption, extensions/plugins and
   current local-only collaboration/deployment scope.
+- Added a Weft plugin system (#61): strict data-only manifests, built-in
+  `markdown`, `citations` and `session-stats` plugins, `plugin.<name>.*`
+  catalog commands, five named hooks (`capture-format`, `page-extract`,
+  `after-command`, `activity-report`, `export-format`) reached only through a
+  registry, new `workspaces.exportAs`, `artifacts.render`, `activity.report`
+  and `page.extract` commands, and `plugins.list/enable/disable/invoke`.
+  Third-party plugins are listed without running code, enabled only by a person
+  against manifest/code digests, kept from automation by default and run in a
+  permission-model child process. An import-boundary test guards core.
+- Added per-workspace unpacked Manifest V3 browser extensions (#34):
+  human-only audit/install/enable/disable/remove with exact host grants,
+  an audited permission allowlist, hash pinning and restart re-verification.
+  Extension-originated requests are limited to granted hosts and every block
+  rule. A real Electron fixture run records supported/denied APIs in ADR-004.
+  Enabled extensions still run code in granted pages; this residual risk is
+  documented. Only Linux/Xvfb was observed.
+- Settings gained plugin and extension management dialogs that show scope
+  before enablement; workspace export can produce Markdown through the plugin.
+- The `unsupported` error code (HTTP 422, CLI exit 1) reports a requested
+  format, extractor or extension engine feature that is not available.
 
 ### Not completed
 
