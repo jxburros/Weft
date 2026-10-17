@@ -37,6 +37,13 @@ retained; no replacement brand or textile terminology has been introduced.
   client creation/revocation, token disposal on close, and Update Center flows
   (no check on open, staged verification display, opt-in daily checks, install of
   the exact staged version, kill-switch disabled controls).
+- `xvfb-run -a node --test test/gui-knowledge.test.js`: Context review panel
+  (proposal promotion, citation status, source check, conflict inspection and
+  resolution), linked-source cards and Shared context collection dialogs. These
+  views reuse existing card, tag (sage/clay status), notice and dialog
+  components; no new tokens or colors were introduced. Golden fixtures contain
+  no linked, shared, cited or proposed records, so those views render the same
+  markup as before.
 - `node --test test/release.test.js`: Windows installer sidebar/header bitmaps are
   regenerated from `assets/tokens.json` and the committed logo exports by
   `scripts/generate-installer-art.js` and must match the committed BMPs byte for

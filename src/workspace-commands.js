@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { citationInput, originInput } from './provenance.js';
 
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
@@ -12,8 +13,9 @@ const reviewDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a YYYY-MM-D
 const tags = z.array(z.string().max(100)).max(100);
 export const finishReason = z.enum(['stop', 'length', 'content_filter', 'other', 'cancelled', 'timeout', 'emergency_stop', 'disconnected']);
 export const recordShapes = {
-  materials: { title, localOnly: z.boolean().default(false), kind: z.enum(['note', 'website', 'file', 'linked-file', 'service']).default('note'), content: text.default(''), url: httpUrl.nullable().optional(), filename: z.string().max(255).optional(), mimeType: z.string().max(128).optional(), fileBase64: z.string().max(14000000).optional(), note: text.optional(), tags: tags.default([]), pinned: z.boolean().default(false) },
-  context: { title, localOnly: z.boolean().default(false), content: text.default(''), category: z.enum(['confirmed', 'findings', 'questions', 'instructions', 'decisions']).default('findings'), sources: z.array(z.string().max(16384)).max(100).default([]), tags: tags.default([]) },
+  materials: { title, localOnly: z.boolean().default(false), kind: z.enum(['note', 'website', 'file', 'linked-file', 'linked-folder', 'service']).default('note'), content: text.default(''), url: httpUrl.nullable().optional(), filename: z.string().max(255).optional(), mimeType: z.string().max(128).optional(), fileBase64: z.string().max(14000000).optional(), note: text.optional(), tags: tags.default([]), pinned: z.boolean().default(false), origin: originInput.optional() },
+  context: { title, localOnly: z.boolean().default(false), content: text.default(''), category: z.enum(['confirmed', 'findings', 'questions', 'instructions', 'decisions']).default('findings'), sources: z.array(z.string().max(16384)).max(100).default([]), tags: tags.default([]),
+    citations: z.array(citationInput).max(50).default([]).describe('Exact citations (capture versions with quote selectors, record revisions or linked source versions); on update they are appended.'), origin: originInput.optional() },
   tasks: { title, objective: text.default(''), status: z.enum(['queued', 'running', 'waiting', 'paused', 'completed', 'failed', 'cancelled']).default('queued'), assignee: z.string().max(200).default('human'), progress: z.number().min(0).max(100).default(0), blocker: text.default(''), checkpoint: text.default(''), nextStep: text.default(''), evidence: references.default([]), materialIds: references.default([]), tabIds: z.array(z.number().int().positive()).max(100).default([]), outputs: references.default([]) },
   conversations: { title: title.default('New conversation') },
   workflows: { title, enabled: z.boolean().default(true), description: text.default(''), parameters: z.array(z.string().max(200)).max(100).default([]), steps: z.array(z.strictObject({ title, instruction: text, reviewRequired: z.boolean().default(true) })).max(100).default([]), allowedSites: z.array(z.string().max(255)).max(100).default([]), materialIds: references.default([]), expectedOutputs: text.default('') },

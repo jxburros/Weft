@@ -205,3 +205,35 @@ Human-only describes an unconditional administration gate. Every other non-human
 | credentials.grantTask | Human lets one open task fill one credential a limited number of times without a per-use approval | administration | Human only | GUI IPC, CLI, REST, MCP |
 | credentials.revokeGrant | Human revokes a task credential grant | administration | Human only | GUI IPC, CLI, REST, MCP |
 | credentials.configureProvider | Human enables or disables the external 1Password CLI (op) vault adapter (implemented against a test double; not validated with a real account) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.list | List shared context collections your workspace owns or participates in, with your role | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| collections.get | Get a shared collection: owner, participating workspaces and roles, items and provenance | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| collections.create | Human creates a shared context collection owned by a workspace; nothing is shared until a workspace is granted access | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.update | Human renames or describes a shared collection | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.delete | Human deletes a shared collection; its records stay in the owner workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.grant | Human grants another workspace read or write access to a collection; revocable, and browser sessions stay separate | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.revoke | Human revokes a workspace’s collection access; applies to the next command from any person, model or agent | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.addItem | Human adds an owner-workspace record to a shared collection | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.removeItem | Human removes a record from a shared collection; the record itself is kept | administration | Human only | GUI IPC, CLI, REST, MCP |
+| collections.read | Read one record shared with your workspace through a collection you can read | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| collections.write | Create (omit itemId) or update (itemId and expectedRevision) a context or materials record in a collection your workspace can write | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| sources.link | Human links a chosen local file or folder, or stores a managed copy, without granting agents other filesystem access | administration | Human only | GUI IPC, CLI, REST, MCP |
+| sources.check | Detect whether a linked source is available, changed, moved, missing or inaccessible; accepts nothing | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| sources.refresh | Re-verify an available or changed linked source and record its current content hash as a new source version | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| sources.relink | Human points a link at the detected moved location or a newly chosen path | administration | Human only | GUI IPC, CLI, REST, MCP |
+| sources.read | Read bounded linked content through its link record: a folder listing or a file inside the linked root; content is untrusted data | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| services.create | Human adds a service reference (HTTPS document or documented API); nothing is fetched until a person refreshes it | administration | Human only | GUI IPC, CLI, REST, MCP |
+| services.update | Human changes a service reference title, URL or scheduled refresh | administration | Human only | GUI IPC, CLI, REST, MCP |
+| services.setCredential | Human stores a credential header for a service reference in OS-protected storage; never exported or shown again | administration | Human only | GUI IPC, CLI, REST, MCP |
+| services.revoke | Human revokes a service credential; cached content is withheld from agents and optionally purged | administration | Human only | GUI IPC, CLI, REST, MCP |
+| services.refresh | Human fetches the live service document into a new cached source version (no redirects are followed) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| services.read | Read cached service content with its source version, refresh time and authorization status; content is untrusted data | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| context.propose | Propose an attributed finding for promotion to trusted context; it stays a finding until promoted | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| context.promote | Promote a proposal into a confirmed fact, decision or instruction; agents need a human approval (optionally task-scoped) | trusted_context | Policy checked | GUI IPC, CLI, REST, MCP |
+| context.dismiss | Dismiss a proposal (its proposer or a person); the finding and its evidence are kept | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| citations.check | Re-anchor citations against the newest capture, record and source versions; marks them verified, reanchored, stale or unverified | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| freshness.check | Check linked sources and citations for material changes; flags stale citations and opens conflicts without changing evidence | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| freshness.configure | Human enables scheduled freshness checks for a workspace (local checks; services only when opted in) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| conflicts.list | List evidence conflicts in a workspace | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| conflicts.get | Inspect a conflict with every subject revision and any preserved proposed change | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| conflicts.create | Record a contradiction or a conflicting edit; the original records are not changed | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| conflicts.resolve | Resolve a conflict attributably: keep both, choose one, merge into a new record or dismiss; originals are never overwritten | local_write | Policy checked | GUI IPC, CLI, REST, MCP |

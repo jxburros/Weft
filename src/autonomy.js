@@ -4,13 +4,13 @@
  * grants and approval evidence; nothing here trusts command arguments.
  */
 export const ACTION_CLASSES = Object.freeze(['local_read', 'external_read', 'local_write', 'external_write', 'code_exec', 'cloud_spend',
-  'bulk_export', 'credential_use', 'payment', 'administration', 'unclassified']);
+  'bulk_export', 'credential_use', 'payment', 'trusted_context', 'administration', 'unclassified']);
 /** Classes that are never automatic and never covered by a standing approval: every use needs an exact one-time approval. */
 export const ONCE_ONLY_CLASSES = Object.freeze(['bulk_export', 'credential_use', 'payment', 'unclassified']);
 /** Classes that act outside Weft; success is acceptance by the browser or provider, not proof of an external result. */
 export const EXTERNAL_CLASSES = Object.freeze(['external_write', 'code_exec', 'cloud_spend', 'credential_use', 'payment']);
 /** Classes a human may add to a client grant beyond its read/write scopes. */
-export const GRANTABLE_CLASSES = Object.freeze(['code_exec', 'cloud_spend', 'bulk_export', 'credential_use', 'payment']);
+export const GRANTABLE_CLASSES = Object.freeze(['code_exec', 'cloud_spend', 'bulk_export', 'credential_use', 'payment', 'trusted_context']);
 export const AUTONOMY_LEVELS = Object.freeze(['observe', 'assist', 'scoped', 'autonomous']);
 export const DATA_CLASSES = Object.freeze(['workspace_records', 'conversations', 'page_content', 'page_capture', 'browsing_history', 'activity']);
 /** Sensitive outbound categories (spec 14.2) and the approval class each maps to. */
@@ -50,6 +50,14 @@ add('local_read', 'update.status');
 add('administration', 'update.check update.install update.rollback update.configure');
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
+// Shared context collections, linked sources, service references, proposals, freshness and conflicts (#21, #22, #23, #66).
+add('local_read', 'collections.list collections.get collections.read sources.read services.read conflicts.list conflicts.get');
+add('local_write', 'collections.write sources.check sources.refresh context.propose context.dismiss citations.check freshness.check conflicts.create conflicts.resolve');
+add('administration', `collections.create collections.update collections.delete collections.grant collections.revoke collections.addItem collections.removeItem
+  sources.link sources.relink services.create services.update services.setCredential services.revoke services.refresh freshness.configure`);
+// Promotion into confirmed facts, decisions or instructions: an agent needs a human approval every time or a
+// standing (optionally task-bound) approval; autonomy levels never grant it and page/record text cannot.
+add('trusted_context', 'context.promote');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
 // Credential references and protected login (#6): metadata reads, once-only credential use, human-only administration.
 add('local_read', 'credentials.status credentials.list credentials.get');
@@ -80,7 +88,7 @@ export function registerPluginActionClass(name, actionClass, dataClasses = null)
 }
 const pluginDataClasses = new Map();
 /** The more restrictive of two action classes (unknown values are unclassified). Used to raise a command to a plugin's effective class. */
-const CLASS_ORDER = ['local_read', 'external_read', 'local_write', 'external_write', 'code_exec', 'cloud_spend', 'bulk_export', 'credential_use', 'payment', 'administration', 'unclassified'];
+const CLASS_ORDER = ['local_read', 'external_read', 'local_write', 'external_write', 'code_exec', 'cloud_spend', 'bulk_export', 'credential_use', 'payment', 'trusted_context', 'administration', 'unclassified'];
 export function raiseActionClass(current, raised) {
   const rank = value => { const index = CLASS_ORDER.indexOf(value); return index < 0 ? CLASS_ORDER.length - 1 : index; };
   return CLASS_ORDER[Math.max(rank(current), rank(raised))];
@@ -161,6 +169,8 @@ export function evaluateAutonomy({ actor, actionClass, level = 'scoped', humanOn
   if (['local_read', 'external_read'].includes(effective)) return { decision: 'auto', reason: 'read' };
   if (level === 'observe') return { decision: 'deny', reason: 'observe_only' };
   if (ONCE_ONLY_CLASSES.includes(effective)) return approvedOnce ? { decision: 'auto_preapproved', reason: 'approved_once' } : { decision: 'approval', reason: 'exact_approval_required' };
+  // Trusted context is a human decision: only explicit approval evidence admits it, never an autonomy level.
+  if (effective === 'trusted_context') return approvedOnce ? { decision: 'auto_preapproved', reason: 'approved_once' } : standing ? { decision: 'auto_preapproved', reason: 'standing_approval' } : { decision: 'approval', reason: 'trusted_context_approval_required' };
   if (effective === 'local_write' && levelRank(level) >= levelRank('scoped')) return { decision: 'auto', reason: 'local_write' };
   if (effective !== 'local_write' && level === 'autonomous') return { decision: 'auto_preapproved', reason: 'standing_autonomy_grant' };
   if (approvedOnce) return { decision: 'auto_preapproved', reason: 'approved_once' };

@@ -1,5 +1,6 @@
 {
   "capture-finding": { "roundTrips": 7, "toolErrors": 0, "retries": 0 },
   "stale-recovery": { "roundTrips": 7, "toolErrors": 2, "retries": 1 },
-  "human-policy": { "roundTrips": 2, "toolErrors": 2, "retries": 0 }
+  "human-policy": { "roundTrips": 2, "toolErrors": 2, "retries": 0 },
+  "propose-cited-finding": { "roundTrips": 6, "toolErrors": 1, "retries": 0 }
 }

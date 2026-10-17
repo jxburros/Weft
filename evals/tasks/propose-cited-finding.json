@@ -1,0 +1,22 @@
+{
+  "id": "propose-cited-finding",
+  "prompt": "Save the fixture page text, propose a finding that quotes it exactly, and try to promote it to confirmed context as automation. Report the refusal; a person decides promotion.",
+  "setup": "Fresh workspace; tab 1 is available; origin serves fixture evidence.",
+  "reference": [
+    { "command": "tabs.claim", "args": { "tabId": "$tabId" }, "save": "claim" },
+    { "command": "page.navigate", "args": { "tabId": "$tabId", "url": "$origin", "expectedVersion": "$claim.version" } },
+    { "command": "artifacts.capture", "args": { "tabId": "$tabId", "kind": "text", "title": "Fixture evidence" }, "save": "capture" },
+    { "command": "context.propose", "args": { "title": "Fixture claim", "content": "The fixture is verified.", "proposedCategory": "confirmed", "citations": [{ "type": "capture", "captureId": "$capture.id", "exact": "Verified fixture evidence." }] }, "save": "proposal" },
+    { "command": "context.promote", "args": { "id": "$proposal.id", "expectedRevision": 1 }, "expectError": "human approval" },
+    { "command": "tabs.release", "args": { "tabId": "$tabId" } }
+  ],
+  "checks": [
+    { "path": "state.context.length", "equals": 1 },
+    { "path": "state.context.0.category", "equals": "findings" },
+    { "path": "state.context.0.proposal.status", "equals": "proposed" },
+    { "path": "state.context.0.citations.0.status", "equals": "verified" },
+    { "path": "state.context.0.citations.0.versionId", "equals": "$capture.versions.0.id" },
+    { "path": "state.context.0.origin.kind", "equals": "agent" },
+    { "path": "tab.controller", "equals": "available" }
+  ]
+}

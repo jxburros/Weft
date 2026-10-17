@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
+import { Knowledge } from '../src/knowledge.js';
 
 const smoke = process.argv.includes('--workspace-smoke');
 async function until(check) {
@@ -57,6 +58,11 @@ if (smoke) {
       assert.equal((await workspace.execute('bookmarks.list')).length, 0);
       await assert.rejects(workspace.execute('history.clear', {}, { actor: 'automation' }), /human/);
       const secondWorkspace = await workspace.execute('workspaces.create', { name: 'Second project' });
+      // Context sharing between the workspaces (#21) must leave their browser containers isolated; the checks below run with it enabled.
+      const knowledge = new Knowledge({ workspace });
+      const shared = await knowledge.execute('collections.create', { workspaceId: firstWorkspace, name: 'Shared facts' }, { actor: 'human' });
+      await knowledge.execute('collections.grant', { id: shared.id, memberWorkspaceId: secondWorkspace.id, role: 'write' }, { actor: 'human' });
+      assert.equal((await knowledge.execute('collections.list', { workspaceId: secondWorkspace.id }, { actor: 'human' }))[0].sessionSharing, 'separate');
       await workspace.execute('workspaces.switch', { id: secondWorkspace.id });
       await browser.execute('page.navigate', { url: origin });
       const secondTab = browser.activeId;

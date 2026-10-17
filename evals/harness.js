@@ -10,6 +10,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { workspaceSchemas } from '../src/workspace-commands.js';
 import { Browser } from '../src/browser.js';
 import { validateCommand } from '../src/commands.js';
+import { Knowledge } from '../src/knowledge.js';
 
 function resolve(value, values) {
   if (typeof value === 'string' && value.startsWith('$')) {
@@ -59,8 +60,10 @@ export async function runTask(task) {
     browser.tabs.set(1, tab); browser.activeId = 1;
     service.attachBrowser(browser);
     const context = { actor: 'automation', workspaceId: service.activeWorkspaceId };
+    const knowledge = new Knowledge({ workspace: service });
     const bridge = { execute: (name, args) => {
       const validated = validateCommand(name, args);
+      if (knowledge.handles(name)) return knowledge.execute(name, validated, context);
       return Object.hasOwn(workspaceSchemas, name) ? service.execute(name, validated, context) : browser.execute(name, validated, context);
     } };
     server = createMcpServer(bridge);

@@ -20,7 +20,9 @@ All of these contain project content (including the search index) and are not
 encrypted. Files and folders are created owner-only where the OS supports it.
 
 The database holds every workspace collection, including handoff and takeover
-records, site-rule provenance (creator, revision history, review state),
+records, shared context collections, evidence conflicts, freshness schedules,
+record provenance and citations, linked-source metadata and cached service
+versions (cached bytes are components), site-rule provenance (creator, revision history, review state),
 storage modes (`storagePolicies`), community list subscriptions (`siteLists`),
 conversation turn manifests and the in-store activity entries. Modules that
 share it (handoffs, community lists, site storage, extensions) commit through
@@ -35,6 +37,7 @@ database:
 | `activity-log.jsonl`, `activity-head.json`, `activity-config.json` | Hash-chained activity log | Append with fsync; head/config verified replacement |
 | `approvals.json`, `authority-policy.json`, `client-grants.json` | Authority gate, approvals, agent grants | Stamped verified replacement (`writeVerifiedJson`) |
 | `model-connections.json` | Model connections (encrypted key blobs) | Verified replacement |
+| `service-credentials.json` | Service-reference credentials (OS-encrypted blobs via `safeStorage`; refused without OS protection) | Stamped verified replacement |
 | `extensions/` (`extensions.json` and installed copies) | Per-workspace browser extensions | Stamped verified replacement |
 | `plugin-grants.json` | Plugin enablement grants | Stamped verified replacement |
 | `temporary-storage-journal.json`, `threat-intel.json`, `download-safety.json`, `quarantine/` | Browser security state | Durable temporary-file replacement (`src/atomic-json.js`) |
@@ -134,6 +137,8 @@ These are deliberately **not** in a backup and a restore leaves them as they are
 | Approvals, autonomy policy, agent connection grants | Authority must never be widened by old data: a restore could revive revoked grants, used approvals or higher autonomy. Current authority applies to restored workspaces. |
 | Model connections and keys | Credentials; never copied into backups. |
 | Credential vault, wrapped key, task grants (`<profile>/credentials`) | Saved sign-ins live outside `workspace-data` (ADR-017), so backups, exports and packages never contain them; restoring cannot revive a revoked sign-in. |
+| Service-reference credentials | Credentials; never copied into backups or exports. Restored service references keep their state but need a person to store a credential again if the file is gone. |
+| Linked file and folder contents | They stay at their own location; the database holds only the path, hashes and status. A restore does not bring back the bytes of a changed or deleted linked file. |
 | Temporary-storage journal, threat intelligence, download scanner settings, quarantine | Current browser security state. Rewinding could restore stale threat lists or forget origins that still need erasing. |
 | Plugin grants, extension installs | Enablement is a human decision bound to code digests; a restore must not re-enable revoked code. |
 | Updater state | Tracks installed and staged application versions, not project data. |
