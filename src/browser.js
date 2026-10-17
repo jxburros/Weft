@@ -21,8 +21,10 @@ const elementFailures = {
 };
 const elementFailure = reason => (elementFailures[reason] ?? (() => new Error('Element action failed')))();
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, openSync, closeSync, chmodSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, openSync, closeSync, chmodSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
+import { ARCHIVE_CSP, ARCHIVE_FORMAT, ARCHIVE_FORMAT_VERSION, ARCHIVE_LIMITS, CID_HOST, FALLBACK_DOCUMENT_URL, archiveKey, buildArchive } from './archive.js';
 import { SiteStoragePolicy, STORAGE_COVERAGE } from './site-storage.js';
 import { ThreatIntel } from './threat-intel.js';
 import { DownloadSafety, NEVER_LAUNCH, applyOriginMetadata, fileCategory, hashFile } from './download-safety.js';
@@ -50,6 +52,36 @@ export function safeUrl(value) {
   return url.href;
 }
 
+/** Isolated-world scan of resources the page references or loaded, plus cross-origin frame boxes. Page data only; nothing is changed. */
+const RESOURCE_SCAN_SCRIPT = `(() => {
+  const references = [];
+  const add = (value, kind) => { if (!value || references.length >= 5000) return; try { const url = new URL(value, document.baseURI); if (/^https?:$/.test(url.protocol)) references.push({ url: url.href.slice(0, 16384), kind }); } catch {} };
+  const srcset = value => String(value || '').split(',').map(part => part.trim().split(/\\s+/)[0]).filter(Boolean);
+  for (const el of document.querySelectorAll('img, source, video, audio, track, embed, object, input[type=image], link[href], script[src], iframe[src], frame[src]')) {
+    const tag = el.localName;
+    if (tag === 'link') {
+      const rel = String(el.rel || '').toLowerCase();
+      const kind = /stylesheet/.test(rel) ? 'stylesheet' : /icon/.test(rel) ? 'icon' : /modulepreload/.test(rel) || (/preload/.test(rel) && el.as === 'script') ? 'script' : /preload/.test(rel) ? 'preload' : null;
+      if (kind) add(el.getAttribute('href'), kind);
+      continue;
+    }
+    if (tag === 'script') { add(el.getAttribute('src'), 'script'); continue; }
+    if (tag === 'iframe' || tag === 'frame') { add(el.getAttribute('src'), 'frame'); continue; }
+    if (tag === 'object') { add(el.getAttribute('data'), 'object'); continue; }
+    if (el.getAttribute('src')) add(el.getAttribute('src'), tag === 'img' || tag === 'input' ? 'image' : 'media');
+    for (const item of srcset(el.getAttribute('srcset'))) add(item, 'image');
+    if (tag === 'video' && el.getAttribute('poster')) add(el.getAttribute('poster'), 'image');
+  }
+  for (const entry of performance.getEntriesByType('resource').slice(0, 3000)) add(entry.name, ['script', 'fetch', 'xmlhttprequest', 'beacon'].includes(entry.initiatorType) ? entry.initiatorType : entry.initiatorType === 'iframe' ? 'frame' : entry.initiatorType === 'img' ? 'image' : entry.initiatorType === 'link' || entry.initiatorType === 'css' ? 'stylesheet-resource' : 'resource');
+  const frames = [...document.querySelectorAll('iframe, frame')].slice(0, 200).map(frame => {
+    let accessible = false; try { accessible = Boolean(frame.contentDocument); } catch {}
+    let origin = null; try { origin = new URL(frame.src, location.href).origin; } catch {}
+    const r = frame.getBoundingClientRect();
+    return { accessible, origin, box: { x: r.x, y: r.y, width: r.width, height: r.height } };
+  });
+  return { references, frames, viewport: { width: innerWidth, height: innerHeight, devicePixelRatio: devicePixelRatio, scrollX: scrollX, scrollY: scrollY, documentWidth: document.documentElement.scrollWidth, documentHeight: document.documentElement.scrollHeight } };
+})()`;
+
 function bounded(promise, timeout = 8000) {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Page capture timed out; show the tab and try again')), timeout); })]).finally(() => clearTimeout(timer));
@@ -59,6 +91,7 @@ export class Browser {
   constructor({ window, session, workspaceService, admission = new AutomationAdmission(), electronApi = electron, siteStorage, threatIntel, downloadSafety, dataDirectory } = {}) {
     this.electron = electronApi;
     const directory = dataDirectory ?? workspaceService?.directory;
+    this.directory = directory ?? null;
     this.siteStorage = siteStorage ?? (workspaceService ? new SiteStoragePolicy({ workspaceService, journalPath: directory && join(directory, 'temporary-storage-journal.json'), sessionFor: id => this.partition(id) }) : null);
     this.threats = threatIntel ?? new ThreatIntel({ path: directory && join(directory, 'threat-intel.json') });
     this.downloadSafety = downloadSafety ?? new DownloadSafety({ path: directory && join(directory, 'download-safety.json') });
@@ -165,6 +198,16 @@ export class Browser {
     session.webRequest?.onHeadersReceived?.((details, callback) => {
       try { callback(this.siteStorage?.headersReceived(details, workspaceId) ?? {}); } catch { callback({ cancel: true }); }
     });
+    // Per-tab request outcomes for archive manifests: failed and error responses are reported as resource failures.
+    const logResource = (details, outcome) => {
+      const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents.id === details.webContentsId);
+      if (!tab || details.resourceType === 'mainFrame') return;
+      tab.resourceLog ??= new Map();
+      if (tab.resourceLog.size >= 3000) tab.resourceLog.delete(tab.resourceLog.keys().next().value);
+      tab.resourceLog.set(details.url, { url: details.url, resourceType: details.resourceType, ...outcome });
+    };
+    session.webRequest?.onCompleted?.(details => logResource(details, { statusCode: details.statusCode, fromCache: Boolean(details.fromCache) }));
+    session.webRequest?.onErrorOccurred?.(details => logResource(details, { error: details.error }));
     const detachStorage = this.siteStorage?.attach(session, workspaceId);
     this.sessions.set(workspaceId, { session, onDownload, detachStorage });
   }
@@ -270,8 +313,10 @@ export class Browser {
     const bounds = { x, y, width: Math.max(1, Math.min(requested.width, width - x)), height: Math.max(1, Math.min(requested.height, height - y)) };
     const active = this.tabs.get(this.activeId);
     const split = this.tabs.get(requested.splitTabId);
-    const visible = requested.visible && requested.width > 0 && requested.height > 0 && !active?.blocked && active?.workspaceId === this.workspaceId
-      ? [active, ...(split && !split.blocked && split.id !== active.id && split.workspaceId === this.workspaceId ? [split] : [])] : [];
+    // The offline archive preview replaces the live tabs while it is open.
+    const visible = this.preview && requested.visible && requested.width > 0 && requested.height > 0 ? [this.preview]
+      : requested.visible && requested.width > 0 && requested.height > 0 && !active?.blocked && active?.workspaceId === this.workspaceId
+        ? [active, ...(split && !split.blocked && split.id !== active.id && split.workspaceId === this.workspaceId ? [split] : [])] : [];
     for (const view of this.attachedViews) if (!visible.some(tab => tab.view === view)) {
       this.window.contentView.removeChildView(view);
       this.attachedViews.delete(view);
@@ -345,6 +390,7 @@ export class Browser {
   }
 
   async switchWorkspace(workspaceId) {
+    if (this.preview) this.closeArchivePreview();
     const selected = [...this.tabs.values()].find(tab => tab.workspaceId === workspaceId);
     this.session = this.sessionFor(workspaceId);
     return selected ? this.activate(selected.id) : this.newTab('about:blank', workspaceId);
@@ -416,6 +462,7 @@ export class Browser {
     contents.on('did-start-navigation', details => {
       if (!details?.isMainFrame || details.isSameDocument || (details.frame && details.frame !== contents.mainFrame)) return;
       tab.navigating = details.url;
+      tab.resourceLog = new Map();
       this.siteStorage?.resetActivity(contents.id);
     });
     contents.on('did-redirect-navigation', details => { if (details?.isMainFrame && (!details.frame || details.frame === contents.mainFrame)) tab.navigating = details.url; });
@@ -475,9 +522,10 @@ export class Browser {
     return { closed: tabId };
   }
 
-  async captureArtifact({ tabId, kind, workspaceId }, context = { actor: 'human' }) {
+  async captureArtifact({ tabId, kind, workspaceId, readyTimeoutMs, maxDurationMs, maxResourceBytes }, context = { actor: 'human' }) {
     const tab = this.tab(tabId);
     if (tab.workspaceId !== (workspaceId ?? context.workspaceId ?? this.workspaceId)) throw new Error('Capture tab belongs to a different workspace');
+    if (kind === 'archive') return this.captureArchive(tab, { readyTimeoutMs, maxDurationMs, maxResourceBytes }, context);
     const version = tab.version;
     const readable = await this.execute('page.readable', { tabId: tab.id }, context);
     let screenshot;
@@ -490,6 +538,195 @@ export class Browser {
       limitations: ['Reference capture is not an offline replay. Dynamic, authenticated, and cross-origin embedded content may be incomplete.',
         ...(captureError ? [`Screenshot unavailable: ${captureError}`] : []),
         ...(version !== tab.version ? ['The page changed during capture.'] : [])] };
+  }
+
+  /** Temporary folder for MHTML serialization; stale folders from interrupted captures are removed first. */
+  captureTempDirectory() {
+    const root = join(this.directory ?? tmpdir(), 'capture-temp');
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    for (const name of readdirSync(root)) {
+      try { if (Date.now() - statSync(join(root, name)).mtimeMs > 3600_000) rmSync(join(root, name), { recursive: true, force: true }); } catch { /* in use or gone */ }
+    }
+    return mkdtempSync(join(root, 'mhtml-'));
+  }
+
+  /**
+   * Resource archive capture with bounded readiness and duration. Records the original and final URL,
+   * timing, viewport, navigation during capture, request failures, virtualization hints and every reason
+   * the capture is incomplete. The serialized page comes from Chromium's MHTML generator, which reads
+   * the renderer's loaded resources instead of fetching them again.
+   */
+  async captureArchive(tab, options, context) {
+    const contents = tab.view.webContents;
+    const startedAt = new Date();
+    const maxDuration = options.maxDurationMs ?? 30000;
+    const deadline = startedAt.getTime() + maxDuration;
+    const remaining = () => Math.max(250, deadline - Date.now());
+    const originalUrl = sanitizeUrl(contents.getURL()) || null;
+    const startVersion = tab.version;
+    const stateChanges = [];
+    const incomplete = [];
+    const note = (kind, url) => { if (stateChanges.length < 100) stateChanges.push({ at: new Date().toISOString(), kind, url: sanitizeUrl(url || '') || null }); };
+    const listeners = {
+      'did-start-navigation': details => { if (details?.isMainFrame && !details.isSameDocument) note('navigation-started', details.url); },
+      'did-navigate': (_event, url) => note('navigated', url),
+      'did-navigate-in-page': (_event, url, isMainFrame) => { if (isMainFrame !== false) note('in-page-navigation', url); },
+    };
+    for (const [event, listener] of Object.entries(listeners)) contents.on(event, listener);
+    const limitations = ['The resource archive is Chromium’s serialization of the rendered page. Scripts are removed and never replayed; script-initiated data, closed shadow roots, canvas and media streams are not archived.',
+      'Values of password, payment-card, one-time-code, hidden and secret-named form fields are removed from archived HTML.',
+      'SHA-256 digests show the stored bytes are unchanged since capture; they do not prove what a website served or when.'];
+    let readable = null, screenshot = null, coverage = null, scan = null, archive = null;
+    const readyStart = Date.now();
+    let readiness;
+    try {
+      // Bounded readiness: wait for load completion, but never past readyTimeoutMs or the capture deadline.
+      const readyLimit = Math.min(options.readyTimeoutMs ?? 5000, Math.max(0, deadline - Date.now()));
+      for (;;) {
+        let complete = false;
+        try { complete = !contents.isLoading() && (await bounded(this.observe(contents, null, {}, 'document.readyState'), 1000)) === 'complete'; } catch { complete = false; }
+        if (complete) { readiness = { state: 'ready', waitedMs: Date.now() - readyStart, timeoutMs: readyLimit }; break; }
+        if (Date.now() - readyStart >= readyLimit) { readiness = { state: 'timeout', waitedMs: Date.now() - readyStart, timeoutMs: readyLimit }; incomplete.push('page-not-ready'); break; }
+        await delay(100);
+      }
+      readable = await bounded(this.execute('page.readable', { tabId: tab.id }, context), remaining());
+      try {
+        const raw = await bounded(this.observe(contents, 'snapshot', { maxNodes: 3000, includeBoxes: false }), remaining());
+        coverage = { virtualized: raw.virtualized ?? [], lazyImages: raw.counts?.lazyImages ?? 0, busyRegions: raw.counts?.busy ?? 0, inaccessibleFrames: raw.counts?.inaccessibleFrames ?? 0,
+          openShadowRoots: raw.counts?.openShadowRoots ?? 0, opaque: raw.counts?.opaque ?? 0, truncated: Boolean(raw.truncated) };
+      } catch (error) { incomplete.push('coverage-unavailable'); coverage = { error: String(error.message).slice(0, 200) }; }
+      scan = await bounded(this.observe(contents, null, {}, RESOURCE_SCAN_SCRIPT), remaining()).catch(() => null);
+      try { screenshot = await bounded(this.execute('page.screenshot', { tabId: tab.id }, context), remaining()); }
+      catch (error) { incomplete.push('screenshot-unavailable'); limitations.push(`Screenshot unavailable: ${String(error.message).slice(0, 200)}`); }
+      const temp = this.captureTempDirectory();
+      const file = join(temp, 'page.mhtml');
+      const maxResourceBytes = options.maxResourceBytes ?? ARCHIVE_LIMITS.maxResourceBytes;
+      try {
+        await bounded(contents.savePage(file, 'MHTML'), remaining());
+        const size = statSync(file).size;
+        // Base64 and quoted-printable inflate the file; refuse files far beyond what the archive could store.
+        if (size > ARCHIVE_LIMITS.maxArchiveBytes * 2) throw Object.assign(new Error(`Serialized page is ${size} bytes, beyond the archive limit`), { code: 'archive_too_large' });
+        const log = [...(tab.resourceLog?.values() ?? [])];
+        // Requests seen by the session are references too: script-initiated loads are reported as not archived.
+        const requestKinds = { xhr: 'fetch', webSocket: 'fetch', ping: 'beacon', cspReport: 'beacon', script: 'script', subFrame: 'frame', stylesheet: 'stylesheet', image: 'image', font: 'font', media: 'media', object: 'object' };
+        const references = [...(scan?.references ?? []), ...log.map(item => ({ url: item.url, kind: requestKinds[item.resourceType] ?? 'resource' }))];
+        archive = buildArchive({ mhtml: readFileSync(file), references, resourceLog: log, limits: { maxResourceBytes } });
+        if (!archive.complete) incomplete.push('resources-not-stored');
+      } catch (error) {
+        incomplete.push(/timed out/i.test(error.message) ? 'archive-timeout' : 'archive-failed');
+        archive = { format: ARCHIVE_FORMAT, formatVersion: ARCHIVE_FORMAT_VERSION, status: 'failed', reason: String(error.message).slice(0, 300), resources: [], counts: {}, complete: false };
+      } finally { rmSync(temp, { recursive: true, force: true }); }
+    } finally {
+      for (const [event, listener] of Object.entries(listeners)) contents.removeListener(event, listener);
+    }
+    const finishedAt = new Date();
+    if (finishedAt.getTime() > deadline) incomplete.push('capture-time-limit');
+    if (tab.version !== startVersion || stateChanges.some(item => item.kind !== 'in-page-navigation')) incomplete.push('page-changed-during-capture');
+    else if (stateChanges.length) incomplete.push('in-page-state-changed');
+    if (coverage?.virtualized?.length) incomplete.push('virtualized-content');
+    if (coverage?.lazyImages) incomplete.push('lazy-content-pending');
+    if (coverage?.busyRegions) incomplete.push('busy-regions');
+    if (coverage?.inaccessibleFrames) incomplete.push('inaccessible-frames');
+    const failures = [...(tab.resourceLog?.values() ?? [])].filter(item => item.error || item.statusCode >= 400).slice(0, 200)
+      .map(item => ({ url: sanitizeUrl(item.url) || null, resourceType: item.resourceType, ...(item.statusCode ? { httpStatus: item.statusCode } : {}), ...(item.error ? { error: String(item.error).slice(0, 200) } : {}) }));
+    const viewport = screenshot?.capture ? { width: screenshot.capture.viewport.width, height: screenshot.capture.viewport.height, devicePixelRatio: screenshot.capture.devicePixelRatio,
+      scrollX: screenshot.capture.scroll.x, scrollY: screenshot.capture.scroll.y, documentWidth: screenshot.capture.document.width, documentHeight: screenshot.capture.document.height } : scan?.viewport ?? null;
+    const ratio = viewport?.devicePixelRatio || 1;
+    // Cross-origin frames whose pixels may appear in the screenshot but whose content is not in the archive.
+    const inaccessibleRegions = (scan?.frames ?? []).filter(frame => !frame.accessible).slice(0, 50).map(frame => ({ x: Math.max(0, Math.round(frame.box.x * ratio)), y: Math.max(0, Math.round(frame.box.y * ratio)),
+      width: Math.round(frame.box.width * ratio), height: Math.round(frame.box.height * ratio), units: 'image-pixels', reason: 'cross-origin frame (content not archived)', origin: frame.origin ?? null })).filter(item => item.width > 0 && item.height > 0);
+    const unique = [...new Set(incomplete)];
+    const capture = { startedAt: startedAt.toISOString(), finishedAt: finishedAt.toISOString(), durationMs: finishedAt - startedAt, maxDurationMs: maxDuration, readiness,
+      originalUrl, finalUrl: sanitizeUrl(contents.getURL()) || null, navigationVersion: { start: startVersion, end: tab.version }, viewport, stateChanges, resourceFailures: failures,
+      coverage, complete: unique.length === 0, incomplete: unique };
+    if (unique.length) limitations.push(`Incomplete capture: ${unique.join(', ')}.`);
+    return { ...readable, pngBase64: screenshot?.data, navigationVersion: startVersion, archive, capture, inaccessibleRegions, limitations };
+  }
+
+  previewSession() {
+    if (this.previewSessionInstance) return this.previewSessionInstance;
+    // In-memory partition with no network: every http(s) request is answered from the open archive or refused.
+    const session = this.electron.session.fromPartition('weft-archive-preview');
+    session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+    session.setPermissionCheckHandler(() => false);
+    session.on('will-download', (event, item) => { event.preventDefault?.(); item.cancel?.(); if (this.preview) this.preview.stats.downloadsBlocked++; });
+    const handler = request => this.servePreview(request);
+    session.protocol.handle('https', handler);
+    session.protocol.handle('http', handler);
+    session.webRequest?.onBeforeRequest((details, callback) => {
+      const allowed = /^(?:https?:|data:)/i.test(details.url);
+      if (!allowed) this.previewRefused(details.url);
+      callback({ cancel: !allowed });
+    });
+    this.previewSessionInstance = session;
+    return session;
+  }
+  previewRefused(url) {
+    if (!this.preview) return;
+    this.preview.stats.refused++;
+    if (this.preview.stats.refusedUrls.length < 50) this.preview.stats.refusedUrls.push(sanitizeUrl(url) || String(url).split(/[?#]/)[0].slice(0, 200));
+  }
+  /** Archive-only responses. Nothing in the preview session reaches the network. */
+  servePreview(request) {
+    const state = this.preview;
+    if (!state) return new Response('', { status: 404 });
+    if (!['GET', 'HEAD'].includes(request.method)) { this.previewRefused(request.url); return new Response('', { status: 405 }); }
+    let entry = null;
+    try {
+      const url = new URL(request.url);
+      entry = url.hostname === CID_HOST ? state.byCid.get(decodeURIComponent(url.pathname.slice(1))) : state.byUrl.get(archiveKey(request.url));
+    } catch { entry = null; }
+    if (!entry) { this.previewRefused(request.url); return new Response('', { status: 404, headers: { 'content-type': 'text/plain' } }); }
+    state.stats.served++;
+    const headers = { 'content-type': entry.mimeType || 'application/octet-stream', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
+      'content-security-policy': ARCHIVE_CSP };
+    return new Response(request.method === 'HEAD' ? null : entry.bytes, { status: 200, headers });
+  }
+  /** Open an archived version with JavaScript disabled, all network refused and navigation, popups, downloads and form submission blocked. */
+  async openArchivePreview({ artifactId, versionId, title, documentUrl, resources }) {
+    if (!this.electron.WebContentsView) throw failure('unsupported', 'The offline preview needs the Weft browser window');
+    if (this.preview) this.closeArchivePreview();
+    const session = this.previewSession();
+    const byUrl = new Map(), byCid = new Map();
+    for (const resource of resources) { if (resource.contentId) byCid.set(resource.contentId, resource); if (!byUrl.has(resource.url)) byUrl.set(resource.url, resource); }
+    const document = resources.find(item => item.role === 'document');
+    if (!document) throw failure('invalid_arguments', 'The archive has no stored document');
+    const view = new this.electron.WebContentsView({ webPreferences: { session, javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
+      webgl: false, plugins: false, spellcheck: false, navigateOnDragDrop: false, disableDialogs: true, autoplayPolicy: 'document-user-activation-required', images: true } });
+    const contents = view.webContents;
+    const stats = { served: 0, refused: 0, refusedUrls: [], navigationsBlocked: 0, popupsBlocked: 0, downloadsBlocked: 0 };
+    this.preview = { id: `preview_${randomUUID().slice(0, 12)}`, artifactId, versionId, title: String(title || '').slice(0, 240), view, byUrl, byCid, stats, openedAt: new Date().toISOString() };
+    contents.on('will-navigate', event => { event.preventDefault(); stats.navigationsBlocked++; });
+    contents.on('will-redirect', event => { event.preventDefault(); stats.navigationsBlocked++; });
+    contents.on('will-attach-webview', event => event.preventDefault());
+    contents.setWindowOpenHandler(() => { stats.popupsBlocked++; return { action: 'deny' }; });
+    let url = document.url;
+    try { if (!/^https?:$/.test(new URL(url).protocol)) url = FALLBACK_DOCUMENT_URL; } catch { url = FALLBACK_DOCUMENT_URL; }
+    if (url === FALLBACK_DOCUMENT_URL) byUrl.set(archiveKey(url), document);
+    this.layout();
+    try { await bounded(contents.loadURL(url), 15000); }
+    catch (error) { if (!/ERR_ABORTED/.test(error.message)) { this.closeArchivePreview(); throw error; } }
+    return this.describePreview();
+  }
+  describePreview() {
+    const state = this.preview;
+    if (!state) return { open: false };
+    return { open: true, previewId: state.id, artifactId: state.artifactId, versionId: state.versionId, title: state.title, url: state.view.webContents.getURL(), openedAt: state.openedAt,
+      resources: state.byUrl.size, javascript: 'disabled', network: 'refused (archive-only responses)', navigation: 'blocked', forms: 'blocked', popups: 'blocked', downloads: 'blocked', stats: structuredClone(state.stats) };
+  }
+  closeArchivePreview() {
+    const state = this.preview;
+    if (!state) return { open: false, closed: false };
+    const summary = this.describePreview();
+    this.preview = null;
+    if (this.attachedViews.has(state.view)) {
+      if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(state.view);
+      this.attachedViews.delete(state.view);
+    }
+    const contents = state.view.webContents;
+    if (contents && !contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
+    this.layout();
+    return { ...summary, open: false, closed: true };
   }
 
   trackDownload(item, workspaceId = this.workspaceId, contents) {
@@ -1216,6 +1453,7 @@ export class Browser {
     if (this.closing) return null;
     this.persist();
     this.closing = true;
+    try { this.closeArchivePreview(); } catch { /* window already gone */ }
     this.window?.removeListener('resize', this.onResize);
     for (const id of [...this.tabs.keys()]) this.closeTab(id);
     for (const { item } of this.downloads.values()) item?.cancel();
@@ -1224,6 +1462,8 @@ export class Browser {
       session.webRequest?.onBeforeRequest(null);
       session.webRequest?.onBeforeSendHeaders?.(null);
       session.webRequest?.onHeadersReceived?.(null);
+      session.webRequest?.onCompleted?.(null);
+      session.webRequest?.onErrorOccurred?.(null);
       detachStorage?.();
     }
     // Clean exit erases temporary site data; if the process dies first, the

@@ -3,7 +3,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { AUTONOMY_LEVELS, DATA_CLASSES, GRANTABLE_CLASSES, actionClassForCommand, dataClassesForCommand, matchDestination, resourceForCommand, validDestinationPattern } from './autonomy.js';
+import { AUTONOMY_LEVELS, DATA_CLASSES, DEFAULT_DATA_ACCESS, GRANTABLE_CLASSES, actionClassForCommand, dataClassesForCommand, matchDestination, resourceForCommand, validDestinationPattern } from './autonomy.js';
 
 const scopes = ['read', 'records.write', 'tabs.control'];
 const id = z.string().uuid();
@@ -15,7 +15,7 @@ const grantFields = {
   workspaceIds: z.array(z.string().min(1).max(128)).min(1).max(100),
   crossWorkspace: z.boolean().default(false),
   actionClasses: z.array(z.enum(GRANTABLE_CLASSES)).max(GRANTABLE_CLASSES.length).default([]),
-  dataAccess: z.array(z.enum(DATA_CLASSES)).max(DATA_CLASSES.length).default([...DATA_CLASSES]),
+  dataAccess: z.array(z.enum(DATA_CLASSES)).max(DATA_CLASSES.length).default([...DEFAULT_DATA_ACCESS]),
   destinations: z.array(destination).min(1).max(100).default(['*']),
   autonomy: z.enum(AUTONOMY_LEVELS).default('scoped'),
   maxCommands: z.number().int().min(1).max(1000000).nullable().default(null),
@@ -41,7 +41,7 @@ const equal = (a, b) => {
 };
 /** Version 1 grants predate purpose/class/data/destination fields; migrate them without widening access. */
 function migrateGrant(grant) {
-  return { purpose: '', crossWorkspace: grant.workspaceIds?.length > 1, actionClasses: [], dataAccess: [...DATA_CLASSES], destinations: ['*'], autonomy: 'scoped',
+  return { purpose: '', crossWorkspace: grant.workspaceIds?.length > 1, actionClasses: [], dataAccess: [...DEFAULT_DATA_ACCESS], destinations: ['*'], autonomy: 'scoped',
     maxCommands: null, maxPerMinute: null, taskId: null, usage: { count: 0, lastUsedAt: null }, ...grant };
 }
 

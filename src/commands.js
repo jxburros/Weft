@@ -133,10 +133,11 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   'plugins.enable', 'plugins.disable', 'workspaces.exportAs', 'tabs.setControlMode', ...Object.keys(extensionCommandDefinitions),
   'siteRules.review', 'storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update',
   'downloads.configureScanner', 'launches.approve', 'launches.deny', 'update.check', 'update.install', 'update.rollback', 'update.configure',
-  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+  'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+  'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview']);
 const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
-  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
+  'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'artifacts.compare', 'artifacts.verify', 'artifacts.review', 'artifacts.readOriginal', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
@@ -171,7 +172,7 @@ export const commands = Object.freeze(Object.fromEntries(
     return [name, { description, inputSchema: describeNested(z.toJSONSchema(schemas[name])),
       humanOnly: humanOnly.has(name), actionClass: actionClassForCommand(name), resource: resourceForCommand(name),
       dataClasses: dataClassesForCommand(name), effect: effectForCommand(name), sensitiveCategories: sensitiveCategoriesForCommand(name),
-      readOnly: read, destructive: /\.(delete|clear|close|remove)$/.test(name) || name === 'backups.restore' }];
+      readOnly: read, destructive: /\.(delete|clear|close|remove)$/.test(name) || ['backups.restore', 'artifacts.purgeContent'].includes(name) }];
   }),
 ));
 

@@ -173,12 +173,18 @@ export class MetadataStore {
   }
   ensureSearchIndex() {
     const exists = this.db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('search_docs', 'search_fts')").get().count === 2;
-    if (exists && this.info('searchIndexVersion') === String(SEARCH_INDEX_VERSION)) return;
+    // FTS5 secure-delete removes deleted tokens from the index immediately instead of leaving tombstoned segments (redaction, restriction, purge).
+    if (exists && this.info('searchIndexVersion') === String(SEARCH_INDEX_VERSION)) {
+      // Enabled once for indexes created before this option; opening never writes otherwise (other readers would see a change).
+      if (this.db.prepare("SELECT v FROM search_fts_config WHERE k = 'secure-delete'").get()?.v !== 1) this.db.exec("INSERT INTO search_fts(search_fts, rank) VALUES('secure-delete', 1)");
+      return;
+    }
     this.transaction(() => {
       this.db.exec(`DROP TABLE IF EXISTS search_fts; DROP TABLE IF EXISTS search_docs;
         CREATE TABLE search_docs(rowid INTEGER PRIMARY KEY, collection TEXT NOT NULL, record_id TEXT NOT NULL, version_id TEXT NOT NULL DEFAULT '', workspace_id TEXT, revision INTEGER, version_number INTEGER, local_only INTEGER NOT NULL DEFAULT 0, updated_at TEXT, UNIQUE(collection, record_id, version_id));
         CREATE INDEX search_docs_workspace ON search_docs(workspace_id);
-        CREATE VIRTUAL TABLE search_fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');`);
+        CREATE VIRTUAL TABLE search_fts USING fts5(title, body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3');
+        INSERT INTO search_fts(search_fts, rank) VALUES('secure-delete', 1);`);
       for (const row of this.db.prepare('SELECT collection, doc FROM records').iterate()) {
         const record = JSON.parse(row.doc);
         if (row.doc.includes('"$component"')) this.hydrate(row.collection, record, false);
@@ -465,6 +471,15 @@ export class MetadataStore {
     }
     return problems;
   }
+  /**
+   * After content is restricted or purged: merge the full-text index and truncate the write-ahead log so
+   * removed rows and tokens do not linger in WAL frames. secure_delete already zeroes freed database content.
+   */
+  secureCompact() {
+    this.assertOpen();
+    this.db.exec("INSERT INTO search_fts(search_fts) VALUES('optimize')");
+    this.db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  }
   checkpoint() { return { meta: new Map(this.meta), docs: new Map([...this.docs].map(([name, docs]) => [name, new Map(docs)])), layout: [...this.layout] }; }
   stateFrom(checkpoint) {
     const state = {};
@@ -503,6 +518,8 @@ export class MetadataStore {
       const indexed = new Set(existing.filter(row => row.version_id).map(row => row.version_id));
       for (const version of record.versions) {
         if (!version || typeof version.id !== 'string') continue;
+        // Restricted originals and purged versions are never searchable; an existing row is removed.
+        if (version.access === 'restricted' || version.purged) continue;
         keep.add(version.id);
         if (indexed.has(version.id)) continue;
         let text = '';

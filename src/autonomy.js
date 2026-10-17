@@ -12,7 +12,11 @@ export const EXTERNAL_CLASSES = Object.freeze(['external_write', 'code_exec', 'c
 /** Classes a human may add to a client grant beyond its read/write scopes. */
 export const GRANTABLE_CLASSES = Object.freeze(['code_exec', 'cloud_spend', 'bulk_export', 'credential_use', 'payment']);
 export const AUTONOMY_LEVELS = Object.freeze(['observe', 'assist', 'scoped', 'autonomous']);
-export const DATA_CLASSES = Object.freeze(['workspace_records', 'conversations', 'page_content', 'page_capture', 'browsing_history', 'activity']);
+export const DATA_CLASSES = Object.freeze(['workspace_records', 'conversations', 'page_content', 'page_capture', 'browsing_history', 'activity', 'restricted_original']);
+/** Data classes a new client grant receives unless a human selects otherwise. Restricted originals are never granted by default. */
+export const DEFAULT_DATA_ACCESS = Object.freeze(DATA_CLASSES.filter(item => item !== 'restricted_original'));
+/** Data classes whose every non-human read needs an exact one-time human approval (never standing approvals or autonomy). */
+export const APPROVAL_DATA_CLASSES = Object.freeze(['restricted_original']);
 /** Sensitive outbound categories (spec 14.2) and the approval class each maps to. */
 export const SENSITIVE_CATEGORIES = Object.freeze({
   form_submission: 'external_write', message: 'external_write', account_change: 'external_write',
@@ -51,6 +55,10 @@ add('administration', 'update.check update.install update.rollback update.config
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Resource archives, comparison and redaction derivatives (#16, #17). Access, retention and the offline preview are human decisions.
+add('local_read', 'artifacts.compare artifacts.verify artifacts.review artifacts.readOriginal');
+add('local_write', 'artifacts.redact');
+add('administration', 'artifacts.setAccess artifacts.purgeContent artifacts.preview artifacts.closePreview');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -116,6 +124,7 @@ const dataOverrides = {
   'chat.send': ['conversations', 'workspace_records'], 'conversations.message': ['conversations'],
   'workspace.snapshot': ['workspace_records', 'conversations', 'browsing_history', 'activity'],
   'search.query': ['workspace_records', 'conversations'],
+  'artifacts.readOriginal': ['workspace_records', 'restricted_original'],
 };
 export function dataClassesForCommand(name) {
   if (dataOverrides[name]) return [...dataOverrides[name]];
@@ -130,7 +139,7 @@ export function effectForCommand(name) {
   const actionClass = actionClassForCommand(name);
   if (['local_read', 'external_read'].includes(actionClass)) return 'none';
   if (EXTERNAL_CLASSES.includes(actionClass) || actionClass === 'unclassified') return 'external';
-  if (/\.(delete|clear|close|revoke|remove)$/.test(name) || ['workspaces.import', 'workspaces.importPackage'].includes(name)) return 'irreversible';
+  if (/\.(delete|clear|close|revoke|remove)$/.test(name) || ['workspaces.import', 'workspaces.importPackage', 'artifacts.purgeContent'].includes(name)) return 'irreversible';
   return 'local';
 }
 
@@ -148,12 +157,17 @@ export function effectiveLevel(...levels) {
  * once-only classes require an exact one-time approval and ignore standing approvals and autonomy.
  * `approvedOnce`/`standing` are evidence from the trusted approval queue, never command arguments.
  */
-export function evaluateAutonomy({ actor, actionClass, level = 'scoped', humanOnly = false, approvedOnce = false, standing = false } = {}) {
+export function evaluateAutonomy({ actor, actionClass, level = 'scoped', humanOnly = false, approvedOnce = false, standing = false, restrictedData = false } = {}) {
   if (['human', 'admin'].includes(actor)) return { decision: 'auto', reason: 'trusted_human' };
   if (humanOnly) return { decision: 'deny', reason: 'human_only' };
   const effective = ACTION_CLASSES.includes(actionClass) ? actionClass : 'unclassified';
   if (effective === 'administration') return { decision: 'deny', reason: 'human_only' };
   if (levelRank(level) < 0) return { decision: 'deny', reason: 'unknown_autonomy_level' };
+  // Restricted originals: observe-level identities (including model readers) never read them; everyone else needs an exact one-time approval per read.
+  if (restrictedData) {
+    if (level === 'observe') return { decision: 'deny', reason: 'observe_only' };
+    return approvedOnce ? { decision: 'auto_preapproved', reason: 'approved_once' } : { decision: 'approval', reason: 'restricted_original_access' };
+  }
   if (['local_read', 'external_read'].includes(effective)) return { decision: 'auto', reason: 'read' };
   if (level === 'observe') return { decision: 'deny', reason: 'observe_only' };
   if (ONCE_ONLY_CLASSES.includes(effective)) return approvedOnce ? { decision: 'auto_preapproved', reason: 'approved_once' } : { decision: 'approval', reason: 'exact_approval_required' };

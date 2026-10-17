@@ -12,6 +12,9 @@ import { componentPath, sha256 } from './components.js';
 import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 import { executeHandoffCommand, importHandoffs, recordTakeover } from './handoffs.js';
 import { effectiveRule, explainRules } from './site-rules.js';
+import { archiveManifest, diffResources, diffText } from './archive.js';
+import { clipRects, decodePng, diffImages, encodePng, fillRects } from './png.js';
+import { DETECTION_SCOPE, redactText, reduceUrl, resolveSpans, reviewText, reviewUrl } from './redaction.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -26,9 +29,12 @@ const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const REPLAYED = Symbol.for('weft.replayed');
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
-const HUMAN_ADMIN = new Set(['siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete']);
+const HUMAN_ADMIN = new Set(['siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+  'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview']);
 // activity.list is served by the durable activity log (src/activity-log.js) through the dispatcher.
-const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'search.query', 'workspaces.list', 'workspaces.get', 'workspaces.export', ...collections.flatMap(name => [`${name}.list`, `${name}.get`])]);
+const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'search.query', 'workspaces.list', 'workspaces.get', 'workspaces.export', 'artifacts.compare', 'artifacts.verify', 'artifacts.review', 'artifacts.readOriginal', ...collections.flatMap(name => [`${name}.list`, `${name}.get`])]);
+const isAgent = context => !['human', 'admin'].includes(context?.actor || 'human');
+const RESTRICTED_NOTICE = 'Restricted original: its content, URL and title are withheld from agents. Use a sanitized derivative version, or ask a person to approve artifacts.readOriginal for this exact version.';
 // Batches contain record writes only: these can be rolled back exactly.
 export const BATCHABLE = Object.freeze(new Set([...Object.keys(recordShapes).flatMap(name => [`${name}.create`, `${name}.update`, `${name}.delete`]),
   'tasks.transition', 'conversations.message', 'artifacts.create', 'artifacts.annotate', 'artifacts.delete', 'bookmarks.create', 'bookmarks.delete', 'workspaces.update', 'settings.update']));
@@ -91,10 +97,22 @@ function initialState() {
   const initial = createWorkspace();
   return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [] };
 }
-function artifactSummary(record) {
-  const copy = clone(record);
-  copy.versions = copy.versions.map(({ text, pngBase64, ...metadata }) => metadata);
+/** Version metadata without content. Agents see restricted originals as withheld stubs that name their sanitized derivatives. */
+function versionMetadata(record, version, agent = false) {
+  const derivatives = record.versions.filter(item => item.derivedFrom === version.id).map(item => item.id);
+  if (agent && version.access === 'restricted') {
+    return { id: version.id, number: version.number, createdAt: version.createdAt, method: version.method, access: 'restricted', withheld: 'restricted_original',
+      components: (version.components || []).map(({ type }) => ({ type })), ...(version.purged ? { purged: clone(version.purged) } : {}), derivatives, notice: RESTRICTED_NOTICE };
+  }
+  const copy = clone(version);
+  delete copy.text; delete copy.pngBase64;
+  if (copy.archive) copy.archive = archiveManifest(copy.archive);
+  if (derivatives.length) copy.derivatives = derivatives;
   return copy;
+}
+function artifactSummary(record, { agent = false } = {}) {
+  const { versions, ...rest } = record;
+  return { ...clone(rest), versions: versions.map(version => versionMetadata(record, version, agent)) };
 }
 const withoutFile = record => clone(Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'fileBase64')));
 function fsyncFile(path) { const fd = openSync(path, 'r+'); try { fsyncSync(fd); } finally { closeSync(fd); } }
@@ -123,7 +141,17 @@ const annotationSchema = z.object({ note: z.string().max(500000).default(''), ta
 const versionSchema = z.object({ id: z.string().max(128).optional(), number: z.number().int().min(1).optional(), createdAt: timestamp.optional(), actor: z.string().max(200).optional(), method: z.string().max(50).optional(),
   url: z.string().max(16384).nullable().optional(), title: z.string().max(240).optional(), text: z.union([z.string().max(2000000), componentRef]).optional(), pngBase64: z.union([z.string().max(28000000), componentRef]).optional(),
   components: z.array(z.object({ type: z.string().max(100), size: z.number().int().min(0), sha256: z.string().regex(/^[0-9a-f]{64}$/) })).max(10).optional(),
-  navigationVersion: z.number().int().nullable().optional(), limitations: z.array(z.string().max(2000)).max(50).optional(), redactionStatus: z.string().max(50).optional(), previousVersionId: z.string().max(128).nullable().optional() });
+  navigationVersion: z.number().int().nullable().optional(), limitations: z.array(z.string().max(2000)).max(50).optional(), redactionStatus: z.string().max(50).optional(), previousVersionId: z.string().max(128).nullable().optional(),
+  archive: z.lazy(() => archiveSchema).optional(), capture: z.record(z.string().max(100), z.unknown()).optional(), derivedFrom: z.string().max(128).nullable().optional(), derivedFromNumber: z.number().int().min(1).optional(),
+  redactions: z.array(z.record(z.string().max(100), z.unknown())).max(100000).optional(), inaccessibleRegions: z.array(z.record(z.string().max(100), z.unknown())).max(1000).optional(),
+  access: z.enum(['restricted']).optional(), accessChangedAt: timestamp.optional(), accessChangedBy: z.string().max(200).optional(), purged: z.object({ at: timestamp, by: z.string().max(200) }).optional(),
+  review: z.record(z.string().max(100), z.unknown()).optional() });
+const archiveResourceSchema = z.object({ url: z.string().max(16384), role: z.enum(['document', 'frame', 'subresource']), mimeType: z.string().max(128).optional(), size: z.number().int().min(0).optional(), sha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  status: z.enum(['stored', 'omitted-size', 'omitted-budget', 'missing', 'failed', 'not-archived-script', 'purged']), contentId: z.string().max(512).optional(), transformed: z.array(z.string().max(100)).max(10).optional(),
+  referencedAs: z.string().max(30).optional(), httpStatus: z.number().int().optional(), error: z.string().max(200).optional(), reason: z.string().max(300).optional(), bodyBase64: z.union([z.string().max(48 * 1024 * 1024), componentRef]).optional() });
+const archiveSchema = z.object({ format: z.literal('weft-archive'), formatVersion: z.literal(1), generator: z.string().max(50).optional(), documentUrl: z.string().max(16384).optional(), snapshotUrl: z.string().max(16384).optional(),
+  status: z.string().max(30).optional(), reason: z.string().max(500).optional(), resources: z.array(archiveResourceSchema).max(10000).default([]), counts: z.record(z.string().max(40), z.number().int().min(0)).default({}), storedBytes: z.number().int().min(0).optional(),
+  limits: z.record(z.string().max(40), z.number()).optional(), transformations: z.record(z.string().max(60), z.number().int().min(0)).optional(), complete: z.boolean().optional(), stored: z.number().int().min(0).optional() });
 const artifactSchema = z.object({ title: z.string().min(1).max(240), note: z.string().max(500000).default(''), tags: z.array(z.string().max(100)).max(100).default([]), versions: z.array(versionSchema).max(1000), annotations: z.array(annotationSchema).max(10000).default([]) });
 const SYSTEM_FIELDS = { common: ['id', 'workspaceId', 'createdAt', 'updatedAt', 'revision'], materials: ['history', 'size', 'sha256'], context: ['history'], conversations: ['messages', 'turnManifests'], artifacts: ['versions', 'annotations'],
   siteRules: ['createdBy', 'revisions', 'lastReviewedAt', 'lastReviewedBy'] };
@@ -294,8 +322,8 @@ export class WorkspaceService {
     };
     try { this.save(); } catch (error) { this.data.browserSession = before; throw error; }
   }
-  snapshot() {
-    return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(artifactSummary), materials: this.data.materials.map(withoutFile) };
+  snapshot({ agent = false } = {}) {
+    return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(item => artifactSummary(item, { agent })), materials: this.data.materials.map(withoutFile) };
   }
   workspace(id = this.activeWorkspaceId) {
     const record = this.data.workspaces.find(item => item.id === id);
@@ -375,13 +403,28 @@ export class WorkspaceService {
     rejectSecretKeys(input);
     const { requestId, dryRun, ...args } = schema.parse(input);
     const scope = this.authorize(name, args, context);
-    if (READS.has(name)) return this.read(name, args, context, scope);
-    if (name === 'workspaces.exportPackage') return this.exportPackage(args.id, args.name, args.sensitiveTerms);
+    if (READS.has(name) || (name === 'artifacts.redact' && args.preview)) return this.read(name, args, context, scope);
+    if (name === 'artifacts.preview' || name === 'artifacts.closePreview') return this.previewCommand(name, args, context);
+    if (name === 'workspaces.exportPackage') return this.exportPackage(args.id, args.name, args.sensitiveTerms, { captures: args.captures });
     if (name.startsWith('backups.')) return this.backupCommand(name, args, dryRun);
     const request = requestId && !dryRun ? this.requestIdentity(name, args, context, requestId) : null;
     if (request?.replay) return request.replay;
     const effects = [];
-    return this.transact(() => this.apply(name, args, context, effects), { context, dryRun, request, effects, checkpoint: WITH_EFFECTS.has(name) ? this.storage.checkpoint() : null });
+    const result = await this.transact(() => this.apply(name, args, context, effects), { context, dryRun, request, effects, checkpoint: WITH_EFFECTS.has(name) ? this.storage.checkpoint() : null });
+    if (!dryRun && ['artifacts.setAccess', 'artifacts.purgeContent'].includes(name)) {
+      // Removed index rows and documents must not linger in write-ahead-log frames.
+      try { this.storage.secureCompact(); } catch (error) { this.onWarning({ code: 'COMPACT_FAILED', message: `Search index compaction failed: ${error.message}` }); }
+      if (name === 'artifacts.purgeContent') {
+        const hashes = result.componentHashes || [];
+        delete result.componentHashes;
+        const kept = hashes.filter(hash => this.storage.components.has(hash)).length;
+        Object.assign(result, { componentsDeleted: hashes.length - kept, componentsKept: kept, backups: listBackups(this.directory).length,
+          limitations: ['Component files are deleted from the profile; Weft cannot guarantee physical erasure from the storage device, filesystem snapshots or sync copies.',
+            ...(kept ? [`${kept} component(s) are still used by another version or record (for example an unchanged screenshot in a derivative) and were kept.`] : []),
+            'Existing backups and exports made before this purge still contain the content; delete them separately if required.'] });
+      }
+    }
+    return result;
   }
   authorize(name, args, context) {
     const actor = context.actor || 'human';
@@ -469,7 +512,7 @@ export class WorkspaceService {
     if (name === 'history.list') return clone((this.data.history || []).filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
     if (name === 'bookmarks.list') return this.data.materials.filter(item => item.workspaceId === workspaceId && item.kind === 'website' && item.pinned).map(withoutFile);
     if (name === 'workspace.snapshot') {
-      const snapshot = this.snapshot();
+      const snapshot = this.snapshot({ agent: isAgent(context) });
       if (!context.workspaceId && !args.workspaceId) return snapshot;
       delete snapshot.storageWarnings;
       if (snapshot.siteLists) snapshot.siteLists = snapshot.siteLists.filter(item => item.workspaceId === workspaceId);
@@ -485,14 +528,10 @@ export class WorkspaceService {
     if (name === 'search.query') return this.search(args.query, workspaceId, args.limit || 50);
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
-    if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms);
-    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? withoutFile(item) : clone(item));
+    if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms, { captures: args.captures, reviewMetadata: args.reviewMetadata });
+    if (action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item, { agent: isAgent(context) }) : collection === 'materials' ? withoutFile(item) : clone(item));
     const record = this.record(collection, args.id, context);
-    if (collection === 'artifacts' && args.versionId) {
-      const version = record.versions.find(item => item.id === args.versionId);
-      if (!version) throw new Error('Artifact version not found');
-      return { artifactId: record.id, workspaceId: record.workspaceId, ...this.output(version) };
-    }
+    if (collection === 'artifacts') return this.readArtifact(name, record, args, context);
     return this.output(record);
   }
   /** Ranked local full-text search. Results cite the record revision or exact capture version. */
@@ -590,7 +629,7 @@ export class WorkspaceService {
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
       effects.push(() => this.browser?.closeWorkspace?.(record.id), switchBrowser);
     } else if (action === 'duplicate') {
-      const exported = this.exportWorkspace(record.id, undefined, { mode: 'package' });
+      const exported = this.exportWorkspace(record.id, undefined, { mode: 'package', captures: 'all' });
       exported.workspace.name = args.name || `${record.name} copy`;
       const { workspace: copy } = this.importWorkspace(exported, actor, false, { resolver: { read: marker => this.storage.components.read(marker.sha256, marker.size) } });
       this.log('workspaces.duplicate', copy.id, record.id, actor, 'Records, revisions and stored components copied. Browser sessions and credentials excluded.');
@@ -654,6 +693,45 @@ export class WorkspaceService {
     }
   }
   async mutateArtifact(action, args, workspaceId, actor, context) {
+    if (action === 'redact') {
+      const record = this.record('artifacts', args.id, context);
+      const source = this.artifactVersion(record, args.versionId);
+      const derived = this.buildDerivative(record, source, args, actor, context);
+      const version = { id: uuid('version'), number: record.versions.length + 1, createdAt: now(), actor, ...derived.version, previousVersionId: record.versions.at(-1)?.id || null };
+      const titleRedacted = derived.recordTitle !== record.title;
+      if (titleRedacted) record.title = derived.recordTitle;
+      record.versions.push(version); this.touch(record);
+      this.log('artifacts.redact', record.workspaceId, record.id, actor, `Version ${version.number} derived from version ${source.number}: ${derived.version.redactions.length} redactions`);
+      return { ...artifactSummary(record, { agent: isAgent(context) }), derivative: { versionId: version.id, number: version.number, derivedFrom: source.id, redactions: derived.version.redactions.length, unmatchedSelectors: derived.unmatched,
+        artifactTitleRedacted: titleRedacted, remainingMatches: derived.remainingMatches, originalAccess: source.access === 'restricted' ? 'restricted' : 'standard',
+        next: source.access === 'restricted' ? null : 'The original remains readable by agents until a person restricts it (artifacts.setAccess).' } };
+    }
+    if (action === 'setAccess') {
+      const record = this.record('artifacts', args.id, context);
+      const version = this.artifactVersion(record, args.versionId);
+      const previous = version.access === 'restricted' ? 'restricted' : 'standard';
+      if (args.access === 'restricted') version.access = 'restricted'; else delete version.access;
+      version.accessChangedAt = now(); version.accessChangedBy = actor;
+      this.touch(record);
+      this.log('artifacts.setAccess', record.workspaceId, record.id, actor, `Version ${version.number}: ${previous} → ${args.access}`);
+      return { id: record.id, versionId: version.id, access: args.access, previous, derivatives: record.versions.filter(item => item.derivedFrom === version.id).map(item => item.id),
+        effects: args.access === 'restricted' ? ['Agents and model readers receive a withheld stub instead of this version.', 'The version is removed from the local search index.', 'Exports leave it out unless a person chooses to include restricted originals.']
+          : ['Agents can read this version again and it is searchable.'] };
+    }
+    if (action === 'purgeContent') {
+      const record = this.record('artifacts', args.id, context);
+      const version = this.artifactVersion(record, args.versionId);
+      if (version.purged) throw fail('invalid_arguments', 'This version\u2019s content was already purged');
+      const hashes = new Set((version.components || []).map(item => item.sha256));
+      for (const resource of version.archive?.resources || []) if (resource.sha256 && resource.status === 'stored') hashes.add(resource.sha256);
+      // Assigning undefined (not delete) detaches component-backed fields; a deleted lazy field would be re-attached on commit.
+      for (const key of ['text', 'pngBase64']) if (Object.hasOwn(version, key)) version[key] = undefined;
+      for (const resource of version.archive?.resources || []) if (resource.status === 'stored') { resource.bodyBase64 = undefined; resource.status = 'purged'; }
+      version.purged = { at: now(), by: actor };
+      this.touch(record);
+      this.log('artifacts.purgeContent', record.workspaceId, record.id, actor, `Version ${version.number} content purged; metadata and hashes kept`);
+      return { id: record.id, versionId: version.id, purged: true, componentHashes: [...hashes] };
+    }
     if (action === 'delete') {
       const record = this.record('artifacts', args.id, context);
       this.data.artifacts = this.data.artifacts.filter(item => item.id !== record.id);
@@ -674,6 +752,7 @@ export class WorkspaceService {
       source = { ...await this.browser.captureArtifact(args, context), ...args };
     }
     if (source.text === undefined && !source.pngBase64) throw new Error('Artifact requires text or a PNG image');
+    if (action === 'capture' && args.kind === 'archive' && !source.archive) throw new Error('Archive capture returned no archive');
     const components = [];
     if (source.text !== undefined) {
       if (typeof source.text !== 'string' || source.text.length > 2000000) throw new Error('Artifact text exceeds 2 million characters');
@@ -691,10 +770,185 @@ export class WorkspaceService {
       record = createRecord({ title: source.title || 'Saved page', note: args.note || '', tags: args.tags || [], versions: [], annotations: [] }, workspaceId, 'artifact');
       this.data.artifacts.push(record);
     }
-    const version = { id: uuid('version'), number: record.versions.length + 1, createdAt: now(), actor, method: action === 'capture' ? 'browser-capture' : 'supplied-content', url: sanitizeUrl(source.url), title: source.title || record.title, components, text: source.text, pngBase64: source.pngBase64, navigationVersion: source.navigationVersion, limitations: [...(source.limitations || []), 'Stored text is untrusted source content. Active scripts and external resources are not replayed.', 'Captures may contain personal information; inspect before sharing.'], redactionStatus: 'not-reviewed', previousVersionId: record.versions.at(-1)?.id || null };
+    if (action === 'capture' && source.archive) components.push({ type: 'application/x-weft-archive-manifest', size: Buffer.byteLength(canonicalJson(archiveManifest(source.archive))), sha256: digest(canonicalJson(archiveManifest(source.archive))) });
+    const version = { id: uuid('version'), number: record.versions.length + 1, createdAt: now(), actor, method: action === 'capture' ? 'browser-capture' : 'supplied-content', url: sanitizeUrl(source.url), title: source.title || record.title, components, text: source.text, pngBase64: source.pngBase64, navigationVersion: source.navigationVersion,
+      ...(action === 'capture' && source.archive ? { archive: source.archive } : {}), ...(action === 'capture' && source.capture ? { capture: source.capture } : {}),
+      ...(action === 'capture' && Array.isArray(source.inaccessibleRegions) && source.inaccessibleRegions.length ? { inaccessibleRegions: source.inaccessibleRegions } : {}),
+      limitations: [...(source.limitations || []), 'Stored text is untrusted source content. Active scripts and external resources are not replayed.', 'Captures may contain personal information; inspect before sharing.'], redactionStatus: 'not-reviewed', previousVersionId: record.versions.at(-1)?.id || null };
     record.versions.push(version); this.touch(record);
     this.log('artifacts.capture', workspaceId, record.id, actor, `Version ${version.number}`);
     return artifactSummary(record);
+  }
+
+  // ---- Artifact versions: views, archives, comparison and redaction --------------------
+  artifactVersion(record, versionId) {
+    const version = record.versions.find(item => item.id === versionId);
+    if (!version) throw fail('not_found', 'Artifact version not found');
+    return version;
+  }
+  /** Refuse agent access to a restricted original's content. */
+  assertReadable(version, context, purpose = 'read') {
+    if (isAgent(context) && version.access === 'restricted') {
+      throw fail('permission_required', `${RESTRICTED_NOTICE} (${purpose})`, { details: { authority: { decision: 'deny', reason: 'restricted_original', actionClass: 'local_read' } } });
+    }
+  }
+  /** One version with its verified text and image; archive bodies are never inlined (manifest only). */
+  versionOutput(record, version, context, { agent = isAgent(context) } = {}) {
+    const view = versionMetadata(record, version, agent);
+    if (agent && version.access === 'restricted') return { artifactId: record.id, workspaceId: record.workspaceId, ...view };
+    if (Object.hasOwn(version, 'text') && version.text !== undefined) view.text = version.text;
+    if (version.pngBase64) view.pngBase64 = version.pngBase64;
+    return { artifactId: record.id, workspaceId: record.workspaceId, ...view };
+  }
+  readArtifact(name, record, args, context) {
+    const agent = isAgent(context);
+    if (name === 'artifacts.get') {
+      if (args.versionId) return this.versionOutput(record, this.artifactVersion(record, args.versionId), context);
+      const { versions, ...rest } = record;
+      return { ...clone(rest), versions: versions.map(version => { const { artifactId, workspaceId, ...view } = this.versionOutput(record, version, context); return view; }) };
+    }
+    if (name === 'artifacts.readOriginal') {
+      // The authority gate requires an exact one-time human approval for every agent read; in-process callers without one are refused here too.
+      if (agent && context.authorityDecision?.approvedOnce !== true) throw fail('permission_required', 'Reading an original requires an exact one-time human approval for this command', { details: { authority: { decision: 'deny', reason: 'restricted_original', actionClass: 'local_read' } } });
+      const version = this.artifactVersion(record, args.versionId);
+      return { ...this.versionOutput(record, version, context, { agent: false }), access: version.access === 'restricted' ? 'restricted' : 'standard' };
+    }
+    if (name === 'artifacts.verify') return this.verifyArtifact(record, args.versionId);
+    if (name === 'artifacts.compare') return this.compareVersions(record, args, context);
+    if (name === 'artifacts.review') return this.reviewVersion(record, this.artifactVersion(record, args.versionId), context);
+    if (name === 'artifacts.redact') {
+      const source = this.artifactVersion(record, args.versionId);
+      const derived = this.buildDerivative(record, source, args, context.actor || 'human', context);
+      return { preview: true, saved: false, derivedFrom: source.id, ...derived.version, unmatchedSelectors: derived.unmatched, artifactTitle: derived.recordTitle, remainingMatches: derived.remainingMatches };
+    }
+    throw new Error(`Unsupported artifact read: ${name}`);
+  }
+  /** Re-verify every stored component digest without changing anything. */
+  verifyArtifact(record, versionId) {
+    const versions = versionId ? [this.artifactVersion(record, versionId)] : record.versions;
+    const check = (object, key, label) => {
+      const marker = this.storage.componentMarker(object, key);
+      if (!marker && typeof object[key] !== 'string') return null;
+      if (!marker) return { component: label, status: 'pending', detail: 'Not yet committed' };
+      try { this.storage.components.read(marker.sha256, marker.size); return { component: label, sha256: marker.sha256, size: marker.size, status: 'verified' }; }
+      catch (error) { return { component: label, sha256: marker.sha256, size: marker.size, status: error.code === 'COMPONENT_MISSING' ? 'missing' : 'corrupt', detail: error.message }; }
+    };
+    const report = versions.map(version => {
+      const items = [check(version, 'text', 'text/plain'), check(version, 'pngBase64', 'image/png'),
+        ...(version.archive?.resources || []).filter(item => item.status === 'stored').map(item => check(item, 'bodyBase64', item.url))].filter(Boolean);
+      return { versionId: version.id, number: version.number, ...(version.purged ? { purged: true } : {}), components: items, problems: items.filter(item => !['verified', 'pending'].includes(item.status)).length };
+    });
+    const problems = report.reduce((sum, item) => sum + item.problems, 0);
+    return { id: record.id, status: problems ? 'damaged' : 'verified', problems, versions: report,
+      scope: 'SHA-256 digests show that stored bytes are unchanged since they were saved. They do not prove that a website served this content, or when; Weft has no independent timestamp authority.' };
+  }
+  compareVersions(record, args, context) {
+    const from = this.artifactVersion(record, args.fromVersionId), to = this.artifactVersion(record, args.toVersionId);
+    for (const version of [from, to]) { this.assertReadable(version, context, 'compare'); if (version.purged) throw fail('invalid_arguments', `Version ${version.number} content was purged`); }
+    const describe = version => ({ versionId: version.id, number: version.number, createdAt: version.createdAt, url: version.url || null, method: version.method, ...(version.derivedFrom ? { derivedFrom: version.derivedFrom } : {}),
+      components: clone(version.components || []), archive: version.archive ? { complete: version.archive.complete ?? null, counts: clone(version.archive.counts || {}) } : null, captureComplete: version.capture?.complete ?? null });
+    const hasText = version => Object.hasOwn(version, 'text') && typeof version.text === 'string';
+    const text = hasText(from) && hasText(to) ? diffText(from.text, to.text) : { available: false, reason: 'One of the versions has no readable text component.' };
+    const resources = from.archive?.resources && to.archive?.resources ? diffResources(from.archive.resources, to.archive.resources) : { available: false, reason: 'Resource comparison needs a resource archive in both versions.' };
+    let pixels = { available: false, reason: 'Pixel comparison needs a screenshot in both versions.' };
+    if (args.pixels === false) pixels = { available: false, reason: 'Not requested.' };
+    else if (from.pngBase64 && to.pngBase64) {
+      try { pixels = { available: true, ...diffImages(decodePng(Buffer.from(from.pngBase64, 'base64')), decodePng(Buffer.from(to.pngBase64, 'base64')), { diffImage: args.diffImage === true }) }; }
+      catch (error) { pixels = { available: false, reason: String(error.message).slice(0, 200) }; }
+    }
+    const identical = text.identical !== false && (resources.totals ? Object.values(resources.totals).every(value => value === 0) : true) && (pixels.available ? pixels.changedPixels === 0 && pixels.comparable : true);
+    return { id: record.id, from: describe(from), to: describe(to), identical, text, resources, pixels,
+      limitations: ['Compares the stored captures only; differences can come from personalization, timing, lazy loading or capture limits rather than source changes.', 'Readable text excludes form fields, scripts and hidden content.'] };
+  }
+  /** Sensitive metadata review plus detection assistance. Findings carry masked previews, never the matched values. */
+  reviewVersion(record, version, context) {
+    this.assertReadable(version, context, 'review');
+    const findings = [];
+    if (version.url) findings.push(...reviewUrl(version.url, 'url'));
+    findings.push(...reviewText(version.title, 'title'));
+    for (const key of ['originalUrl', 'finalUrl']) if (version.capture?.[key]) findings.push(...reviewUrl(version.capture[key], `capture.${key}`));
+    (version.capture?.stateChanges || []).forEach((change, index) => { if (change.url) findings.push(...reviewUrl(change.url, `capture.stateChanges.${index}.url`)); });
+    const resourceFindings = [];
+    (version.archive?.resources || []).forEach((resource, index) => resourceFindings.push(...reviewUrl(resource.url, `archive.resources.${index}.url`)));
+    findings.push(...resourceFindings.slice(0, 200));
+    findings.push(...reviewText(record.note, 'artifact.note'), ...(record.tags || []).flatMap((tag, index) => reviewText(tag, `artifact.tags.${index}`)),
+      ...(record.annotations || []).flatMap((item, index) => reviewText(item.note, `artifact.annotations.${index}.note`)));
+    const text = !version.purged && Object.hasOwn(version, 'text') && typeof version.text === 'string' ? reviewText(version.text, 'text') : [];
+    return { id: record.id, versionId: version.id, number: version.number, findings, textFindings: text.slice(0, 500), totals: { metadata: findings.length, text: text.length, resourceUrls: resourceFindings.length },
+      image: version.pngBase64 ? 'Screenshot text is not inspected (no OCR). Review the image yourself and draw redaction regions over anything sensitive.' : null,
+      archive: version.archive ? 'Archived HTML, stylesheets and images are not redacted; sanitized derivatives leave the archive out.' : null,
+      scope: DETECTION_SCOPE };
+  }
+  /** Build a sanitized derivative from a source version. Nothing is written here. */
+  buildDerivative(record, source, args, actor, context) {
+    this.assertReadable(source, context, 'redact');
+    if (source.purged) throw fail('invalid_arguments', 'This version’s content was purged; nothing is left to redact');
+    const hasText = Object.hasOwn(source, 'text') && typeof source.text === 'string';
+    const selectors = args.text || [];
+    if (!hasText && selectors.some(item => item.start !== undefined)) throw fail('invalid_arguments', 'Offset selectors need a version with readable text');
+    const textResult = hasText ? redactText(source.text, selectors) : { text: undefined, redactions: [], unmatched: selectors.map((_, index) => index) };
+    const metadataSelectors = selectors.filter(item => item.start === undefined);
+    const title = args.title ?? redactText(source.title || record.title, metadataSelectors).text;
+    let url = reduceUrl(source.url, args.url ?? 'origin-path');
+    if (url && metadataSelectors.length && resolveSpans(url, metadataSelectors).spans.length) url = reduceUrl(url, 'origin');
+    if (url && metadataSelectors.length && resolveSpans(url, metadataSelectors).spans.length) url = '';
+    const regions = args.regions || [];
+    let pngBase64;
+    const regionRedactions = [];
+    if (regions.length && (!source.pngBase64 || args.image === 'omit')) throw fail('invalid_arguments', 'Image regions need a version with a screenshot and image: "redact"');
+    if (source.pngBase64 && args.image !== 'omit') {
+      // Decoding and re-encoding replaces the pixels and drops every ancillary PNG chunk (text, EXIF, ICC).
+      const image = decodePng(Buffer.from(source.pngBase64, 'base64'));
+      const clipped = clipRects(regions, image.width, image.height);
+      const outside = clipped.map((rect, index) => rect ? null : index).filter(index => index !== null);
+      if (outside.length) throw fail('invalid_arguments', `Image regions ${outside.join(', ')} are outside the ${image.width}x${image.height} screenshot`);
+      clipped.forEach((rect, index) => regionRedactions.push({ type: 'region', index, ...rect, label: String(regions[index].label || 'region').slice(0, 60), pixels: fillRects(image, [rect]) }));
+      pngBase64 = encodePng(image).toString('base64');
+    }
+    if (textResult.text === undefined && !pngBase64) throw fail('invalid_arguments', 'The derivative would have no content: keep the screenshot or use a version with text');
+    const components = [];
+    if (textResult.text !== undefined) components.push({ type: 'text/plain', size: Buffer.byteLength(textResult.text), sha256: digest(textResult.text) });
+    if (pngBase64) { const bytes = Buffer.from(pngBase64, 'base64'); components.push({ type: 'image/png', size: bytes.length, sha256: digest(bytes) }); }
+    const inaccessible = [...(source.inaccessibleRegions || []).map(item => clone(item)), ...(args.inaccessibleRegions || []).map(rect => ({ ...rect, label: String(rect.label || 'not visible').slice(0, 60), source: 'reviewer' }))];
+    const omitted = [...(source.archive ? ['resource archive'] : []), ...(source.capture ? ['capture URLs and state history'] : []), ...(source.pngBase64 && args.image === 'omit' ? ['screenshot'] : [])];
+    const capture = source.capture ? JSON.parse(JSON.stringify({ startedAt: source.capture.startedAt, durationMs: source.capture.durationMs, readiness: source.capture.readiness ? { state: source.capture.readiness.state } : undefined,
+      viewport: source.capture.viewport, complete: source.capture.complete, incomplete: source.capture.incomplete || [] })) : undefined;
+    const version = { method: 'redaction', url, title: String(title).slice(0, 240), components, ...(textResult.text !== undefined ? { text: textResult.text } : {}), ...(pngBase64 ? { pngBase64 } : {}),
+      derivedFrom: source.id, derivedFromNumber: source.number, redactions: [...textResult.redactions, ...regionRedactions], inaccessibleRegions: inaccessible,
+      ...(capture ? { capture } : {}), navigationVersion: source.navigationVersion,
+      review: { by: actor, at: now(), textSelectors: selectors.length, unmatchedSelectors: textResult.unmatched.length, regions: regions.length, urlMode: args.url ?? 'origin-path', omitted, detection: 'assistance-only' },
+      limitations: [`Sanitized derivative of version ${source.number}. The original version is unchanged and keeps its own access setting.`,
+        'Only the selected text spans and image regions were removed. Detection assistance can miss sensitive data, and text selectors do not remove text inside images.',
+        ...(omitted.length ? [`Not carried into this derivative: ${omitted.join(', ')}.`] : []), 'Derived content is untrusted source content.'],
+      redactionStatus: 'redacted' };
+    // The artifact's own title is shown with every version: apply the same text selectors to it. Notes, tags and
+    // annotations are human-written history and are not rewritten; matches there are reported for review.
+    const recordTitle = metadataSelectors.length ? redactText(record.title, metadataSelectors).text.slice(0, 240) : record.title;
+    const count = value => typeof value === 'string' && metadataSelectors.length ? resolveSpans(value, metadataSelectors).spans.length : 0;
+    const remainingMatches = { note: count(record.note), tags: (record.tags || []).reduce((sum, tag) => sum + count(tag), 0), annotations: (record.annotations || []).reduce((sum, item) => sum + count(item.note), 0) };
+    return { version, unmatched: textResult.unmatched, recordTitle, remainingMatches };
+  }
+  /** Human-only offline preview of an archived version in the browser's sandboxed preview view. */
+  async previewCommand(name, args, context) {
+    if (!this.browser?.openArchivePreview) throw fail('unsupported', 'The offline archive preview needs the Weft browser window');
+    if (name === 'artifacts.closePreview') return this.browser.closeArchivePreview();
+    const record = this.record('artifacts', args.id, context);
+    const version = this.artifactVersion(record, args.versionId);
+    if (version.purged) throw fail('invalid_arguments', 'This version’s content was purged');
+    if (!version.archive?.resources?.length) throw fail('unsupported', 'This version has no resource archive; capture with kind "archive" to preview it offline');
+    const resources = [];
+    const unavailable = [];
+    for (const resource of version.archive.resources) {
+      if (resource.status !== 'stored') continue;
+      try { resources.push({ url: resource.url, contentId: resource.contentId ?? null, role: resource.role, mimeType: resource.mimeType, bytes: Buffer.from(resource.bodyBase64, 'base64') }); }
+      catch (error) {
+        if (resource.role === 'document') throw fail('component_integrity', `The archived document failed verification: ${error.message}`);
+        unavailable.push({ url: resource.url, status: error.code === 'COMPONENT_MISSING' ? 'missing' : 'corrupt' });
+      }
+    }
+    const opened = await this.browser.openArchivePreview({ artifactId: record.id, versionId: version.id, title: version.title || record.title, documentUrl: version.archive.documentUrl, resources });
+    return { ...opened, artifactId: record.id, versionId: version.id, number: version.number, unavailable,
+      notStored: version.archive.resources.filter(item => item.status !== 'stored').length };
   }
 
   // ---- Export and import -------------------------------------------------------------
@@ -705,27 +959,66 @@ export class WorkspaceService {
    * history.
    * `package` mode references components by digest instead of inlining them.
    */
-  exportWorkspace(id, sensitiveTerms, { mode = 'inline' } = {}) {
+  exportWorkspace(id, sensitiveTerms, { mode = 'inline', captures = 'exclude-restricted', reviewMetadata = false } = {}) {
     const record = this.workspace(id);
+    const excludedContent = [];
+    // Capture policy: restricted originals stay out unless a person chooses 'all'; 'derivatives-only' keeps sanitized derivatives alone.
+    const exportable = (name, item) => {
+      if (name !== 'artifacts') return item;
+      const versions = item.versions.filter(version => {
+        const reason = captures !== 'all' && version.access === 'restricted' ? 'restricted original'
+          : captures === 'derivatives-only' && !version.derivedFrom ? 'not a sanitized derivative' : null;
+        if (reason) excludedContent.push({ collection: 'artifacts', id: item.id, versionId: version.id, number: version.number, reason });
+        return !reason;
+      });
+      if (!versions.length) { excludedContent.push({ collection: 'artifacts', id: item.id, reason: 'no exportable versions under this capture policy' }); return null; }
+      return versions.length === item.versions.length ? item : { ...item, versions };
+    };
     const plain = (name, item) => mode === 'inline' ? this.output(item) : JSON.parse(this.storage.serialize(name, item, { write: false }).doc);
     const notExported = Object.entries(this.data).filter(([key, value]) => !collections.includes(key) && !['workspaces', 'activity', 'history', 'handoffs'].includes(key) && !NOT_EXPORTED.has(key) && Array.isArray(value) && value.some(item => item?.workspaceId === id)).map(([key, value]) => `${key} (${value.filter(item => item?.workspaceId === id).length} records not supported by this export format)`);
     const exported = cleanExport({ format: 'weft-workspace', schemaVersion: CURRENT_SCHEMA_VERSION, formatVersion: 2, exportedAt: now(), workspace: clone(record),
-      ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global')).map(item => plain(name, item))])),
+      ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global')).map(item => exportable(name, item)).filter(Boolean).map(item => plain(name, item))])),
       handoffs: (this.data.handoffs ?? []).filter(item => item.workspaceId === id).map(item => clone(item)),
-      excluded: [...EXPORT_EXCLUDED, ...notExported],
-      limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
-    if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(mode === 'inline' ? exported : this.exportWorkspace(id), null, 2), sensitiveTerms);
+      excluded: [...EXPORT_EXCLUDED, ...notExported, ...(excludedContent.length ? [`${excludedContent.length} capture versions or artifacts left out by the capture policy (${captures}); see excludedContent`] : [])],
+      capturePolicy: captures, excludedContent,
+      limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.',
+        'Sanitized derivatives remove only the spans and regions a reviewer selected; record titles, notes, tags and annotations are exported as written.'] });
+    exported.linkedSourcesNotIncluded = this.linkedSources(exported);
+    if (reviewMetadata) exported.metadataReview = this.reviewExport(exported);
+    if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(mode === 'inline' ? exported : this.exportWorkspace(id, undefined, { captures }), null, 2), sensitiveTerms);
     return exported;
+  }
+  /** Web pages, linked files, services and cited URLs referenced by exported records but not included as content. */
+  linkedSources(exported) {
+    const items = [];
+    for (const record of exported.materials || []) if (['website', 'linked-file', 'service'].includes(record.kind)) items.push({ collection: 'materials', id: record.id, kind: record.kind, ...(record.url ? { url: record.url } : {}), ...(record.filename ? { filename: record.filename } : {}) });
+    for (const record of exported.context || []) for (const source of record.sources || []) if (/^https?:/i.test(source)) items.push({ collection: 'context', id: record.id, kind: 'source', url: source });
+    for (const record of exported.artifacts || []) for (const version of record.versions || []) if (version.url) items.push({ collection: 'artifacts', id: record.id, versionId: version.id, kind: 'live page', url: version.url });
+    return { count: items.length, items: items.slice(0, 1000), note: 'These records cite live pages, files or services. Only the saved records travel with the export; the linked sources themselves are not included and may have changed.' };
+  }
+  /** Export metadata review: URL query/path findings and detection-assistance matches in exported text fields (masked). */
+  reviewExport(exported) {
+    const findings = [];
+    const visit = (value, path, key = '') => {
+      if (findings.length >= 1000) return;
+      if (Array.isArray(value)) { value.forEach((item, index) => visit(item, `${path}.${index}`)); return; }
+      if (value && typeof value === 'object') { for (const [name, item] of Object.entries(value)) if (!/Base64$/.test(name) && name !== '$component' && !['excluded', 'limitations', 'excludedContent', 'linkedSourcesNotIncluded'].includes(name)) visit(item, `${path}.${name}`, name); return; }
+      if (typeof value !== 'string' || !value) return;
+      if (/url|endpoint|source/i.test(key) || /^https?:\/\//i.test(value)) findings.push(...reviewUrl(value, path).filter(item => item.kind !== 'unparseable-url'));
+      else if (!['id', 'workspaceId', 'sha256', 'createdAt', 'updatedAt'].includes(key)) findings.push(...reviewText(value, path));
+    };
+    visit(exported, '$');
+    return { findings: findings.slice(0, 1000), truncated: findings.length >= 1000, scope: DETECTION_SCOPE };
   }
   transferPath(name) {
     if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(name) || name.includes('..')) throw fail('invalid_arguments', 'Invalid package name');
     return join(this.directory, TRANSFERS_DIR, name);
   }
   /** Large-project transfer: a folder of verified component files plus a manifest, beyond REST/JSON size limits. */
-  exportPackage(id, name, sensitiveTerms) {
+  exportPackage(id, name, sensitiveTerms, { captures } = {}) {
     const target = this.transferPath(name);
     if (existsSync(target)) throw fail('invalid_arguments', 'A package with this name already exists; existing packages are never overwritten');
-    const exported = this.exportWorkspace(id, undefined, { mode: 'package' });
+    const exported = this.exportWorkspace(id, undefined, { mode: 'package', captures });
     const markers = new Map();
     const collect = value => {
       if (Array.isArray(value)) value.forEach(collect);
@@ -748,8 +1041,9 @@ export class WorkspaceService {
       fsyncFile(join(temp, 'manifest.json'));
       renameSync(temp, target);
       syncDirectory(root);
-      const result = { name, path: target, formatVersion: 1, files: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0), excluded: exported.excluded, limitations: exported.limitations };
-      if (sensitiveTerms !== undefined) result.residueScan = inspectExportResidue(JSON.stringify(this.exportWorkspace(id), null, 2), sensitiveTerms);
+      const result = { name, path: target, formatVersion: 1, files: files.length, bytes: files.reduce((sum, file) => sum + file.size, 0), excluded: exported.excluded, capturePolicy: exported.capturePolicy, excludedContent: exported.excludedContent,
+        linkedSourcesNotIncluded: exported.linkedSourcesNotIncluded, limitations: exported.limitations };
+      if (sensitiveTerms !== undefined) result.residueScan = inspectExportResidue(JSON.stringify(this.exportWorkspace(id, undefined, { captures }), null, 2), sensitiveTerms);
       return result;
     } catch (error) { rmSync(temp, { recursive: true, force: true }); throw error; }
   }
@@ -812,7 +1106,7 @@ export class WorkspaceService {
     const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon });
     const workspace = { ...createWorkspace(), ...workspaceFields, importedFrom: { exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt.slice(0, 100) : null, createdAt: timestamp.safeParse(raw.workspace.createdAt).success ? raw.workspace.createdAt ?? null : null, formatVersion } };
     const mapping = new Map([[raw.workspace.id, workspace.id]]);
-    const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', 'handoffs', ...collections]);
+    const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', 'handoffs', 'capturePolicy', 'excludedContent', 'linkedSourcesNotIncluded', 'metadataReview', ...collections]);
     for (const [key, value] of Object.entries(raw)) if (!knownKeys.has(key)) loss('export', key, Array.isArray(value) ? 'collection not supported by this Weft version; not imported' : 'unrecognized export field ignored', Array.isArray(value) ? value.length : 1);
     // First pass: allocate every new identifier so references resolve in any order.
     for (const collection of collections) {
@@ -962,7 +1256,22 @@ export class WorkspaceService {
         if (png.inline !== undefined) png.inline = bytes.toString('base64');
         components.push({ type: 'image/png', size: bytes.length, sha256: png.marker?.sha256 || digest(bytes) });
       }
-      if (!components.length) throw new Error('Imported artifact has no offline content');
+      let archive;
+      if (version.archive) {
+        archive = { ...version.archive, resources: version.archive.resources.map(resource => {
+          const { bodyBase64, ...entry } = resource;
+          if (bodyBase64 === undefined) return entry;
+          const ref = heavy(bodyBase64, 'base64');
+          const bytes = ref.bytes || Buffer.from(ref.inline, 'base64');
+          if (entry.size !== bytes.length || entry.sha256 !== digest(bytes)) throw fail('component_integrity', `COMPONENT_INTEGRITY: imported archive resource ${String(entry.url).slice(0, 200)} does not match its recorded SHA-256; the export is damaged or was altered`);
+          if (ref.inline !== undefined) return { ...entry, bodyBase64: bytes.toString('base64') };
+          deferred.push(() => lazy(entry, 'bodyBase64', ref));
+          return entry;
+        }) };
+        const manifest = canonicalJson(archiveManifest(archive));
+        components.push({ type: 'application/x-weft-archive-manifest', size: Buffer.byteLength(manifest), sha256: digest(manifest) });
+      }
+      if (!components.length && !version.purged) throw new Error('Imported artifact has no offline content');
       if (version.components) {
         for (const claimed of version.components) {
           const actual = components.find(component => component.type === claimed.type);
@@ -971,11 +1280,16 @@ export class WorkspaceService {
       } else loss('artifacts', 'versions.components', 'source had no component hashes; hashes computed at import');
       const previous = version.previousVersionId ? mapping.get(version.previousVersionId) : null;
       if (version.previousVersionId && !previous) loss('artifacts', 'versions.previousVersionId', 'previous version not in export; link removed');
+      const derivedFrom = version.derivedFrom ? mapping.get(version.derivedFrom) ?? null : undefined;
+      if (version.derivedFrom && !derivedFrom) loss('artifacts', 'versions.derivedFrom', 'source version of a sanitized derivative not in export (excluded or restricted); the derivative keeps its redaction metadata');
       stats.versions++;
       const stored = { id: (version.id && mapping.get(version.id)) || uuid('version'), number: version.number ?? index + 1, createdAt: version.createdAt ?? now(), actor: version.actor ?? 'human', method: version.method ?? 'import',
         url: version.url ? sanitizeUrl(version.url) : '', title: version.title ?? fields.title, components, ...(text?.inline !== undefined ? { text: text.inline } : {}), ...(png?.inline !== undefined ? { pngBase64: png.inline } : {}),
         navigationVersion: version.navigationVersion ?? undefined, limitations: version.limitations ?? ['Imported content has not been independently verified.'], redactionStatus: version.redactionStatus ?? 'not-reviewed', previousVersionId: previous,
-        provenance: { imported: true, sourceVersionId: version.id ?? null } };
+        provenance: { imported: true, sourceVersionId: version.id ?? null },
+        ...(archive ? { archive } : {}), ...(version.capture ? { capture: version.capture } : {}), ...(derivedFrom !== undefined ? { derivedFrom } : {}), ...(version.derivedFromNumber ? { derivedFromNumber: version.derivedFromNumber } : {}),
+        ...(version.redactions ? { redactions: version.redactions } : {}), ...(version.inaccessibleRegions ? { inaccessibleRegions: version.inaccessibleRegions } : {}),
+        ...(version.access ? { access: version.access, accessChangedAt: version.accessChangedAt ?? now(), accessChangedBy: version.accessChangedBy ?? 'import' } : {}), ...(version.purged ? { purged: version.purged } : {}), ...(version.review ? { review: version.review } : {}) };
       if (text?.bytes) deferred.push(() => lazy(stored, 'text', text));
       if (png?.bytes) deferred.push(() => lazy(stored, 'pngBase64', png));
       return stored;
@@ -984,7 +1298,7 @@ export class WorkspaceService {
   }
   /** Rewrite exported identifiers cited inside free-form text. Captured text and hashed bytes are never altered. */
   rewriteCitations(record, mapping, stats) {
-    const skip = new Set(['id', 'workspaceId', 'evidence', 'materialIds', 'outputs', 'attachments', 'previousVersionId', 'provenance', 'components', 'sha256', 'text', 'pngBase64', 'fileBase64', 'taskId', 'revisions']);
+    const skip = new Set(['id', 'workspaceId', 'evidence', 'materialIds', 'outputs', 'attachments', 'previousVersionId', 'derivedFrom', 'provenance', 'components', 'sha256', 'text', 'pngBase64', 'fileBase64', 'archive', 'capture', 'redactions', 'taskId', 'revisions']);
     const visit = value => {
       if (typeof value === 'string') return value.replace(ID_TOKEN, token => { if (mapping.has(token)) { stats.freeFormCitations++; return mapping.get(token); } stats.unresolvedCitations.add(token); return token; });
       if (Array.isArray(value)) return value.map(visit);
