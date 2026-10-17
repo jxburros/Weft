@@ -4,6 +4,8 @@
 import { createRuntimeFixture } from './task-runtime-fixture.mjs';
 
 const directory = process.argv[2];
+// `node --test` also loads files under test/; without a profile directory this is not the spawned child.
+if (!directory) process.exit(0);
 const f = createRuntimeFixture({ directory, pages: { 1: 'https://shop.example.com/cart', 2: 'https://docs.example.com/guide' } });
 const create = (title, step) => f.run('tasks.create', { workspaceId: f.workspaceId, title, plan: [step, { kind: 'command', title: 'Note result', command: 'context.create', args: { title: `${title} done`, category: 'findings' } }] });
 const external = await create('Submit order', { kind: 'command', title: 'Click place order', command: 'page.click', args: { tabId: 1, selector: '#place-order' } });
