@@ -63,7 +63,9 @@ so current builds are labelled unsigned.
   keep editable notes, website references, and copied files; track confirmed
   information, findings, questions, instructions, and decisions.
 - **Continue work:** save task objectives, owners, states, blockers, checkpoints,
-  and next steps. Turn reusable workflow instructions into queued human tasks.
+  and next steps. Plan multi-step tasks and run parameterized workflows through a durable task
+  runtime that pauses for approvals and marks work with an unknown outcome
+  `uncertain` instead of retrying it blindly.
 - **Keep evidence:** save readable page text and PNG screenshots as immutable
   capture versions. Open them offline without executing source HTML or contacting
   the original site. Capture limitations and source metadata remain visible.
@@ -126,7 +128,7 @@ configure, after acknowledgement. Each reply shows endpoint locality,
 provider-reported tokens and, if you set prices, a labeled cost estimate. The
 Ollama native API (`http://127.0.0.1:11434`) is also supported.
 
-Autonomous task execution is not implemented. Errors, cancellation, and
+Errors, cancellation, and
 unsupported responses are shown as such; a stopped reply is kept and marked
 interrupted, and the application does not manufacture an assistant reply.
 
@@ -249,8 +251,9 @@ material bytes and task/workflow/evidence links. They exclude browser sessions,
 cookies, configured model keys, global policies, activity and browsing history.
 Imports create new IDs, rewrite citations of exported IDs, verify capture hashes,
 report every lossy mapping and leave imported rules/workflows inactive for review;
-the GUI shows a preview first. Copies use this same behavior. Linked-file/service
-entries are manual reference metadata; their sources are not copied or refreshed.
+the GUI shows a preview first. Copies use this same behavior. Linked files, folders and
+service references export as metadata only; their content, local paths and
+credentials are omitted and listed in the import report.
 
 Project metadata is a transactional SQLite database (`workspace.sqlite`, WAL
 mode, owned by one Weft process through a profile lock); captures and stored
@@ -259,8 +262,9 @@ metadata never rewrites them. Search uses a local FTS5 index. Weft keeps
 verified automatic backups (daily, latest five) and manual backups under
 `backups/`; restoring preserves the replaced data under `recovery/`. With Weft
 closed, `weft store backups|verify|restore <workspace-data directory>` recovers
-a profile whose database cannot be opened. None of this is **encrypted**, and
-backups on the same disk do not protect against losing that disk. Stored
+a profile whose database cannot be opened. Unless you turn on opt-in workspace
+encryption (Settings > Encryption; [ADR-014](docs/decisions/014-workspace-encryption-and-key-management.md)),
+none of this is **encrypted**, and backups on the same disk do not protect against losing that disk. Stored
 materials are limited to 10 MiB, PNGs to 20 MiB and JSON imports to 100 MiB.
 Free-form content, files, and captures can contain private data; export does not
 perform comprehensive secret or personal-information redaction.
@@ -273,9 +277,11 @@ is in [implementation coverage](docs/IMPLEMENTATION.md).
 
 The largest remaining capabilities are independent review of the credential
 broker, validation of payment authorization with real merchants and card issuers
-([ADR-019](docs/decisions/019-payment-authorization.md)), fine-grained agent grants and autonomous execution, comprehensive storage
-block/session modes, a community-list management screen and any hosted moderation service, synchronization,
-and signed (rather than labelled-unsigned) installers verified on real machines. Browser extension support is limited to unpacked
+([ADR-019](docs/decisions/019-payment-authorization.md)), screen-reader and
+cross-platform accessibility evidence, exercising the OS key stores used by workspace
+encryption, any hosted moderation service for community lists, synchronization and
+collaboration (deferred in [ADR-002](docs/decisions/002-sync-collaboration-remote.md)),
+and signed (rather than labelled-unsigned) installers and updates verified on real machines. Browser extension support is limited to unpacked
 Manifest V3 extensions installed per workspace with audited permissions
 ([ADR-007](docs/decisions/007-extension-compatibility.md)); Weft plugins are
 described in [docs/PLUGINS.md](docs/PLUGINS.md). Provider key storage is not a credential
@@ -286,7 +292,7 @@ Remote pages are sandboxed and have no Node integration or privileged preload.
 Unsupported protocols and native launches are blocked; permission requests are
 denied. Site rules cover documented Chromium request paths, not an external
 agent's independent network tools. Unsolicited downloads are cancelled and can be approved from Downloads. Downloads are never executed automatically
-and are not claimed to have been scanned for malware. Keep Electron current for
+and are not claimed to have been scanned for malware unless you configure a local scanner (ADR-009). Keep Electron current for
 Chromium security fixes.
 
 ## Development and validation
@@ -314,7 +320,7 @@ Agent contributors should read [AGENTS.md](AGENTS.md). The packaged
 registry. [Offline task evals](evals/README.md) measure reference success and tool
 calls; [performance budgets](perf/README.md) cover large-store writes, capture
 search and catalog generation. [Architecture decisions](docs/decisions/) record
-current scope, the plugin/extension boundaries and outstanding encryption work.
+the product scope, deferred sync and collaboration, the plugin/extension boundaries, workspace encryption and the other design decisions.
 
 The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
 variants are documented in [assets/logo/README.md](assets/logo/README.md).

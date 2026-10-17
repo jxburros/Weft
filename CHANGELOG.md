@@ -601,26 +601,30 @@ alone is not a shipped capability.
 
 ### Not completed
 
-- See [all 67 issue dispositions](docs/ISSUE-STATUS.md) for the 43 completed
-  scopes and 24 broader/partial items left open.
-
-- Extension compatibility testing, native plugin isolation/permissions and plugin
-  loading remain unimplemented.
+- See [all 67 issue dispositions](docs/ISSUE-STATUS.md): 58 completed scopes
+  (26 in the first pass, PR #71, and 32 in the second pass on this branch) and 9
+  items left open (#4 tracker, #6, #20, #26, #31, #33, #36, #54, #60). Each stays
+  open for validation that code cannot supply: independent security review,
+  real-platform and provider runs, real OS key stores, real assistive
+  technology, signing credentials and brand sign-off. Issues close only after
+  the changes land on main.
+- Browser extensions (unpacked Manifest V3, per workspace) and third-party
+  plugins (permission-model child process) are fixture- and Linux/Xvfb-tested
+  only; there is no Web Store/CRX install, extension toolbar or options UI,
+  optional permissions or Manifest V2, and no real third-party extension or
+  plugin ecosystem was exercised.
 - Workspace encryption has not been exercised against real macOS Keychain,
   Windows DPAPI or a Linux secret service (injected backends; real Electron
   reports `basic_text` under xvfb). There is no idle auto-lock, rollback of a
-  whole profile to an older copy is not detectable, and the Settings golden needs
-  a reviewed update on the reference platform (local fonts differ).
+  whole profile to an older copy is not detectable.
 - Hosted sync, concurrent collaboration and remote deployment are deferred.
 - Activity integrity is tamper evidence only; a process that can rewrite the
-  profile can rewrite the log. The changed agent-connections dialog needs a
-  reviewed golden update in the Linux visual CI job (local fonts differ).
+  profile can rewrite the log.
 - The credential broker has not had an independent security review, so
   credential isolation is not asserted (#6 stays open). Not verified: a real
   1Password account, macOS Keychain/Windows DPAPI/libsecret behavior (tests use a
-  test-only key protector), the broker in packaged asar builds, and the Settings
-  golden with the new Saved sign-ins section (the local visual run already
-  differs from the goldens before reaching it).
+  test-only key protector) and the broker in packaged asar builds. Bitwarden and
+  KeePassXC adapters and vault rollback detection do not exist.
 - Payments (#7) are tested with fixture pages in real Chromium, scripted
   checkouts, a process kill and a fake card-issuer server only: not validated
   with real merchants, payment processors (3-D Secure, wallets, per-field card
@@ -630,19 +634,26 @@ alone is not a shipped capability.
   real-Chromium-tested only: not validated with real external accounts, payment
   providers or long runs. No recorded lookup exists for page clicks, fills or
   sign-ins (a person determines the outcome). Recording does not capture typed
-  keystrokes, drag and drop, cross-origin frames or closed shadow roots. The
-  Settings golden needs a reviewed update for the changed automation notice.
-- Live-model evals, actual plugin installation in a Claude client and GUI
-  first-render performance measurements have not been verified.
+  keystrokes, drag and drop, cross-origin frames or closed shadow roots.
 - Live-model evals and actual plugin installation in a Claude client have not
   been verified. GUI first-render and responsiveness numbers come from Linux
   under Xvfb with software rendering, not real hardware.
 - Headless sessions, offscreen captures and display handoff were tested on
   Linux/Xvfb only; macOS and Windows behavior is not verified. Browsing-data
   import was tested with synthetic profile fixtures, not real browser profiles.
-  Search indexing is not a deferred queue (startup index rebuilds still block
-  opening). The Settings view gained a Display & resources section, so the
-  Linux `settings` golden needs a reviewed update on the reference platform.
+  Memory-pressure tab suspension on Windows and macOS is exercised through
+  injected values only.
+- Visual goldens were regenerated and reviewed for the accessibility and design
+  system work with pinned font rendering, on Linux only; they establish no
+  Windows or macOS appearance. The accessibility audit used axe-core and rendered
+  checks; no real screen reader, OS magnifier or high-contrast run was done (#31
+  stays open), and final brand sign-off (logo, typeface, palette, workspace
+  naming) is a human decision (#36 stays open).
+- Payment, credential and community-list features have no real-service
+  validation: no real merchant, card issuer, password manager account or
+  published community list was used, and the threat-intel provider, Mark-of-the-Web
+  and macOS quarantine metadata and a real malware scanner were not exercised
+  (#20 stays open).
 - Installers are unsigned (no signing/notarization credentials). The Windows
   installer was compiled but not built runnable or run; macOS packages, the
   release workflow on GitHub and real updates between published versions have not

@@ -43,7 +43,7 @@ same table, so branch on `status` (and `error.code` for detail) rather than on
 HTTP status or exit code. CLI exit codes are categories, not unique codes: 3 is
 a retryable conflict (stale state, request-ID conflicts, `duplicate_risk`,
 `resource_busy`), 4 is a refusal a person must resolve (authority denials,
-`site_blocked`, `budget_exhausted`) and 9 is `locked`. `partial` means the command completed but its result
+`site_blocked`, `budget_exhausted`) and 9 is `locked`; the complete code-to-status-to-HTTP-to-exit table is generated in [COMMANDS.md](COMMANDS.md). `partial` means the command completed but its result
 says it is incomplete (for example a length-limited reply or a hybrid search
 that fell back to lexical); never report it as complete. Outcomes of commands that reached the dispatcher also echo
 `request: {apiVersion, requestId, actor, clientId, taskId, deadlineMs}` from your
