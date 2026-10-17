@@ -28,3 +28,13 @@ Documentation examples are schema-validated offline, not executed against your
 browser. Their placeholder IDs require discovery in a running session. Eval
 reference tasks exercise the MCP bridge and real workspace service with a
 fixture browser; see `evals/README.md` for the boundaries of that evidence.
+
+Agents can read update state with `update.status` (MCP `weft_browser`; also
+allowed for scoped `read` clients). It reports the installed version, channel,
+kill switch, staged update and health without contacting the network. Checking,
+installing, rolling back and configuring updates are human-only; automation
+receives `human_required` and should ask the person to use Settings > Updates.
+
+```sh
+weft update.status
+```

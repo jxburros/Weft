@@ -1,0 +1,254 @@
+name: Release
+# Stable releases only: a vX.Y.Z tag that matches package.json, package-lock.json, the plugin
+# manifest and a CHANGELOG section. Assets go to a draft release that is published only after
+# every platform built, smoke-tested and was verified against its manifest and SHA256SUMS.txt.
+# See docs/RELEASING.md for signing setup and the manual procedure.
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, sign when configured and smoke-test without creating a release
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  # Release builds must never reach the network for updates while smoke-testing.
+  WEFT_DISABLE_UPDATES: '1'
+
+jobs:
+  verify:
+    name: Release gate and full test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Tag, versions and changelog agree
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            node scripts/release/metadata.js "$GITHUB_REF_NAME" release-notes.md
+          else
+            node scripts/release/metadata.js
+            echo "Dry run from $GITHUB_REF_NAME; no release will be created." > release-notes.md
+          fi
+          echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
+      - name: Install display and browser libraries
+        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64
+      - run: npm ci
+      - name: Install pinned Electron before concurrent tests
+        run: node node_modules/electron/install.js
+      - run: npm run check
+      - run: npm run test:docs
+      - run: npm run evals
+      - name: Supply-chain audit of shipped runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Full suite with real Chromium
+        run: xvfb-run -a npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  build:
+    name: Package ${{ matrix.name }}
+    needs: verify
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            builder: --win nsis --x64
+            smoke: dist/win-unpacked/Weft.exe
+            kind: nsis
+          - name: macos
+            os: macos-latest
+            builder: --mac dmg zip --arm64 --x64
+            smoke: dist/mac-arm64/Weft.app/Contents/MacOS/Weft
+            kind: dmg
+          - name: linux-x64
+            os: ubuntu-latest
+            builder: --linux AppImage deb --x64
+            smoke: dist/Weft-${{ needs.verify.outputs.version }}-x86_64.AppImage
+            kind: appimage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Decide signing from available secrets
+        id: signing
+        shell: bash
+        env:
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          signed=false
+          case "${{ matrix.name }}" in
+            windows-*) [[ -n "$AZURE_SIGNING_ENDPOINT" && -n "$AZURE_CLIENT_ID" || -n "$WIN_CSC_LINK" ]] && signed=true ;;
+            macos) [[ -n "$MAC_CSC_LINK" && -n "$APPLE_API_KEY_P8" ]] && signed=true ;;
+            linux-*) signed=false ;; # Linux packages are verified by SHA-512 manifests and SHA256SUMS.txt only.
+          esac
+          echo "signed=$signed" >> "$GITHUB_OUTPUT"
+          if [[ "$signed" == true ]]; then echo "${{ matrix.name }}: signed" > "signing-${{ matrix.name }}.txt"; else echo "${{ matrix.name }}: UNSIGNED (no signing credentials configured)" > "signing-${{ matrix.name }}.txt"; fi
+          cat "signing-${{ matrix.name }}.txt"
+      - name: Write App Store Connect API key
+        if: matrix.name == 'macos' && steps.signing.outputs.signed == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          key="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$APPLE_API_KEY_P8" > "$key"
+          echo "APPLE_API_KEY=$key" >> "$GITHUB_ENV"
+      - name: Build packages
+        shell: bash
+        env:
+          # Windows: Azure Trusted Signing (preferred) or a PFX certificate for signtool.
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          WEFT_WINDOWS_PUBLISHER: ${{ secrets.WEFT_WINDOWS_PUBLISHER }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # macOS: Developer ID certificate and App Store Connect API key for notarization.
+          CSC_LINK: ${{ matrix.name == 'macos' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ matrix.name == 'macos' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed == 'true' && 'true' || 'false' }}
+        run: npx electron-builder --config electron-builder.config.cjs ${{ matrix.builder }} --publish never
+      - name: Verify Windows Authenticode signatures
+        if: matrix.name == 'windows-x64' && steps.signing.outputs.signed == 'true'
+        shell: pwsh
+        run: |
+          foreach ($file in @(Get-ChildItem dist/*.exe) + @(Get-Item dist/win-unpacked/Weft.exe)) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') { throw "$($file.Name) signature status: $($signature.Status)" }
+            Write-Host "$($file.Name): $($signature.SignerCertificate.Subject)"
+          }
+      - name: Verify macOS signature, notarization and Gatekeeper
+        if: matrix.name == 'macos' && steps.signing.outputs.signed == 'true'
+        shell: bash
+        run: |
+          for app in dist/mac*/Weft.app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            spctl --assess --type execute --verbose "$app"
+          done
+          for dmg in dist/*.dmg; do xcrun stapler validate "$dmg"; done
+      - name: Smoke-test the packaged app
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64
+            xvfb-run -a node scripts/release/smoke-packaged.js "${{ matrix.smoke }}" ${{ matrix.kind }}
+          else
+            node scripts/release/smoke-packaged.js "${{ matrix.smoke }}" ${{ matrix.kind }}
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weft-${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/*.exe
+            dist/*.blockmap
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/latest*.yml
+            signing-${{ matrix.name }}.txt
+
+  publish:
+    name: Draft, verify and publish
+    needs: [verify, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install verification dependencies only
+        run: npm ci --ignore-scripts --omit=dev
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: weft-*
+          path: release
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+      - name: Verify manifests and write SHA256SUMS.txt
+        run: node scripts/release/verify-assets.js release "$VERSION"
+      - name: Sign checksums when a release key is configured
+        env:
+          RELEASE_GPG_KEY: ${{ secrets.RELEASE_GPG_KEY }}
+        shell: bash
+        run: |
+          if [[ -n "$RELEASE_GPG_KEY" ]]; then
+            printf '%s' "$RELEASE_GPG_KEY" | gpg --batch --import
+            gpg --batch --yes --armor --detach-sign --output release/SHA256SUMS.txt.asc release/SHA256SUMS.txt
+          else
+            echo "No RELEASE_GPG_KEY: SHA256SUMS.txt is not signed."
+          fi
+      - name: Compose release notes with signing status
+        shell: bash
+        run: |
+          {
+            cat release-notes.md
+            echo
+            echo "## Integrity and signing"
+            echo
+            sed 's/^/- /' release/signing-*.txt
+            echo "- Every asset is listed in SHA256SUMS.txt$( [[ -f release/SHA256SUMS.txt.asc ]] && echo ' (GPG-signed: SHA256SUMS.txt.asc)')."
+            echo "- In-app updates verify size and SHA-512 from latest*.yml and only accept stable releases from this repository."
+          } > notes.md
+          rm release/signing-*.txt
+      - name: Upload to a draft release
+        shell: bash
+        run: |
+          gh release create "$TAG" --draft --verify-tag --title "Weft $VERSION" --notes-file notes.md
+          gh release upload "$TAG" release/* --clobber
+      - name: Confirm every asset is attached before publishing
+        shell: bash
+        run: |
+          expected=$(ls release | sort)
+          actual=$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)
+          if [[ "$expected" != "$actual" ]]; then
+            echo "::error::Draft release assets differ from verified assets"; diff <(echo "$expected") <(echo "$actual"); exit 1
+          fi
+      - name: Publish as the latest stable release
+        run: gh release edit "$TAG" --draft=false --latest

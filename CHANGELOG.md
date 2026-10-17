@@ -15,6 +15,21 @@ alone is not a shipped capability.
   redaction; offline pinned community lists with verified rollback.
 - Centralized design tokens, improved keyboard/dialog behavior, added reviewed
   light/dark GUI goldens and real Chromium/cross-platform Node CI.
+- Added packaging with electron-builder 26.15.3 (build-time dev dependency):
+  Windows assisted per-user NSIS installer with generated brand bitmaps and Weft
+  text, data-preserving upgrades and opt-in confirmed data removal on uninstall;
+  macOS dmg/zip; Linux AppImage/deb. Packaged builds keep the `weft` profile folder.
+- Added a stable-only verified updater (`update.status`, human-only `update.check`,
+  `update.install`, `update.rollback`, `update.configure`) and a Settings > Updates
+  center: fixed GitHub source, size/SHA-512 verification, prerelease/downgrade
+  refusal, opt-in daily staging-only checks, health check with rollback and the
+  `WEFT_DISABLE_UPDATES` kill switch. No update traffic occurs unless a person
+  checks or opts in.
+- Added a tag-gated release workflow (version/changelog gate, signing when secrets
+  exist, packaged smoke tests, SHA256SUMS, draft-then-publish), a CI Linux package
+  smoke job, Dependabot, ADR-004 and `docs/RELEASING.md` (platforms, support policy,
+  Electron/Chromium cadence, trust roots, security gates). Releases need a
+  `## vX.Y.Z — date` changelog section.
 
 - Added canonical agent guidance, a generated skill reference, and a local MCP
   client plugin manifest/configuration. Guidance is available as `guide.get`
@@ -35,6 +50,10 @@ alone is not a shipped capability.
 - Hosted sync, concurrent collaboration and remote deployment are deferred.
 - Live-model evals, actual plugin installation in a Claude client and GUI
   first-render performance measurements have not been verified.
+- Installers are unsigned (no signing/notarization credentials). The Windows
+  installer was compiled but not built runnable or run; macOS packages, the
+  release workflow on GitHub and real updates between published versions have not
+  been exercised. Automatic rollback is AppImage-only.
 
 ### Notes
 

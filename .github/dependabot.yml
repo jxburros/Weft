@@ -1,0 +1,28 @@
+# Supply-chain tracking (docs/RELEASING.md, "Security maintenance"). Electron is grouped on its
+# own because every Electron/Chromium update needs the release security review in RELEASING.md.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    groups:
+      electron:
+        patterns: ['electron']
+      packaging:
+        patterns: ['electron-builder']
+      runtime:
+        dependency-type: production
+    labels: [dependencies]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
+    labels: [dependencies, ci]
