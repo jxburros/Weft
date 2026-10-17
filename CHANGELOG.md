@@ -7,6 +7,49 @@ alone is not a shipped capability.
 
 ### Changed
 
+- Search-index rebuilds are a bounded background job (#30, ADR-015 amended): a
+  search-index version change or an encrypted profile's in-memory index after
+  unlock no longer rebuilds while opening the workspace or on the first search.
+  Opening runs at most one short batch; the rest runs in ~10 ms batches between
+  commands, a plaintext rebuild resumes from its saved position after a restart,
+  and writes are indexed immediately. Searches meanwhile return partial results:
+  page mode sets `partial: true` with `coverage.lexical` (`complete`,
+  `unindexedRecords`, progress) and never verifies an absence; unpaged
+  `search.query` outcomes have status `partial` and an outcome-level `coverage`.
+  `search.status` reports progress, human-only `search.indexing` pauses or
+  resumes the rebuild, and metadata-only `indexing` events report it.
+- Tab suspension also follows the operating system's memory pressure (#30):
+  Linux pressure-stall information and available memory, Windows available
+  memory, and a conservative macOS free-page heuristic (Electron system memory
+  as a fallback), combined with the existing renderer budget and every
+  suspension blocker; human setting `resources.systemMemoryPressure` (default
+  on). Unsaved-input, media and fullscreen checks now cover every subframe,
+  including cross-origin frames; a frame that cannot be inspected keeps its tab
+  loaded (`frame_not_inspected`). Verified on Linux only; the macOS and Windows
+  sources are exercised through injected values.
+- A command whose deadline expires keeps its concurrency slot until its work
+  actually settles (it still answers `deadline_exceeded` promptly), so
+  timed-out-but-running commands count against global, client and task limits;
+  `resources.status` reports them as `agentCommands.afterDeadline`.
+- Payment records are sealed with the workspace encryption keys (ADR-014 and
+  ADR-019 amended): one AES-256-GCM envelope under the current data key,
+  unreadable while locked, sealed on enable (plaintext copy overwritten best
+  effort), written as plaintext before disable, re-sealed on data-key rotation
+  and restore; the interrupted-submission sweep runs at unlock for a locked
+  profile. Settings lists payment records as encrypted.
+- Encrypted profiles keep embedding vectors on disk sealed per chunk (an
+  index-key-derived AES-256-GCM key, keyed digest column) instead of in memory
+  only: enabling, disabling, locking and unlocking re-embed nothing, so unchanged
+  text is never sent to an embedding endpoint again. A vector that fails
+  authentication is refused and replaced on `search.reindex`. Profiles encrypted
+  earlier queue their embedded workspaces once at the first unlock.
+- Activity summaries keep identifier-shaped values only in id fields (plugin,
+  package, format, extractor and file names become character counts) and keep
+  only the origin of service, endpoint, model, list, provider and update URLs.
+- Approval cards say why a void approval is void (checkout changed, another
+  approval used first, task closed, cancelled, not saved, not clicked) instead
+  of a bare "invalidated"; a regression test pins that a click refused with
+  `inspection_required` leaves its one-time approval usable after inspecting.
 - Added resource archives (#16, ADR-012): `artifacts.capture` with
   `kind: "archive"` stores Chromium's MHTML serialization as content-addressed
   resource components with a manifest (URL, MIME, size, SHA-256, status) that

@@ -1,6 +1,6 @@
 # ADR 015: Headless sessions, resume state and resource scheduling
 
-Status: accepted (2026-10-17). Issues: #11, #24, #30.
+Status: accepted (2026-10-17); amended the same day after integration (deferred search indexing, OS memory pressure, subframe checks, deadline slots). Issues: #11, #24, #30.
 
 ## Context
 
@@ -111,7 +111,11 @@ resource scheduling touch session isolation, tab leases and the authority gate
 - **Concurrency**: every top-level non-human command takes one slot; limits are
   global (default 8), per client (4) and per task-bound grant (2). Exceeding one
   fails with `resource_busy` (HTTP 429, CLI exit 3) naming the resource and a retry
-  delay. People and the internal model reader are never throttled.
+  delay. People and the internal model reader are never throttled. A command
+  whose request deadline expires still answers `deadline_exceeded` promptly, but
+  keeps its slot until the underlying work settles, so timed-out work that is
+  still running counts against every limit (`resources.status` reports it as
+  `agentCommands.afterDeadline`).
 - **Capture queue**: `page.screenshot`, `page.pdf` and `artifacts.capture` run
   through one queue (concurrency 1, eight agent jobs waiting). People are queued
   ahead of agents and never refused. Jobs emit `capture` events and are listed
@@ -127,17 +131,42 @@ resource scheduling touch session isolation, tab leases and the authority gate
   `src/resources.js`; a human `maxCaptureEdge` caps every caller's captures.
 - **Suspension**: background tabs idle past `idleSuspendMinutes` (default 30) or,
   with `memoryBudgetMb`, least recently used tabs while page renderers exceed the
-  budget, release their renderer. The tab keeps its id, URL, title, version,
+  budget, release their renderer. Independently, the operating system's memory
+  pressure (see "System memory pressure" below; human setting
+  `systemMemoryPressure`, default on) suspends up to two background tabs idle
+  five minutes per 30 s cycle when moderate, up to four idle one minute when
+  critical, stopping as soon as the signal returns to normal. The tab keeps its id, URL, title, version,
   ownership, group and records; scroll and zoom are restored when it is opened or
   used. A tab is never suspended while active, in split view, pinned, leased or
   assisted by an agent, referenced by an open task, running or queuing input,
   downloading, audible, playing media, fullscreen, holding edited form fields or
-  focused content-editable text (main frame), or when the page check fails.
+  focused content-editable text in any frame, or when the page check fails. The
+  top frame is checked in Weft's isolated world; each subframe (up to 50),
+  including cross-origin frames, through its own `webFrameMain` (Electron has no
+  isolated world there, so a hostile frame can at most make its own tab look
+  busier). A frame that cannot be inspected (timeout, crash, refusal, or more
+  than 50 frames) blocks suspension as `frame_not_inspected`: possibly unsaved.
   Suspension never changes task state. Suspended tabs are restored unloaded after
   a restart.
-- **Indexing** stays incremental inside each record transaction (measured by
-  `perf/budgets.js`); there is no deferred indexing queue, and a search-index
-  version change still rebuilds at startup.
+- **Indexing** (amended after integration): writes index incrementally inside
+  each record transaction, and a full rebuild is a deferred background job. A
+  search-index version change (plaintext) or an encrypted profile's in-memory
+  index after unlock starts empty; opening runs at most one short batch (30 ms /
+  2,000 records), then the workspace runs bounded batches (about 10 ms or 500
+  records, in `(collection, id)` order, one transaction each) on timers between
+  commands, so commands and other I/O interleave. A plaintext rebuild stores its
+  cursor with each batch and resumes after a restart; an encrypted one restarts
+  at each unlock and stops at lock. Until it finishes, `search.query` results are
+  partial: page mode sets `partial: true`, reports `coverage.lexical`
+  (`complete: false`, `unindexedRecords`, `indexing` progress) and never verifies
+  an absence; unpaged results stay a list with outcome `status: partial` and an
+  outcome-level `coverage`. `search.status` reports progress; the human-only
+  `search.indexing {action: pause|resume}` pauses or resumes it (a paused
+  plaintext rebuild resumes at the next start); metadata-only `indexing` events
+  report `started`, `progress` (every 10%), `paused`, `resumed`, `completed` and
+  `failed` with record counts. The embedding queue (ADR 018) was already a
+  bounded asynchronous drain; with sealed vectors (ADR 014 amendment) unlocking
+  no longer queues anything.
 - Frequent browser-session and history writes commit only their own rows, and
   browser commands no longer copy the whole workspace per call.
 
@@ -169,13 +198,35 @@ Merged with ADR 012-014 and 016-018:
   the ADR 018 event registry; the legacy `waiting` task state is read as
   `waiting_on_human` in resume continuation links.
 
+## System memory pressure
+
+`src/memory-pressure.js` samples what each platform offers without a native
+module or child process, and Weft documents the limits rather than claiming a
+uniform signal:
+
+| Platform | Source | Levels |
+| --- | --- | --- |
+| Linux | `/proc/pressure/memory` (PSI, kernel 4.20+ when enabled) and `os.freemem()` (MemAvailable) | PSI `some avg10` ≥ 10% moderate, ≥ 40% critical; `full avg10` ≥ 10% critical; available memory < 10% moderate, < 5% critical. Without PSI, available memory only. |
+| Windows | `os.freemem()` (available physical memory) | available < 10% moderate, < 5% critical |
+| macOS | `os.freemem()` (free pages only: excludes inactive, purgeable and compressible memory) | free < 2% moderate, never critical. The kernel's own pressure level is not read. |
+| Fallback | Electron `process.getSystemMemoryInfo()` (`free` excludes disk cache) | treated like the macOS free-page figure |
+
+The signal and the renderer budget are independent: either can suspend tabs,
+and both respect every blocker. Tests inject the signal source; only the Linux
+container sources were exercised for real (no PSI pressure was induced).
+
 ## Measured targets
 
-`perf/README.md` records reference numbers from `perf/responsiveness.js`
-(Linux/Xvfb, software rendering) and `test/responsiveness.test.js` enforces
-generous ceilings: GUI first render < 15 s, agent navigation p95 < 3 s, input and
-scroll p95 < 1.5 s, total memory < 3.5 GB and main-process CPU < 400% during a
-3,000-record workload with four concurrent agents.
+`perf/README.md` records reference numbers from `perf/responsiveness.js` and
+`test/responsiveness.test.js` enforces generous ceilings: GUI first render
+< 15 s, agent navigation p95 < 3 s, input and scroll p95 < 1.5 s, total memory
+< 3.5 GB and main-process CPU < 400% during a 3,000-record workload with four
+concurrent agents. All measured numbers come from a Linux container under Xvfb
+with software rendering (`--disable-gpu`); they are regression ceilings, not
+real-hardware, GPU or other-platform measurements. `test/indexing.test.js`
+checks that opening a 12,000-record store with a pending rebuild adds well under
+the synchronous rebuild time, and `perf/budgets.js` measures the background
+rebuild of an encrypted 11k-record profile after enabling and after unlock.
 
 ## Consequences and limits
 
@@ -184,8 +235,12 @@ scroll p95 < 1.5 s, total memory < 3.5 GB and main-process CPU < 400% during a
 - Moving between headless and headed rendering reloads pages; work that lives
   only in a page (unsent forms, in-page state) is lost at that boundary and
   reported, not preserved.
-- Memory pressure uses Chromium process metrics against a configured budget; it
-  does not subscribe to an OS memory-pressure signal. Cross-origin frames are not
-  inspected for unsaved input or media.
+- Memory pressure combines Chromium renderer metrics against an optional budget
+  with a sampled OS signal (above); macOS has only a coarse free-page heuristic,
+  and no platform's signal was validated under real memory pressure. Subframe
+  checks run in the frame's main world; a frame that cannot be inspected keeps
+  its tab loaded.
+- Search results are partial while an index rebuild runs; agents must read
+  `coverage` before treating a result list or an absence as complete.
 - Browsing-data import is fixture-tested; Safari, encrypted or locked profile
   formats and synced data are not supported.
