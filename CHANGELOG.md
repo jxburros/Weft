@@ -221,6 +221,27 @@ alone is not a shipped capability.
   replaced. The GUI test waits for the durable reply rather than the streaming
   bubble, checks the message was sent once, and waits for the dark wordmark
   image to load instead of sampling it once.
+- Added a credential broker and protected login operation (#6, ADR-017): saved
+  sign-ins are purpose-bound references (label, purpose, exact origins, optional
+  embedded-frame origins, expiry, revocation, masked account) created only in
+  Settings > Saved sign-ins, with the secret typed into a separate browser-owned
+  window. A separate broker process (empty environment, Node permission model
+  limited to its vault directory) seals entries with AES-256-GCM under a
+  `safeStorage`-wrapped key and authenticates their authorization metadata;
+  Linux `basic_text` is refused. Optional 1Password CLI (`op read`) adapter,
+  tested only with a fake CLI. New commands `credentials.status/list/get`,
+  `credentials.fill` (`credential_use`: exact one-time approval bound to the
+  destination, or a human task grant) and human-only `credentials.create/update/
+  revoke/delete/grantTask/revokeGrant/configureProvider`; MCP `weft_browser`
+  grows accordingly (reviewed baseline update) and a `credentials` guidance
+  topic was added.
+- `credentials.fill` verifies top-level and target-frame origins in the browser
+  process and the broker, fills in the top frame's isolated world, and returns
+  sanitized status only. During it and a cooldown every other automation command
+  on the tab except `page.inspect` is refused (titles withheld); afterwards filled
+  fields stay redacted in snapshots and captures, `page.evaluate` is refused on
+  the filled document, and observation is refused if the page reveals or copies
+  the secret. Refusals carry a fixed `error.details.credential` word.
 - Backups contain the workspace database and its components only; approvals,
   grants, autonomy policy, the activity log, browser security state, plugin and
   extension state and updater state are deliberately not restored (see
@@ -238,6 +259,12 @@ alone is not a shipped capability.
 - Activity integrity is tamper evidence only; a process that can rewrite the
   profile can rewrite the log. The changed agent-connections dialog needs a
   reviewed golden update in the Linux visual CI job (local fonts differ).
+- The credential broker has not had an independent security review, so
+  credential isolation is not asserted (#6 stays open). Not verified: a real
+  1Password account, macOS Keychain/Windows DPAPI/libsecret behavior (tests use a
+  test-only key protector), the broker in packaged asar builds, and the Settings
+  golden with the new Saved sign-ins section (the local visual run already
+  differs from the goldens before reaching it).
 - Live-model evals, actual plugin installation in a Claude client and GUI
   first-render performance measurements have not been verified.
 - Installers are unsigned (no signing/notarization credentials). The Windows
