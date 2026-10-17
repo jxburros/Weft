@@ -112,8 +112,16 @@ if (harness) {
       assert.equal(after.find(tab => tab.id === leased.id).controller, 'available');
       browser.activate(tasked.id);
       await until(() => browser.tab(tasked.id).view.webContents.getTitle?.() === 'Page tasked', 'activation reloads the tab');
-      // Workload: repeated suspend/restore cycles release every renderer they create.
+      // Split view (#24): both panes render and the saved focused pane receives keyboard focus.
       browser.activate(form.id);
+      window.focus();
+      browser.setLayout({ x: 0, y: 0, width: 1000, height: 700, visible: true, splitTabId: current.id, focusedPane: 'secondary' });
+      await until(() => browser.attachedViews.size === 2, 'two panes attached');
+      await until(() => browser.tab(current.id).view.webContents.isFocused(), 'secondary pane focused');
+      browser.setLayout({ x: 0, y: 0, width: 1000, height: 700, visible: true, splitTabId: current.id, focusedPane: 'primary' });
+      await until(() => browser.tab(form.id).view.webContents.isFocused(), 'primary pane focused');
+      browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
+      // Workload: repeated suspend/restore cycles release every renderer they create.
       const baseline = renderers();
       for (let i = 0; i < 20; i++) {
         assert.equal((await dispatch('tabs.suspend', { tabId: tasked.id }, human)).result.suspended, true);

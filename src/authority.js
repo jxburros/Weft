@@ -65,7 +65,7 @@ export class Authority {
   levelFor(context, workspaceId) { return effectiveLevel(this.identityLevel(context), workspaceId ? this.policy.workspaces[workspaceId] : null); }
   taskOpen(taskId) {
     if (!taskId) return true;
-    const task = this.workspace?.snapshot?.().tasks?.find(item => item.id === taskId);
+    const task = (this.workspace?.data ?? this.workspace?.snapshot?.())?.tasks?.find(item => item.id === taskId);
     return Boolean(task) && !TERMINAL_TASK.includes(task.status);
   }
   destinationFor(command, args, target) {

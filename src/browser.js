@@ -111,6 +111,12 @@ export class Browser {
 
   get workspaceId() { return this.workspaceService?.activeWorkspaceId ?? 'general'; }
 
+  /** Read-only lookup on live state; copying every record per command made large workspaces slow (#30). */
+  workspaceExists(workspaceId) {
+    const workspaces = this.workspaceService?.data?.workspaces ?? this.workspaceService?.snapshot().workspaces ?? [];
+    return workspaces.some(workspace => workspace.id === workspaceId);
+  }
+
   partition(workspaceId) {
     return this.sessions.get(workspaceId)?.session ?? this.electron.session.fromPartition(`persist:weft-${workspaceId}`);
   }
@@ -273,7 +279,8 @@ export class Browser {
 
   setLayout(bounds) {
     if (!bounds || typeof bounds !== 'object' || Array.isArray(bounds)
-      || Object.keys(bounds).some(key => !['x', 'y', 'width', 'height', 'visible', 'splitTabId'].includes(key))
+      || Object.keys(bounds).some(key => !['x', 'y', 'width', 'height', 'visible', 'splitTabId', 'focusedPane'].includes(key))
+      || (bounds.focusedPane != null && !['primary', 'secondary'].includes(bounds.focusedPane))
       || typeof bounds.visible !== 'boolean'
       || !['x', 'y', 'width', 'height'].every(key => Number.isInteger(bounds[key]) && bounds[key] >= 0 && bounds[key] <= 20000)
       || (bounds.splitTabId != null && (!Number.isInteger(bounds.splitTabId) || bounds.splitTabId < 1))) {
@@ -312,6 +319,11 @@ export class Browser {
       const half = Math.floor(bounds.width / visible.length);
       tab.view.setBounds({ ...bounds, x: bounds.x + index * half, width: index === visible.length - 1 ? bounds.width - index * half : half });
     });
+    // The focused split pane (#24) receives keyboard focus once when it changes, never on every layout.
+    const pane = visible.length === 2 ? requested.focusedPane ?? 'primary' : null;
+    const focusKey = pane ? `${visible[0].id}:${visible[1].id}:${pane}` : null;
+    if (focusKey && focusKey !== this.focusedPaneKey) visible[pane === 'secondary' ? 1 : 0].view.webContents.focus?.();
+    this.focusedPaneKey = focusKey;
   }
 
   /** Hidden window: keep the active tab (and any tab being captured) attached so offscreen rendering has a size. */
@@ -383,7 +395,7 @@ export class Browser {
     this.restoring = true;
     try {
       for (const record of saved?.tabs ?? []) {
-        if (!this.workspaceService.snapshot().workspaces.some(workspace => workspace.id === record.workspaceId)) continue;
+        if (!this.workspaceExists(record.workspaceId)) continue;
         try { await this.newTab(record.url, record.workspaceId, record); } catch { /* Keep a recoverable tab after a failed restore. */ }
       }
       const selected = this.tabs.get(saved?.activeId);
@@ -412,7 +424,7 @@ export class Browser {
   }
 
   async newTab(url = 'about:blank', workspaceId = this.workspaceId, restored = {}) {
-    if (this.workspaceService && !this.workspaceService.snapshot().workspaces.some(workspace => workspace.id === workspaceId)) throw new Error('Workspace not found');
+    if (this.workspaceService && !this.workspaceExists(workspaceId)) throw new Error('Workspace not found');
     url = safeUrl(url);
     const id = Number.isSafeInteger(restored.id) && restored.id > 0 && !this.tabs.has(restored.id) ? restored.id : this.nextTabId;
     this.nextTabId = Math.max(this.nextTabId, id + 1);
@@ -1155,7 +1167,7 @@ export class Browser {
   async executeAdmitted(name, args = {}, context = { actor: 'human' }) {
     const human = ['human', 'admin'].includes(context.actor);
     const workspaceId = args.workspaceId ?? this.workspaceId;
-    if (this.workspaceService && !this.workspaceService.snapshot().workspaces.some(workspace => workspace.id === workspaceId)) throw new Error('Workspace not found');
+    if (this.workspaceService && !this.workspaceExists(workspaceId)) throw new Error('Workspace not found');
     const session = () => this.sessions.get(workspaceId)?.session ?? this.sessionFor(workspaceId);
     if (!human && ['cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear'].includes(name)) throw new Error('Storage administration requires the trusted browser interface');
     if (name !== 'tabs.move' && args.tabId != null && args.workspaceId != null && this.tab(args.tabId).workspaceId !== args.workspaceId) throw new Error('Tab belongs to a different workspace');

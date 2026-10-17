@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { netscapeFile } from "./fixtures/browsing-data.mjs";
 
 if (process.argv.includes("--gui-workflows")) {
   const { app, BrowserWindow } = electron;
@@ -185,6 +186,58 @@ if (process.argv.includes("--gui-workflows")) {
       true,
     );
     await click('[data-action="close-dialog"]');
+    // Tab groups (#24): created, assigned and collapsed through accessible controls with text labels.
+    await click("#page-more");
+    await click('[data-action="show-tabs"]');
+    await click('[data-action="new-group"]');
+    await fill("name", "Research");
+    await run(`document.querySelector('#edit-form [name="color"]').value = "sage"`);
+    await submit();
+    await until('!document.getElementById("dialog").open');
+    await until('document.querySelector(".tab-group")?.textContent.includes("Research") && document.querySelector(".tab-group").textContent.includes("Sage")');
+    assert.equal(await run('document.querySelector(".tab-group").getAttribute("role")'), "group");
+    await until('(async()=> (await window.weft.execute("tabs.list")).some(t=>t.groupId))()');
+    const groupHeader = '.tab-group-header button[data-action="toggle-group"]';
+    assert.equal(await run(`document.querySelector('${groupHeader}').getAttribute("aria-expanded")`), "true");
+    await click(groupHeader);
+    await until(`document.querySelector('${groupHeader}').getAttribute("aria-expanded") === "false" && !document.querySelector(".tab-group .tab")`);
+    await click(groupHeader);
+    await until('document.querySelector(".tab-group .tab") !== null');
+    // Tab search: titles and URLs with ownership, group and task indicators as text.
+    await click('[data-action="search-tabs"]');
+    await run(`document.getElementById("tab-search-query").value = "reference"; document.getElementById("tab-search-query").dispatchEvent(new Event("input"))`);
+    await until('document.querySelector("#tab-search-results .tab-result")?.textContent.includes("Group: Research (Sage)")');
+    assert.match(await run('document.querySelector("#tab-search-results .tab-result").textContent'), /Reference fixture.*Available to agents/s);
+    await run('document.getElementById("tab-search-query").dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowDown", bubbles: true}))');
+    assert.equal(await run('document.activeElement.classList.contains("tab-result")'), true);
+    await run("document.activeElement.click()");
+    await until('!document.getElementById("dialog").open && document.getElementById("breadcrumb-section").textContent === "Live page"');
+    // Resume (#24): pinned resources and the last section are saved for this workspace.
+    await click('[data-section="materials"]');
+    await click('[data-action="pin-resource"][data-kind="material"]');
+    await until('(async()=> (await window.weft.execute("resume.get", {})).pinned.length === 1)()');
+    await until('(async()=> (await window.weft.execute("resume.get", {})).view.section === "materials")()');
+    await click("#home");
+    await until('document.getElementById("resume-panel")?.hidden === false && document.getElementById("resume-panel").textContent.includes("Research notes")');
+    // Browsing-data import (#24): preview first, never passwords or sessions, then import.
+    const bookmarkFile = netscapeFile(process.env.WEFT_TEST_PROFILE);
+    await click("#settings-button");
+    await until('document.getElementById("display-panel")?.textContent.includes("Window shown")');
+    await click('[data-action="import-browsing"]');
+    await until('document.getElementById("dialog-title")?.textContent === "Import bookmarks and history"');
+    assert.match(await run('document.getElementById("dialog-content").textContent'), /Never imported: Passwords/);
+    await run(`document.querySelector('#dialog-content input[name="source"][value="file"]').checked = true; document.querySelector('#dialog-content input[name="path"]').value = ${JSON.stringify(bookmarkFile)}; document.querySelector('#dialog-content select[name="kind"]').value = "netscape-html"`);
+    await click('[data-action="preview-browsing"]');
+    await until('document.getElementById("browsing-preview")?.textContent.includes("Bookmarks: 3 found")');
+    await click("#confirm-browsing-import");
+    await until('!document.getElementById("dialog").open');
+    await until('(async()=> (await window.weft.execute("bookmarks.list")).some(b => b.url === "https://plain.example.com/"))()');
+    // Resource limits (#30) are human settings edited in the same window.
+    await click('[data-action="manage-resources"]');
+    await until('document.getElementById("dialog-title")?.textContent === "Resource limits"');
+    await fill("idleSuspendMinutes", "45");
+    await submit();
+    await until('(async()=> (await window.weft.execute("settings.get")).resources?.idleSuspendMinutes === 45)()');
     await click("#settings-button");
     await click('[data-action="new-model"]');
     await fill("name", "Local fixture");

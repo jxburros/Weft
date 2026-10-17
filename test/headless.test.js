@@ -181,6 +181,9 @@ if (process.argv.includes('--headless-harness')) {
         const after = await run('page.screenshot', { tabId: b1.id, workspaceId: second.id });
         assert.ok(after.capture.image.width > 100);
         assert.equal((await run('display.status')).transitions.length, 2);
+        // The person's last view is saved for the workspace (#24).
+        await weft.gui('document.querySelector(\'[data-section="tasks"]\').click()');
+        await until(async () => (await run('resume.get', { workspaceId: second.id })).view.section === 'tasks', 'resume record saved');
         const databaseBefore = statSync(join(profile, 'workspace-data', 'workspace.sqlite')).ino;
         await run('browser.close');
         assert.equal(await weft.exited, 0, weft.output);
@@ -190,6 +193,9 @@ if (process.argv.includes('--headless-harness')) {
         const restarted = await until(() => run('display.status'), 'restarted API ready');
         assert.equal(restarted.profile.fingerprint, expectedFingerprint);
         assert.equal(statSync(join(profile, 'workspace-data', 'workspace.sqlite')).ino, databaseBefore, 'the same workspace database is reopened');
+        // The trusted window (still hidden) reopens the saved section and discloses what a restore cannot bring back.
+        await until(() => weft.gui('document.getElementById("breadcrumb-section").textContent === "Tasks"'), 'saved section restored');
+        assert.match(await weft.gui('document.getElementById("safety-notices").textContent'), /restored.*sign in again.*Unsent form input/s);
         const tabs = await run('tabs.list', { workspaceId: first.id });
         assert.ok([a1.id, a2.id].every(id => tabs.some(tab => tab.id === id && tab.url.startsWith(origin))), 'tabs are restored from the checkpoint');
         assert.equal(tabs.find(tab => tab.id === a1.id).controller, 'available', 'agent leases end with the session');

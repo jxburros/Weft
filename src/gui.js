@@ -926,7 +926,7 @@ function layout() {
       width: Math.floor(box.width),
       height: Math.floor(box.height),
       visible: show,
-      ...(splitTabId ? { splitTabId } : {}),
+      ...(splitTabId ? { splitTabId, focusedPane } : {}),
     })
     .catch(() => {});
 }
@@ -2392,6 +2392,7 @@ async function act(button) {
       saveResume({ split: { tabId: splitTabId, focusedPane } });
       closeDialog();
       renderShell();
+      layout();
       toast(`Focused pane: ${focusedPane === "secondary" ? "right" : "left"}.`);
       break;
     case "display-hide":
