@@ -1179,6 +1179,14 @@ export class Browser {
   }
 
   checkControl(tab, args, context, name) {
+    // Every refusal here precedes any page effect: mark it not started so a one-time approval can be given back.
+    try { this.precheckControl(tab, args, context, name); }
+    catch (error) { if (error && typeof error === 'object') error.notStarted = true; throw error; }
+    tab.version++;
+    this.persist();
+  }
+
+  precheckControl(tab, args, context, name) {
     if (['page.click', 'page.fill'].includes(name) && (args.ref == null) === (args.selector == null)) throw failure('invalid_arguments', 'Provide exactly one of selector or ref');
     if (args.expectedVersion != null && args.expectedVersion !== tab.version) throw stale('version', 'Stale tab version; inspect current state');
     const human = isHuman(context.actor);
@@ -1198,8 +1206,6 @@ export class Browser {
     }
     if (args.ref != null) this.assertRef(tab, args, context.actor);
     if (args.observationId != null) this.assertObservation(tab, args.observationId, context.actor);
-    tab.version++;
-    this.persist();
   }
 
   closeWorkspace(workspaceId) {

@@ -334,6 +334,32 @@ test('workspace autonomy ceilings bind bootstrap automation; only the GUI human 
   assert.equal(approval.error.details.authority.level, 'assist');
 });
 
+test('a one-time approval is given back when the browser refuses the input before it starts', { timeout: 20000 }, async t => {
+  const f = await fixture(t);
+  const agent = await f.grant({ scopes: ['read', 'tabs.control'], autonomy: 'scoped' });
+  const pending = await f.rest('page.click', clickArgs(f), agent.token);
+  const { approvalId } = pending.error.details.authority;
+  assert.equal((await f.dispatch('approvals.approve', { id: approvalId, mode: 'once' }, human)).error, null);
+  // Approved, but this agent has not inspected the tab: the browser refuses before any input.
+  const refused = await f.rest('page.click', clickArgs(f), agent.token);
+  assert.equal(refused.error.code, 'stale_state');
+  assert.equal(refused.error.details.reason, 'inspection_required');
+  assert.equal(refused.execution, 'not_started');
+  assert.equal(f.scripts.length, 0);
+  const item = (await f.dispatch('approvals.list', { status: 'all' }, human)).result.find(entry => entry.id === approvalId);
+  assert.equal(item.status, 'approved', 'the refused attempt did not spend the human decision');
+  // After inspecting, the identical command uses the same approval exactly once.
+  assert.equal((await f.rest('page.inspect', { workspaceId: f.firstId, tabId: 1 }, agent.token)).error, null);
+  const executed = await f.rest('page.click', clickArgs(f), agent.token);
+  assert.equal(executed.error, null, JSON.stringify(executed.error));
+  assert.equal(executed.result.outcome, 'unverified');
+  assert.equal((await f.dispatch('approvals.list', { status: 'all' }, human)).result.find(entry => entry.id === approvalId).status, 'consumed');
+  assert.equal((await f.rest('page.click', clickArgs(f), agent.token)).error.code, 'approval_required', 'still single use');
+  const restored = (await f.dispatch('activity.list', { scope: 'all', limit: 200 }, human)).result.items.find(entry => entry.reason === 'approval_restored');
+  assert.equal(restored.approvalId, approvalId);
+  assert.equal((await f.dispatch('activity.verify', {}, human)).result.status, 'intact');
+});
+
 test('atomic batches pass the gate per contained command; one exact approval covers exactly that batch', { timeout: 20000 }, async t => {
   const f = await fixture(t);
   const assist = await f.grant({ scopes: ['read', 'records.write'], autonomy: 'assist' });

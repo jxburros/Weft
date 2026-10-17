@@ -73,7 +73,11 @@ destination. Pending requests expire after 15 minutes; at most 25 per actor.
 The human chooses:
 
 - approve once: the identical retry by the same actor consumes it (valid 15
-  minutes); any difference creates a new request;
+  minutes); any difference creates a new request. It is consumed when the gate
+  admits the command and given back if a pre-execution check then refuses the
+  command before any effect (browser inspection-before-input and stale-state
+  checks, request-ID conflicts), recorded as `approval_restored`; a command
+  that starts and then fails keeps it consumed;
 - approve for a period (standing, 5 minutes to 24 hours): the same actor, command,
   workspace and destination origin; bound to the client's task when the grant is
   task-bound and ended when that task closes; refused for once-only classes;

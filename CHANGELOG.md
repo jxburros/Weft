@@ -209,6 +209,11 @@ alone is not a shipped capability.
   agent batch stays in one workspace. Request IDs are scoped per client, replays
   are re-authorized, and activity records batches, each applied command, replays
   and dry runs.
+- Fixed: a one-time approval was spent when the gate admitted a command even
+  if the browser then refused it before any input (`inspection_required` or
+  other stale-state checks). Such pre-execution refusals now give the approval
+  back for the identical retry (recorded as `approval_restored`); a command
+  that starts keeps it consumed.
 - Backups contain the workspace database and its components only; approvals,
   grants, autonomy policy, the activity log, browser security state, plugin and
   extension state and updater state are deliberately not restored (see

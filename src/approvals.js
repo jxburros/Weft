@@ -79,6 +79,8 @@ export class ApprovalQueue {
    * Consume matching approval evidence. Exact one-time approvals are consumed atomically;
    * standing approvals cover the same actor, command, workspace and destination origin until expiry.
    * `allowStanding: false` accepts only an exact one-time approval (atomic batches).
+   * A consumed one-time approval is given back with restore() when the command is refused by a
+   * pre-execution check before any effect, so a refused attempt does not use up the human's decision.
    */
   match({ fingerprint, actor, command, workspaceId, destination, taskId, actionClass, allowStanding = true }, isTaskOpen = () => true) {
     this.expire();
@@ -93,6 +95,17 @@ export class ApprovalQueue {
       && (!item.taskId || (item.taskId === taskId && isTaskOpen(item.taskId))));
     if (standing) { standing.uses = (standing.uses ?? 0) + 1; this.save(); return { standing: true, approvalId: standing.id }; }
     return {};
+  }
+  /** Return a consumed one-time approval to approved when its command never started. Expiry still applies. */
+  restore(approvalId) {
+    const item = this.items.find(entry => entry.id === approvalId && entry.status === 'consumed' && entry.mode === 'once');
+    if (!item) return false;
+    delete item.consumedAt;
+    item.status = item.expiresAt > this.clock() ? 'approved' : 'expired';
+    item.restoredCount = (item.restoredCount ?? 0) + 1;
+    this.save();
+    this.onChange();
+    return item.status === 'approved';
   }
   request({ fingerprint, actor, clientId, command, args, actionClass, categories, workspaceId, tabId, taskId, destination, reason, level, preview: shown }) {
     this.expire();

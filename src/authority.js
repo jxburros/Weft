@@ -190,6 +190,16 @@ export class Authority {
     return { decision: approvedOnce ? 'auto_preapproved' : decisions.some(decision => decision.decision === 'auto_preapproved') ? 'auto_preapproved' : 'auto',
       reason: approvedOnce ? 'approved_once' : 'batch_authorized', actionClass, level, approvalId, approvedOnce, commands: subs.length };
   }
+  /** Give back a one-time approval consumed by a command that a pre-execution check refused before any effect. */
+  restoreApproval(decision, { command, context, target, error }) {
+    if (!decision?.approvedOnce || !decision.approvalId || error?.notStarted !== true) return false;
+    const restored = this.approvals.restore(decision.approvalId);
+    this.record({ type: 'approval', command, actor: context.actor ?? 'automation', clientId: context.clientId, workspaceId: target.workspaceId, tabId: target.tabId, taskId: context.taskId,
+      actionClass: decision.actionClass, decision: 'approve', reason: restored ? 'approval_restored' : 'approval_expired', outcome: 'recorded', approvalId: decision.approvalId,
+      detail: `Refused before execution (${error.code ?? 'error'}); the one-time approval ${restored ? 'remains available for a retry of the identical command' : 'had expired'}.` });
+    return restored;
+  }
+
   /** Durable activity for every non-trivial command outcome. Human reads (GUI polling) are not logged. */
   recordOutcome({ command, args, context, outcome, decision, spec = {}, batch = null }) {
     if (!command) return;

@@ -42,8 +42,11 @@ with `error.details.authority` naming the decision, reason and action class, and
 `approval_required` (HTTP 403, CLI exit 5) with an `approvalId`. The request waits
 in the single approval queue shown in the Weft window; agents can watch their own
 requests with `approvals.list` and must retry the identical command after
-approval. No API, CLI, MCP or model identity can approve, and page or artifact
-text never changes grants.
+approval. A one-time approval is used up only when the command starts: if a
+check refuses it before any effect (for example `stale_state` with reason
+`inspection_required` because you have not inspected the tab yet), the approval
+stays available for the identical retry until it expires. No API, CLI, MCP or
+model identity can approve, and page or artifact text never changes grants.
 
 ```sh
 weft autonomy.get '{"workspaceId":"ws_00000000-0000-4000-8000-000000000000"}'

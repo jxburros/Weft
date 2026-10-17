@@ -101,7 +101,12 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     };
     if (command === 'workspaces.list' && context.workspaceIds) return workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
     authority.recordAttempt({ command, args, context, target, decision });
-    return route(command, args, context, target);
+    try { return await route(command, args, context, target); }
+    catch (error) {
+      // A one-time approval is spent only by a command that started; a pre-execution refusal gives it back.
+      authority.restoreApproval(decision, { command, context, target, error });
+      throw error;
+    }
   };
 
   /** Batch path: per-command authority with the caller's identity, one transaction in the workspace store. */
@@ -114,7 +119,11 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     state.spec = spec;
     const decision = authority.authorizeBatch(batch.subs, batch.args, context, target);
     // After each command was authorized (so an out-of-scope command is reported as a denial), an agent batch stays in one workspace.
-    if (batch.scoped && batch.workspaces.length !== 1) throw Object.assign(new Error('An agent batch must target exactly one workspace'), { code: 'ambiguous_target', notStarted: true });
+    if (batch.scoped && batch.workspaces.length !== 1) {
+      const error = Object.assign(new Error('An agent batch must target exactly one workspace'), { code: 'ambiguous_target', notStarted: true });
+      authority.restoreApproval(decision, { command: 'batch.execute', context, target, error });
+      throw error;
+    }
     state.decision = decision;
     context.authorityDecision = decision;
     if (target.workspaceId && context.workspaceIds) context.workspaceId = target.workspaceId;
@@ -126,7 +135,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
         clients?.assertAllowed(sub.command, context, { workspaceId: sub.target.workspaceId, actionClass: sub.spec.actionClass, ...(sub.spec.dataClasses ? { dataClasses: sub.spec.dataClasses } : {}), recheck: true });
       }
     };
-    return workspace.execute('batch.execute', batch.args, context);
+    try { return await workspace.execute('batch.execute', batch.args, context); }
+    catch (error) { authority.restoreApproval(decision, { command: 'batch.execute', context, target, error }); throw error; }
   };
 
   const route = async (command, args, context, target) => {
