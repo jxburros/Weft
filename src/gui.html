@@ -16,10 +16,10 @@
     <a class="skip-link" href="#content">Skip to workspace content</a>
     <div class="app" id="app">
       <nav class="workspace-rail" aria-label="Workspaces">
-        <button class="brand-mark" id="home" title="Workspace overview">
-          <img src="../assets/logo/svg/mark-full-color.svg" alt="Weft" />
+        <button class="brand-mark" id="home" title="Workspace overview" aria-label="Workspace overview">
+          <img src="../assets/logo/svg/mark-full-color.svg" alt="" />
         </button>
-        <div class="rail-line"></div>
+        <div class="rail-line" aria-hidden="true"></div>
         <div id="workspace-buttons"></div>
         <button
           class="rail-button add-workspace"
@@ -39,7 +39,7 @@
             id="settings-button"
             aria-label="Settings"
           ></button>
-          <div class="user-avatar" title="Local profile">You</div>
+          <div class="user-avatar" title="Local profile" aria-hidden="true">You</div>
         </div>
       </nav>
       <aside class="workspace-sidebar" id="sidebar">
@@ -49,35 +49,36 @@
             alt="Weft"
           /><span>YOUR PROJECT SPACE</span>
         </div>
-        <button id="workspace-heading" class="workspace-heading">
+        <button id="workspace-heading" class="workspace-heading" aria-haspopup="dialog">
           <span
             ><small>WORKSPACE</small
             ><strong id="workspace-name">My workspace</strong></span
-          ><span>⌄</span>
+          ><span aria-hidden="true">⌄</span>
         </button>
-        <button id="search-button" class="search-button">
-          <span class="search-icon"></span><span>Find anything</span
-          ><kbd>Ctrl K</kbd>
+        <button id="search-button" class="search-button" aria-haspopup="dialog" aria-keyshortcuts="Control+K">
+          <span class="search-icon" aria-hidden="true"></span><span>Find anything</span
+          ><kbd aria-hidden="true">Ctrl K</kbd>
         </button>
         <nav id="sections" aria-label="Workspace sections"></nav>
-        <div class="sidebar-divider"></div>
+        <div class="sidebar-divider" aria-hidden="true"></div>
         <div class="sidebar-label">
-          <span>OPEN TABS</span
+          <span id="open-tabs-label">OPEN TABS</span
           ><button
             id="new-tab"
             class="icon-button"
             aria-label="New tab"
+            aria-keyshortcuts="Control+T"
             title="New tab · Ctrl T"
           >
             +
           </button>
         </div>
-        <div id="tabs" aria-label="Browser tabs"></div>
+        <div id="tabs" role="group" aria-labelledby="open-tabs-label"></div>
         <div class="sidebar-bottom">
           <button id="downloads-button"></button
           ><button id="privacy-button"></button>
           <div class="local-note">
-            <span class="status-dot"></span>Saved on this device
+            <span class="status-dot" aria-hidden="true"></span>Saved on this device
           </div>
         </div>
       </aside>
@@ -92,7 +93,7 @@
           ></button>
           <div class="breadcrumb">
             <span id="breadcrumb-workspace">My workspace</span
-            ><span class="crumb-slash">/</span
+            ><span class="crumb-slash" aria-hidden="true">/</span
             ><strong id="breadcrumb-section">Overview</strong>
           </div>
           <div class="topbar-actions">
@@ -105,7 +106,7 @@
             ><button class="agent-toggle" id="agent-toggle" aria-controls="agent-panel" aria-expanded="false"></button>
           </div>
         </header>
-        <form id="navigation" class="navigation">
+        <form id="navigation" class="navigation" aria-label="Address and page controls">
           <button
             type="button"
             id="back"
@@ -139,11 +140,14 @@
             ><input
               id="address"
               aria-label="Website URL or search"
+              aria-keyshortcuts="Control+L F6"
               placeholder="Search the web or enter a URL"
               autocomplete="off"
               spellcheck="false"
-            /><kbd>Ctrl L</kbd>
+            /><kbd aria-hidden="true">Ctrl L</kbd>
           </div>
+          <span id="page-owner" class="owner-chip" hidden></span>
+          <button type="button" id="focus-page" class="focus-page" aria-keyshortcuts="F6" hidden>Move focus into the page (F6)</button>
           <button
             type="button"
             id="save-page"
@@ -165,7 +169,7 @@
             aria-label="Page tools"
           ></button>
         </form>
-        <div id="safety-notices" aria-label="Workspace safety notices" hidden></div>
+        <section id="safety-notices" aria-label="Workspace safety notices" hidden></section>
         <div class="work-area">
           <main id="content" tabindex="-1"></main>
           <aside
@@ -175,25 +179,27 @@
             hidden
           ></aside>
         </div>
-        <footer class="statusbar">
-          <span id="status" role="status">Ready</span
+        <footer class="statusbar" aria-label="Status">
+          <span id="status">Ready</span
           ><span id="ownership">You are in control</span
           ><span class="status-spacer"></span
           ><span id="item-count">Local workspace</span
-          ><span class="status-dot"></span>
+          ><span class="status-dot" aria-hidden="true"></span>
         </footer>
       </div>
     </div>
     <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
-    <div id="toast" role="status" hidden></div>
+    <div id="toast" role="status" aria-atomic="true" hidden></div>
+    <div id="announcer" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="alert-announcer" class="visually-hidden" role="alert" aria-atomic="true"></div>
     <section id="command-desk" hidden>
       <select id="command" aria-label="Command"></select>
       <p id="description"></p>
-      <pre id="schema"></pre>
+      <pre id="schema" tabindex="0" aria-label="Command input schema"></pre>
       <textarea id="arguments" aria-label="Command arguments (JSON)">{}</textarea
       ><button id="run">Run command</button>
       <div id="artifact"></div>
-      <pre id="result"></pre>
+      <pre id="result" tabindex="0" aria-label="Command result"></pre>
     </section>
   </body>
 </html>

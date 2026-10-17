@@ -41,6 +41,22 @@ import { CAPTURE_LIMITS, resourceSettings } from './resources.js';
 const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
 const HUMAN_GESTURE_MS = 2000;
+// Gap between split panes; the trusted GUI draws the divider and focused-pane frame in it (#36).
+export const SPLIT_GAP = 6;
+/**
+ * Browser-owned keys that always leave a page for the trusted chrome (#31): a page can never trap
+ * keyboard focus. F6/Shift+F6 cycle between page and chrome, Ctrl/Cmd+L focuses the address bar,
+ * Ctrl/Cmd+K opens Find anything. The page never sees these key presses.
+ */
+export function chromeShortcut(input) {
+  if (!input || !['keyDown', 'rawKeyDown'].includes(input.type) || input.isAutoRepeat) return null;
+  const key = String(input.key || '').toLowerCase();
+  const command = (input.control || input.meta) && !input.alt;
+  if (key === 'f6' && !input.control && !input.meta && !input.alt) return input.shift ? 'chrome-back' : 'chrome';
+  if (command && !input.shift && key === 'l') return 'address';
+  if (command && !input.shift && key === 'k') return 'palette';
+  return null;
+}
 const TERMINAL_TASK = new Set(['completed', 'failed', 'cancelled']);
 // Commands that work on the stored tab record; every other page/tab command restores a suspended tab first.
 const SUSPENDED_OK = new Set(['tabs.list', 'tabs.close', 'tabs.pin', 'tabs.claim', 'tabs.release', 'tabs.takeover', 'tabs.setControlMode', 'tabs.group', 'tabs.search', 'tabs.suspend', 'tabs.activate', 'tabs.duplicate', 'tabs.move', 'page.inspect']);
@@ -370,10 +386,12 @@ export class Browser {
       this.window.contentView.removeChildView(view);
       this.attachedViews.delete(view);
     }
+    // Split panes leave a thin gap the GUI draws as a divider and as the focused-pane frame (#36).
+    const gap = visible.length === 2 ? SPLIT_GAP : 0;
     visible.forEach((tab, index) => {
       if (!this.attachedViews.has(tab.view)) { this.window.contentView.addChildView(tab.view); this.attachedViews.add(tab.view); }
-      const half = Math.floor(bounds.width / visible.length);
-      tab.view.setBounds({ ...bounds, x: bounds.x + index * half, width: index === visible.length - 1 ? bounds.width - index * half : half });
+      const half = Math.floor((bounds.width - gap) / visible.length);
+      tab.view.setBounds({ ...bounds, x: bounds.x + index * (half + gap), width: index === visible.length - 1 ? bounds.width - index * (half + gap) : half });
     });
     // The focused split pane (#24) receives keyboard focus once when it changes, never on every layout.
     const pane = visible.length === 2 ? requested.focusedPane ?? 'primary' : null;
@@ -394,6 +412,19 @@ export class Browser {
       if (!this.attachedViews.has(view)) { this.window.contentView.addChildView(view); this.attachedViews.add(view); }
       view.setBounds({ x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) });
     }
+  }
+
+  /** Move keyboard focus from the trusted chrome into the visible page (the focused split pane). */
+  focusPage() {
+    const panes = [...this.attachedViews];
+    if (!panes.length || this.hidden) return { focused: false, reason: 'No page is shown' };
+    const active = this.tabs.get(this.activeId);
+    const split = this.viewport?.splitTabId != null ? this.tabs.get(this.viewport.splitTabId) : null;
+    const target = this.preview && panes.includes(this.preview.view) ? this.preview
+      : this.viewport?.focusedPane === 'secondary' && split && panes.includes(split.view) ? split : active && panes.includes(active.view) ? active : null;
+    if (!target) return { focused: false, reason: 'No page is shown' };
+    target.view.webContents.focus();
+    return { focused: true, tabId: target.id ?? null };
   }
 
   tab(tabId = this.activeId) {
@@ -565,6 +596,9 @@ export class Browser {
       if (['mouseMove', 'mouseEnter', 'mouseLeave'].includes(input.type)) return;
       // Agent coordinate/keyboard input is dispatched natively; it is neither human takeover nor a download gesture.
       if (this.consumeSynthetic(tab, input)) return;
+      // Leaving the page for the browser chrome is not page input and not a takeover.
+      const shortcut = chromeShortcut(input);
+      if (shortcut) { _event.preventDefault?.(); this.onChromeShortcut?.({ shortcut, tabId: tab.id }); return; }
       // Any human interaction invalidates element refs and coordinates observed before it.
       if (['mouseDown', 'keyDown', 'rawKeyDown', 'mouseWheel'].includes(input.type)) tab.inputSerial = (tab.inputSerial ?? 0) + 1;
       if (['mouseDown', 'keyDown', 'rawKeyDown'].includes(input.type)) { this.downloadGrants.set(tab.id, Date.now() + HUMAN_GESTURE_MS); tab.lastHumanInput = Date.now(); tab.lastActiveAt = Date.now(); }
@@ -1076,6 +1110,7 @@ export class Browser {
     const stats = { served: 0, refused: 0, refusedUrls: [], navigationsBlocked: 0, popupsBlocked: 0, downloadsBlocked: 0 };
     this.preview = { id: `preview_${randomUUID().slice(0, 12)}`, artifactId, versionId, title: String(title || '').slice(0, 240), view, byUrl, byCid, stats, openedAt: new Date().toISOString() };
     contents.on('will-navigate', event => { event.preventDefault(); stats.navigationsBlocked++; });
+    contents.on('before-input-event', (event, input) => { const shortcut = chromeShortcut(input); if (shortcut) { event.preventDefault(); this.onChromeShortcut?.({ shortcut, preview: true }); } });
     contents.on('will-redirect', event => { event.preventDefault(); stats.navigationsBlocked++; });
     contents.on('will-attach-webview', event => event.preventDefault());
     contents.setWindowOpenHandler(() => { stats.popupsBlocked++; return { action: 'deny' }; });
