@@ -87,6 +87,7 @@ if (process.argv.includes("--visual-child")) {
       if(name==="tabs.activate") return tabs[0];
       if(name==="resume.get") return {workspaceId:"fixture",saved:false,view:{section:"overview",activeTabId:null,split:{tabId:null,focusedPane:"primary"},panels:{}},missing:{},pinned:[],pinnedMaterials:[],continue:{blockers:[],tasks:[],handoffs:[]},tabs:{count:0,suspended:0,groups:[]},notices:[]};
       if(name==="resume.save") return {};
+      if(name==="search.status") return {lexical:{documents:1},vector:{enabled:false}};
       if(name==="display.status") return {mode:"headed",windowVisible:true,launchedHeadless:false,renderMode:"onscreen",tabs:{total:1,offscreen:0,onscreen:1,suspended:0},pendingApprovals:0,profile:{fingerprint:"0123456789abcdef"},transitions:[]};
       if(name==="resources.status") return {limits:{maxAgentCommands:8,maxPerClient:4,maxPerTask:2,captureConcurrency:1,captureQueueLimit:8,idleSuspendMinutes:30,memoryBudgetMb:null,maxCaptureEdge:4096},agentCommands:{running:0,byCommand:[]},captures:{running:0,queued:0,jobs:[]},memory:null,suspendedTabs:[],budgets:null};
       if(name.startsWith("update.")) updateCalls.push([name,args]);
@@ -233,7 +234,12 @@ if (process.argv.includes("--visual-child")) {
 } else {
   test("Linux GUI goldens and keyboard accessibility",{timeout:90000,skip:process.env.WEFT_VISUAL!=="1"?"Set WEFT_VISUAL=1 under xvfb-run":process.platform!=="linux"?"Goldens target Linux":false},async()=>{
     const profile=mkdtempSync(join(tmpdir(),"weft-visual-"));
-    const child=spawn(electron,["--no-sandbox","--disable-gpu",fileURLToPath(import.meta.url),"--visual-child"],{env:{...process.env,ELECTRON_RUN_AS_NODE:"",WEFT_VISUAL_PROFILE:profile,TZ:"UTC",LANG:"en_US.UTF-8"},stdio:["ignore","pipe","pipe"]});
+    // Glyph rasterisation follows fontconfig even for the bundled web fonts. Pin the stock Ubuntu
+    // rendering (slight hinting, greyscale antialiasing, DejaVu Sans as the sans-serif fallback) so a
+    // machine-local override such as forced unhinted text or a preferred UI font cannot shift goldens.
+    const fontconfig=join(profile,"fonts.conf");
+    writeFileSync(fontconfig,`<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include><match target="pattern"><test name="family"><string>sans-serif</string></test><edit name="family" mode="prepend_first" binding="strong"><string>DejaVu Sans</string></edit></match><match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit><edit name="hinting" mode="assign"><bool>true</bool></edit><edit name="hintstyle" mode="assign"><const>hintslight</const></edit><edit name="autohint" mode="assign"><bool>false</bool></edit><edit name="rgba" mode="assign"><const>none</const></edit><edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match></fontconfig>`);
+    const child=spawn(electron,["--no-sandbox","--disable-gpu",fileURLToPath(import.meta.url),"--visual-child"],{env:{...process.env,ELECTRON_RUN_AS_NODE:"",WEFT_VISUAL_PROFILE:profile,FONTCONFIG_FILE:fontconfig,TZ:"UTC",LANG:"en_US.UTF-8"},stdio:["ignore","pipe","pipe"]});
     let output=""; child.stdout.on("data",x=>output+=x);child.stderr.on("data",x=>output+=x);
     const timer=setTimeout(()=>child.kill("SIGKILL"),80000);
     try { const code=await new Promise((resolve,reject)=>{child.on("exit",resolve);child.on("error",reject);}); assert.equal(code,0,output); assert.match(output,/WEFT_VISUAL_OK/); }

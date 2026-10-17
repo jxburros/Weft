@@ -46,13 +46,15 @@ button {
 button:hover {
   background: var(--hover);
 }
-/* Disabled controls keep a readable label (3:1) and a non-color cue: no fill, dashed edge. */
-button:disabled,
+/* Disabled controls keep a readable label (3:1); labelled buttons also lose their fill and get a dashed edge. */
+button:disabled {
+  cursor: not-allowed;
+  color: var(--disabled-ink);
+  background: none;
+}
 button.primary:disabled,
 button.secondary:disabled {
-  cursor: not-allowed;
   background: var(--disabled-surface);
-  color: var(--disabled-ink);
   border: 1px dashed var(--disabled-ink);
   filter: none;
 }
@@ -2079,10 +2081,14 @@ dialog.trusted .trusted-band {
   background: var(--surface);
   overflow: hidden;
 }
+.stop-page {
+  justify-content: flex-start;
+  padding-top: 0;
+}
 .stop-page > .trusted-band {
   align-self: stretch;
   border-left: 0;
-  margin: calc(-1 * var(--space-40)) calc(-1 * var(--space-40)) var(--space-8);
+  margin: 0 calc(-1 * var(--space-40)) var(--space-40);
 }
 .stop-page h1 {
   font-size: var(--font-size-26);
