@@ -137,9 +137,10 @@ app.whenReady().then(async () => {
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
   // Credential vault and broker (ADR-017): outside workspace-data, so workspace exports and backups never include it.
-  // The broker process starts only when a person creates or uses a credential.
+  // The broker process starts at launch only when a vault already exists.
   credentials = new CredentialService({ directory: join(app.getPath('userData'), 'credentials'), protector: safeStorageProtector(safeStorage), browser, workspace,
     promptSecret: request => promptCredentialSecret(window, request) });
+  credentials.start().catch(error => console.warn(`Weft credential vault: ${error.message}`));
   dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.

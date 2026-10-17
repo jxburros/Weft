@@ -708,7 +708,7 @@ export class Browser {
   /** Secret-free tab state for handoff records. */
   handoffTabState(tab, actor) {
     const state = this.describe(tab);
-    return { tabId: tab.id, url: state.url, title: pageString(state.title, 200), navigationVersion: tab.version ?? 1, stateEpoch: tab.inspectionEpoch ?? 0,
+    return { tabId: tab.id, url: state.url, title: state.protectedOperation ? '[protected operation]' : pageString(state.title, 200), navigationVersion: tab.version ?? 1, stateEpoch: tab.inspectionEpoch ?? 0,
       controller: state.controller, controlMode: state.controlMode, latestSnapshotId: actor ? tab.observations?.latest.get(actor)?.id ?? null : null };
   }
 

@@ -229,6 +229,8 @@ export class CredentialService {
     this.cache = broker ? await broker.send('list') : [];
     return this.cache;
   }
+  /** At launch: open an existing vault so approval cards can name credentials. Nothing starts when no vault exists. */
+  async start() { if (existsSync(this.keyFile)) await this.refresh(); }
   close() { this.process?.kill(); this.process = null; }
 
   expireGrants() {
@@ -253,7 +255,7 @@ export class CredentialService {
     if (command !== 'credentials.fill') return null;
     const entry = this.cache.find(item => item.id === args.id);
     return entry ? { 'Credential': `${entry.label} (${entry.account ?? 'no account identifier'})`, 'Authorized origins': entry.origins.join(', '), 'Purpose': entry.purpose, 'Submit after fill': args.submit === true }
-      : { 'Credential': 'Unknown reference (the fill will be refused)' };
+      : { 'Credential': `${args.id} (not in the open vault; the fill is refused if it does not exist)` };
   }
   describe(entry, human = false) {
     const grants = this.grants.filter(grant => grant.credentialId === entry.id && grant.status === 'active');
