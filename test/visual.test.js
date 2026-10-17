@@ -23,8 +23,12 @@ if (process.argv.includes("--visual-child")) {
   let tabs = [{id:1,workspaceId:"fixture",title:"New tab",url:"about:blank",active:true,controller:"human",version:1}];
   const models = [{id:"local",name:"Local model",model:"fixture",endpoint:"http://localhost:11434/v1",locality:"on-device endpoint",capabilities:{tools:true}}];
   let window;
-  let stopped = false, sent = null, exportArgs = null;
-  const run = expression => window.webContents.executeJavaScript(expression);
+  let stopped = false, sent = null, exportArgs = null, clientArgs = null;
+  const grants = [];
+  const run = async expression => {
+    try { return await window.webContents.executeJavaScript(expression); }
+    catch (error) { throw new Error(`${expression}: ${error.message}`); }
+  };
   const click = selector => run(`document.querySelector(${JSON.stringify(selector)}).click()`);
   const until = async expression => { for(let i=0;i<100;i++) { if(await run(expression)) return; await pause(30); } throw Error(`Timed out: ${expression}`); };
   const compare = (reference, actual) => {
@@ -40,7 +44,9 @@ if (process.argv.includes("--visual-child")) {
   };
   const capture = async name => {
     await run('document.fonts.ready');
-    await run('document.activeElement?.blur(); document.getElementById("toast").hidden = true');
+    await until(`document.getElementById("address").value === ${JSON.stringify(name.endsWith("-blocked") ? "https://restricted.example/" : "")}`);
+    await run('document.activeElement?.blur(); document.getElementById("toast").hidden = true; document.getElementById("status").textContent = "Ready"');
+    window.webContents.sendInputEvent({type:"mouseMove", x:1199, y:0});
     await pause(200);
     const path=join(goldenDir,`${name}.png`);
     let actual=await window.webContents.capturePage();
@@ -59,7 +65,7 @@ if (process.argv.includes("--visual-child")) {
     await app.whenReady();
     ipcMain.handle("weft:layout",()=>({}));
     ipcMain.handle("weft:commands",()=>({"settings.update":{description:"Update preferences",inputSchema:{type:"object",properties:{}}},"chat.preview":{description:"Preview request",inputSchema:{type:"object",properties:{}}}}));
-    ipcMain.handle("weft:execute",(_event,name,args)=>{
+    const fixtureExecute = (name,args)=>{
       if(name==="workspace.snapshot") return state;
       if(name==="tabs.list") return tabs;
       if(name==="models.list") return models;
@@ -70,9 +76,13 @@ if (process.argv.includes("--visual-child")) {
       if(name==="chat.send") { sent=args; return {}; }
       if(name==="workspaces.export") { exportArgs=args;return {format:"weft",residueScan:{status:"found",found:["sha256"],unverifiable:["image"],scope:"Text only"}}; }
       if(name==="settings.update") { Object.assign(state.settings,args); return state.settings; }
+      if(name==="clients.list") return grants;
+      if(name==="clients.create") { clientArgs=args; const grant={...args,clientId:"client-fixture",expiresAt:1893456000000,revoked:false};grants.push(grant);return {...grant,token:"weft1.fixture-secret-token"}; }
+      if(name==="clients.revoke") { grants.find(g=>g.clientId===args.clientId).revoked=true;return {revoked:true}; }
       if(name==="tabs.activate") return tabs[0];
       throw Error(`Unexpected fixture command ${name}`);
-    });
+    };
+    ipcMain.handle("weft:execute", (_event, name, args) => ({ result: fixtureExecute(name, args) }));
     window=new BrowserWindow({width:1200,height:800,useContentSize:true,show:true,webPreferences:{preload:join(root,"src/preload.cjs"),contextIsolation:true,sandbox:true}});
     window.setMenuBarVisibility(false);
     await window.loadFile(join(root,"src/gui.html"));
@@ -123,6 +133,22 @@ if (process.argv.includes("--visual-child")) {
     assert.match(await run('document.getElementById("export-review").textContent'),/found/);
     assert.match(await run('document.getElementById("export-review").textContent'),/1 items could not be verified/);
     await click('[data-action="close-dialog"]');
+    await click('[data-action="manage-clients"]');
+    await until('document.getElementById("dialog-title").textContent === "Agent connections"');
+    await click('[data-action="new-client"]');
+    await run('document.querySelector("#client-form [name=name]").value="Research assistant";document.querySelectorAll("#client-form [name=scope]")[1].checked=true;document.getElementById("client-form").requestSubmit()');
+    await until('document.getElementById("new-client-token") !== null');
+    assert.equal(await run('document.getElementById("new-client-token").value'),"weft1.fixture-secret-token");
+    assert.deepEqual(clientArgs,{name:"Research assistant",scopes:["read","records.write"],workspaceIds:["fixture"],ttlSeconds:3600});
+    assert.doesNotMatch(await run('document.getElementById("result").textContent'),/fixture-secret-token/);
+    await click('[data-action="close-dialog"]');
+    await until('document.getElementById("new-client-token") === null');
+    await click('[data-action="manage-clients"]');
+    await until('document.querySelector("[data-action=revoke-client]") !== null');
+    await click('[data-action="revoke-client"]');
+    await until('document.getElementById("dialog-content").textContent.includes("Revoked")');
+    assert.equal(grants[0].revoked,true);
+    await click('[data-action="close-dialog"]');
     await until('document.getElementById("safety-notices").hidden');
     for(const theme of ["light","dark"]) {
       state.settings.theme=theme;
@@ -140,10 +166,15 @@ if (process.argv.includes("--visual-child")) {
       await click('[data-action="close-agent"]');
       await click('#settings-button');
       await capture(`${theme}-settings`);
-      tabs=[{...tabs[0],url:"https://restricted.example/",title:"Restricted destination",blocked:{reason:"Your workspace rule blocks this destination."}}];
+      await click('[data-action="manage-clients"]');
+      await until('document.getElementById("dialog").open');
+      await capture(`${theme}-connections`);
+      await click('[data-action="close-dialog"]');
+      tabs=[{...tabs[0],url:"https://restricted.example/",title:"Restricted destination",blocked:{reason:"Your workspace rule blocks this destination.",provenance:{sourceRepo:"community/site-rules",commit:"1234567890abcdef"}}}];
       await pause(1600);
       await click('[data-action="activate-tab"]');
       await capture(`${theme}-blocked`);
+      assert.match(await run('document.getElementById("content").textContent'),/Community list provenance \(untrusted\): community\/site-rules @ 1234567890abcdef/);
       tabs=[{...tabs[0],url:"about:blank",title:"New tab",blocked:null}];
       await pause(1600);
     }

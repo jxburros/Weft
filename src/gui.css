@@ -978,6 +978,7 @@ button.danger {
   font-size: var(--font-size-26);
 }
 .browser-placeholder p {
+  overflow-wrap: anywhere;
   max-width: 450px;
   font-size: var(--font-size-14);
   color: var(--muted);
@@ -1508,4 +1509,16 @@ button { min-height: 24px; min-width: 24px; }
   .page-heading, .settings-row { flex-wrap: wrap; }
   .page-wrap { padding: var(--space-16); }
   .breadcrumb { display: none; }
+}
+
+#client-form fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-7);
+  margin-bottom: var(--space-16);
+}
+#client-form input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  margin-right: var(--space-8);
+  accent-color: var(--brand);
 }

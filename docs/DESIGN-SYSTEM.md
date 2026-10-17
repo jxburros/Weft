@@ -30,15 +30,21 @@ retained; no replacement brand or textile terminology has been introduced.
   captures, workspace switching, palette search, and minimum-window workflow.
   Capture now refreshes tab state before opening its dialog, preventing the
   recently navigated tab from being mistaken for an empty tab.
-- `WEFT_VISUAL=1 xvfb-run -a node --test test/visual.test.js`: ten Linux Electron
+- `WEFT_VISUAL=1 xvfb-run -a node --test test/visual.test.js`: twelve Linux Electron
   goldens, native dialog Escape/focus restoration and naming, 200% text scale
   application bounds, reduced-motion emulation, cloud acknowledgement/cancel,
-  storage-conflict notice, automation resume, and export residue review.
+  storage-conflict notice, automation resume, export residue review, scoped
+  client creation/revocation, and token disposal on close.
 
 Accessibility fixes include a skip link, named dialogs and command inputs,
 expanded state on panel controls, a conversation log, focus restoration when
 polling replaces controls, focus return when closing Ask Weft, and suppressing
 application shortcuts inside modal dialogs. Controls have a 24 px minimum target.
+Settings offers scoped client creation, listing, and revocation. Tokens appear
+only in their creation dialog and are removed from its DOM on close; quiet
+execution keeps them out of the command-result desk. The block page labels
+community-list repository/commit provenance as untrusted.
+
 The narrow layout stacks workspace cards and wraps settings rows. Safety notices
 persist independently of the transient status bar and include text labels.
 

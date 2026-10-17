@@ -343,7 +343,7 @@ function renderContent() {
   if (section === "browse") {
     const tab = active();
     $("content").innerHTML =
-      `${tab?.loading ? '<div class="loading-line"></div>' : ""}<div class="browser-placeholder"><img src="../assets/logo/svg/mark-full-color.svg" alt="Weft"><h2>${tab?.blocked ? "This destination is restricted" : tab?.url === "about:blank" ? "Where would you like to go?" : "Your live page"}</h2><p>${tab?.blocked ? esc(tab.blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.") : "Enter a website or a search in the address bar above."}</p>${tab?.blocked ? '<div class="inline-actions">' + action("blocked-back", "Go back", "back") + action("allow-once", "Allow this visit", "globe") + action("section", "Change rule", "shield", 'data-section="privacy"') + "</div>" : ""}${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+      `${tab?.loading ? '<div class="loading-line"></div>' : ""}<div class="browser-placeholder"><img src="../assets/logo/svg/mark-full-color.svg" alt="Weft"><h2>${tab?.blocked ? "This destination is restricted" : tab?.url === "about:blank" ? "Where would you like to go?" : "Your live page"}</h2><p>${tab?.blocked ? esc(tab.blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.") : "Enter a website or a search in the address bar above."}</p>${tab?.blocked?.provenance ? `<p>Community list provenance (untrusted): ${esc(tab.blocked.provenance.sourceRepo)} @ ${esc(tab.blocked.provenance.commit)}</p>` : ""}${tab?.blocked ? '<div class="inline-actions">' + action("blocked-back", "Go back", "back") + action("allow-once", "Allow this visit", "globe") + action("section", "Change rule", "shield", 'data-section="privacy"') + "</div>" : ""}${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
     layout();
     return;
   }
@@ -554,8 +554,40 @@ function privacyView() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
   );
+}
+async function manageClients() {
+  const grants = await execute("clients.list", {}, true);
+  openDialog("Agent connections",
+    `<p>Create a separate, expiring token for each agent. Scope each token to the workspace and actions it needs. Revocation takes effect immediately.</p>${grants.length ? grants.map(grant => `<article class="record-card"><h3>${esc(grant.name)}</h3><p>${esc(grant.scopes.join(", "))}</p><small>Workspaces: ${esc(grant.workspaceIds.map(id => state.workspaces.find(w => w.id === id)?.name || id).join(", "))}</small><small>${grant.revoked ? "Revoked · " : Number(grant.expiresAt) <= Date.now() ? "Expired · " : ""}Expiry: ${esc(new Date(grant.expiresAt).toLocaleString())}</small>${!grant.revoked ? action("revoke-client", "Revoke token", "", `data-id="${esc(grant.clientId)}"`, "secondary danger") : ""}</article>`).join("") : '<p>No scoped agent connections have been created.</p>'}`,
+    action("close-dialog", "Close") + action("new-client", "Create connection", "plus", "", "primary"), true);
+}
+function createClient() {
+  openDialog("Create agent connection",
+    `<p>This token grants access only to <strong>${esc(ws().name)}</strong>. Choose the least access this agent needs.</p><form id="client-form">${field("Agent name", "name", "", "text", true)}<fieldset><legend>Allowed actions</legend><label><input type="checkbox" name="scope" value="read" checked> Read workspace records and page evidence</label><label><input type="checkbox" name="scope" value="records.write"> Create, edit, and delete records</label><label><input type="checkbox" name="scope" value="tabs.control"> Control tabs, navigate, and interact with pages</label></fieldset>${choice("Expires after", "ttlSeconds", [["3600", "1 hour"], ["86400", "1 day"], ["604800", "7 days"], ["2592000", "30 days"]], "3600")}<button type="submit" hidden></button></form>`,
+    action("close-dialog", "Cancel") + '<button type="submit" form="client-form" class="primary">Create token</button>');
+  $("client-form").onsubmit = async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const button = $("dialog-content").querySelector('button[form="client-form"]');
+    button.disabled = true;
+    try {
+      const scopes = form.getAll("scope");
+      if (!scopes.length) throw new Error("Select at least one allowed action.");
+      // Quiet execution avoids retaining this one-time token in the command desk.
+      const grant = await execute("clients.create", { name: form.get("name"), scopes, workspaceIds: [ws().id], ttlSeconds: Number(form.get("ttlSeconds")) }, true);
+      openDialog("Save your agent token",
+        `<p>Copy this token now. It will not be shown again after closing this dialog. If it is lost or exposed, revoke it and create a replacement.</p><p>Connection: ${esc(grant.name)}. Expires: ${esc(new Date(grant.expiresAt).toLocaleString())}.</p><label>Agent token<textarea id="new-client-token" readonly autocomplete="off" spellcheck="false"></textarea></label>`,
+        action("close-dialog", "Done"));
+      $("new-client-token").value = grant.token;
+      $("new-client-token").focus();
+      $("new-client-token").select();
+
+    } catch (error) {
+      if ($("form-error")) $("form-error").textContent = errorMessage(error);
+    } finally { button.disabled = false; }
+  };
 }
 async function loadDownloads() {
   try {
@@ -621,7 +653,16 @@ function openDialog(title, body, footer = "", wide = false) {
     30,
   );
 }
+function clearDialogSecrets() {
+  const token = $("new-client-token");
+  if (token) {
+    token.value = "";
+    token.textContent = "";
+    $("dialog-content").replaceChildren();
+  }
+}
 function closeDialog() {
+  clearDialogSecrets();
   const desk = $("command-desk");
   if (desk && desk.closest("#dialog")) {
     desk.hidden = true;
@@ -1358,6 +1399,16 @@ async function act(button) {
     kind = button.dataset.kind;
   if (button.closest?.(".palette-results")) closeDialog();
   switch (a) {
+    case "manage-clients":
+      await manageClients();
+      break;
+    case "new-client":
+      createClient();
+      break;
+    case "revoke-client":
+      await execute("clients.revoke", { clientId: id }, true);
+      await manageClients();
+      break;
     case "blocked-back":
       await execute("page.back");
       break;
@@ -1654,6 +1705,9 @@ document.addEventListener("change", (event) => {
     void execute("settings.update", { theme: event.target.value }).catch(
       () => {},
     );
+});
+$("dialog").addEventListener("close", () => {
+  if (!$("dialog").open) clearDialogSecrets();
 });
 $("dialog").addEventListener("cancel", (event) => {
   event.preventDefault();

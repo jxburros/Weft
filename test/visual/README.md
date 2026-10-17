@@ -8,8 +8,8 @@ WEFT_VISUAL=1 xvfb-run -a node --test test/visual.test.js
 
 The harness loads the real GUI/CSS and preload in Electron with deterministic
 local IPC fixtures, bundled Source Sans 3 fonts, UTC, a fixed window, and device
-scale 1. No provider or external network is used. The ten committed goldens cover
-empty workspace, populated materials/sidebar, Ask Weft, settings, and restricted
+scale 1. Captures reset transient status and move the pointer off controls. No provider or external network is used. The twelve committed goldens cover
+empty workspace, populated materials/sidebar, Ask Weft, settings, agent connections, and restricted
 destination in both themes. This tests browser-owned chrome, not page rendering.
 
 Color-channel differences up to 12 are ignored. At most 0.3% of pixels may differ;
