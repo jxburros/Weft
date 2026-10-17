@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { errorOutcome, resultExitCode } from '../src/commands.js';
 import { createClient } from '../src/client.js';
 
 const [command, json = '{}', ...extra] = process.argv.slice(2);
@@ -20,11 +21,14 @@ Examples:
     } else {
       const result = command === 'commands'
         ? await client.listCommands()
-        : await client.execute(command, JSON.parse(json));
+        : await client.executeOutcome(command, JSON.parse(json));
       console.log(JSON.stringify(result, null, 2));
+      if (command !== 'commands') process.exitCode = resultExitCode(result);
     }
   } catch (error) {
-    console.error(`weft: ${error.message}`);
-    process.exitCode = 1;
+    if (error instanceof SyntaxError) error.message = 'Invalid JSON arguments. Supply one JSON object.';
+    const outcome = errorOutcome(Object.assign(error, { code: error instanceof SyntaxError ? 'invalid_json' : 'invalid_arguments' }), command, {}, [], 'failed');
+    console.log(JSON.stringify(outcome, null, 2));
+    process.exitCode = resultExitCode(outcome);
   }
 }
