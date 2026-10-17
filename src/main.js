@@ -9,6 +9,7 @@ import { createApiServer } from './server.js';
 import { WorkspaceService } from './workspace.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
+import { CommunityLists } from './community-lists.js';
 import { createDispatcher } from './dispatch.js';
 import { Providers } from './providers.js';
 
@@ -63,7 +64,7 @@ app.whenReady().then(async () => {
   browser = new Browser({ window, workspaceService: workspace, admission });
   workspace.attachBrowser(browser);
   const clients = new ClientGrants({ directory, masterToken: token, workspace });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, admission, onEvent: event => events.emit('event', event) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, lists: new CommunityLists({ workspace }), admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });

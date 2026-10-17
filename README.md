@@ -17,6 +17,7 @@ Requires **Node.js 22.12+**, npm, and a desktop session. Electron supplies Chrom
 
 ```sh
 npm ci
+node node_modules/electron/install.js
 npm start
 ```
 
@@ -161,10 +162,14 @@ fields are rejected. API request bodies are capped at 1 MiB, so large file impor
 should use the GUI. REST rejects browser-origin requests and does not enable CORS.
 
 Human-only policy, configuration, storage-administration, override, and takeover
-commands appear in discovery but reject automation callers. The local token
-otherwise provides broad access to workspace data and browser content. API
-clients share one automation identity; this is not a fine-grained, multi-user
-permission service. Takeovers revoke leases and state versions, but cannot undo
+commands appear in discovery but reject automation callers. The bootstrap token
+retains broad access. In Settings → Agent connections, issue a separate token for
+each client with workspace restrictions, read/record-write/tab-control scopes and
+a finite lifetime. Revocation takes effect on every subsequent command and event;
+idle event streams close at their next heartbeat. Tokens are displayed once and
+never stored in the project. Scoped clients cannot execute arbitrary JavaScript,
+configure providers, change site policy, or mint other tokens. This remains a
+local single-user application, not a remote multi-user service. Takeovers revoke leases and state versions, but cannot undo
 an external action or arbitrary page script that already executed.
 
 ## Persistence and portability
@@ -243,3 +248,7 @@ current scope and outstanding encryption/plugin work.
 
 The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
 variants are documented in [assets/logo/README.md](assets/logo/README.md).
+
+Command and tool changes are checked by the [offline evals](evals/README.md),
+[generated reference](docs/COMMANDS.md), and [validation pipeline](docs/VALIDATION.md).
+The [issue disposition](docs/ISSUE-STATUS.md) records completed work and remaining gaps.

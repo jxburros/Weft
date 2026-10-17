@@ -7,6 +7,15 @@ alone is not a shipped capability.
 
 ### Changed
 
+- Hardened JSON storage with ownership locks, verified writes, migrations,
+  secret guards, export residue review and sync-conflict warnings.
+- Unified outcomes/errors and compact MCP tools; added scoped client credentials,
+  shared emergency stop, pinned targets and serialized browser input.
+- Added provider disclosure/manifests, untrusted-content framing and error-key
+  redaction; offline pinned community lists with verified rollback.
+- Centralized design tokens, improved keyboard/dialog behavior, added reviewed
+  light/dark GUI goldens and real Chromium/cross-platform Node CI.
+
 - Added canonical agent guidance, a generated skill reference, and a local MCP
   client plugin manifest/configuration. Guidance is available as `guide.get`
   through the shared catalog.
@@ -17,6 +26,9 @@ alone is not a shipped capability.
   current local-only collaboration/deployment scope.
 
 ### Not completed
+
+- See [all 67 issue dispositions](docs/ISSUE-STATUS.md) for the 26 completed
+  scopes and 41 broader/partial items left open.
 
 - Workspace encryption, key lifecycle/recovery, extension compatibility testing,
   native plugin isolation/permissions and plugin loading remain unimplemented.

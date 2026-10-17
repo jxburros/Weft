@@ -4,7 +4,7 @@ import { resolveCommandTargets } from './admission.js';
 import { getGuidance } from './guidance.js';
 
 /** One command boundary for GUI, HTTP, CLI/MCP and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, admission, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, admission, onEvent = () => {} }) {
   return async (name, input = {}, caller = {}) => {
     const context = { actor: 'automation', ...caller };
     let target = { workspaceId: null, tabId: null };
@@ -26,7 +26,12 @@ export function createDispatcher({ workspace, browser, providers, clients, admis
         if (target.workspaceId) context.workspaceId = target.workspaceId;
         if (command === 'workspaces.list') return workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
       }
+      context.assertAuthorized = () => {
+        admission.assertAutomationAdmitted(context.actor, command);
+        clients?.assertAllowed(command, context, target);
+      };
       if (command === 'guide.get') return getGuidance(args.topic);
+      if (command.startsWith('lists.')) return lists.execute(command, args, context);
       if (command.startsWith('clients.')) return clients.execute(command, args, context);
       if (command.startsWith('models.') || command.startsWith('chat.')) {
         if (['models.save', 'models.delete'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });

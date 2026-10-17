@@ -122,3 +122,6 @@ Human-only describes an unconditional administration gate; other commands may st
 | clients.create | Human creates a scoped, expiring automation credential; returned token is shown once | administration | Human only | GUI IPC, CLI, REST, MCP |
 | clients.list | Human lists automation grants without tokens | administration | Human only | GUI IPC, CLI, REST, MCP |
 | clients.revoke | Human revokes an automation grant immediately | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.install | Human installs or updates a disabled, commit/hash-pinned community site list from supplied offline JSON bytes | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.status | Human inspects installed list pins, rule status and rollback availability without downloading | administration | Human only | GUI IPC, CLI, REST, MCP |
+| lists.rollback | Human restores the previous pinned list version with rules disabled for review | administration | Human only | GUI IPC, CLI, REST, MCP |

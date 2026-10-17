@@ -35,7 +35,7 @@ export function resolveCommandTargets(name, input, context, { workspace, browser
   }
   if (pageTarget && args.tabId == null) args.tabId = browser.activeId;
   let tab = args.tabId != null ? browser.tab(args.tabId) : null;
-  if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null) args.workspaceId = tab?.workspaceId ?? workspace.activeWorkspaceId;
+  if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null && !(human && name === 'workspace.snapshot')) args.workspaceId = tab?.workspaceId ?? workspace.activeWorkspaceId;
   if (tab && args.workspaceId != null && name !== 'tabs.move' && tab.workspaceId !== args.workspaceId) {
     throw Object.assign(new Error('Tab belongs to a different workspace'), { code: 'target_mismatch' });
   }

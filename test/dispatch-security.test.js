@@ -86,6 +86,11 @@ test('central emergency stop blocks REST, CLI, MCP and internal agent dispatch u
 test('resolved targets are explicit and echoed across REST, CLI and MCP', { timeout: 15000 }, async t => {
   const f = await fixture(t);
   assert.equal((await f.request('page.inspect')).outcome.error.code, 'ambiguous_target');
+  assert.equal((await f.request('workspace.snapshot')).outcome.error.code, 'ambiguous_target');
+  const humanSnapshot = await f.dispatch('workspace.snapshot', {}, human);
+  assert.equal(humanSnapshot.result.workspaces.length, 2, 'GUI workspace rail retains all projects');
+  const scopedSnapshot = await f.request('workspace.snapshot', { workspaceId: f.firstId });
+  assert.equal(scopedSnapshot.outcome.result.workspaces.length, 1);
   assert.equal((await f.request('page.inspect', { workspaceId: f.firstId })).outcome.error.code, 'ambiguous_target');
   assert.equal((await f.request('page.inspect', { workspaceId: f.firstId, tabId: 2 })).outcome.error.code, 'target_mismatch');
   const args = { workspaceId: f.other.id, tabId: 2 };

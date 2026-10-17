@@ -93,7 +93,7 @@ export class WorkspaceService {
           const backup = `${this.path}.schema${raw.schemaVersion}-${digest(original)}.bak`;
           if (!existsSync(backup)) writeFileSync(backup, original, { flag: 'wx', mode: 0o600 });
           if (readFileSync(backup, 'utf8') !== original) throw new Error('Migration backup verification failed; original preserved');
-          const backupFd = openSync(backup, 'r');
+          const backupFd = openSync(backup, 'r+');
           try { fsyncSync(backupFd); } finally { closeSync(backupFd); }
           syncDirectory(directory);
           this.save();
@@ -199,6 +199,7 @@ export class WorkspaceService {
     return run;
   }
   async dispatch(name, input, context) {
+    context.assertAuthorized?.();
     const schema = workspaceSchemas[name];
     if (!schema) throw new Error(`Unknown workspace command: ${name}`);
     rejectSecretKeys(input);
@@ -229,8 +230,9 @@ export class WorkspaceService {
     }
     if (name === 'workspace.snapshot') {
       const snapshot = this.snapshot();
-      if (!context.workspaceId) return snapshot;
+      if (!context.workspaceId && !args.workspaceId) return snapshot;
       delete snapshot.storageWarnings;
+      if (snapshot.siteLists) snapshot.siteLists = snapshot.siteLists.filter(item => item.workspaceId === workspaceId);
       snapshot.workspaces = snapshot.workspaces.filter(item => item.id === workspaceId);
       for (const key of [...collections, 'activity', 'history']) snapshot[key] = snapshot[key].filter(item => item.workspaceId === workspaceId);
       snapshot.browserSession.tabs = snapshot.browserSession.tabs.filter(item => item.workspaceId === workspaceId);
@@ -283,6 +285,7 @@ export class WorkspaceService {
       } else if (collection === 'artifacts') result = await this.mutateArtifact(action, args, workspaceId, actor, context);
       else if (Object.hasOwn(recordShapes, collection)) result = this.mutateRecord(collection, action, args, workspaceId, actor, admin, context);
       else throw new Error(`Unsupported workspace command: ${name}`);
+      context.assertAuthorized?.();
       this.save();
       if (name === 'workspaces.delete') { this.data.history = this.data.history.filter(item => item.workspaceId !== args.id); this.save(); await this.browser?.closeWorkspace?.(args.id); }
       if (collection === 'workspaces' && ['switch', 'archive', 'delete', 'create', 'import'].includes(action)) await this.browser?.switchWorkspace?.(this.activeWorkspaceId);
@@ -316,6 +319,7 @@ export class WorkspaceService {
     } else if (action === 'delete') {
       if (record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
+      if (this.data.siteLists) this.data.siteLists = this.data.siteLists.filter(item => item.workspaceId !== record.id);
       for (const key of [...collections, 'activity', 'history']) this.data[key] = this.data[key].filter(item => item.workspaceId !== record.id);
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
     } else if (action === 'duplicate') {

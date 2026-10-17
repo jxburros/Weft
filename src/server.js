@@ -82,6 +82,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       return;
     }
     if (req.method === 'GET' && req.url === '/v1/events') {
+      if (context.scopes && !context.scopes.includes('read')) { fail(403, 'permission_required', 'The read scope is required for events'); return; }
       if (streams.size >= 16) { fail(503, 'unavailable', 'Event subscriber limit reached'); return; }
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', connection: 'keep-alive' });
       res.write(': connected\n\n');

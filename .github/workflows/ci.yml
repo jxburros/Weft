@@ -24,6 +24,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Install pinned Electron before concurrent tests
+        run: node node_modules/electron/install.js
       - run: npm run check
       - run: npm run test:unit
   chromium:
@@ -39,6 +41,8 @@ jobs:
       - name: Install display and browser libraries
         run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64
       - run: npm ci
+      - name: Install pinned Electron before concurrent tests
+        run: node node_modules/electron/install.js
       - name: Run real browser tests with a display
         shell: bash
         run: |

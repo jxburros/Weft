@@ -1,6 +1,7 @@
 # Validation and supported test coverage
 
-`npm ci` installs the locked dependencies. `npm run check` syntax-checks JavaScript.
+`npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
+once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
 `npm run test:unit` runs non-GUI tests with a one-minute per-test timeout. GitHub CI
 runs these on Node 22/24 and Linux/macOS/Windows; a successful matrix is evidence
 for that commit, not a claim about every operating-system configuration.

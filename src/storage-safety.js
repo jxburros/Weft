@@ -67,7 +67,7 @@ export function writeVerifiedJson(path, serialized, expectedStamp) {
   try {
     assertUnchanged(path, expectedStamp);
     writeFileSync(temp, serialized, { flag: 'wx', mode: 0o600 });
-    const fd = openSync(temp, 'r');
+    const fd = openSync(temp, 'r+');
     try { fsyncSync(fd); } finally { closeSync(fd); }
     const written = readFileSync(temp, 'utf8');
     JSON.parse(written);
