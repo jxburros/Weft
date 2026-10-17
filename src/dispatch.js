@@ -12,9 +12,14 @@ const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.l
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, plugins = new PluginRegistry(), admission, authority, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, plugins = new PluginRegistry(), admission, authority, onEvent = () => {} }) {
   // The gate is not optional: callers that do not supply an Authority still get one (durable when a profile directory is known).
   authority ??= new Authority({ directory: clients?.directory ?? workspace?.directory ?? null, workspace, browser, clients });
+  // The credential broker contributes task-grant evidence and the approval preview for credentials.fill; nothing else.
+  if (credentials) {
+    authority.taskGrant ??= (...input) => credentials.taskGrant(...input);
+    authority.approvalPreview ??= (...input) => credentials.approvalPreview(...input);
+  }
 
   /** Catalog metadata, with plugins.invoke raised to the invoked plugin operation's manifest-derived class. */
   const specFor = (command, args) => {
@@ -158,6 +163,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (hookCommands.has(command)) return executeHookCommand(command, args, context, { plugins, call });
     if (command.startsWith('plugin.') || Object.hasOwn(pluginCommandAdminDefinitions, command)) {
       return plugins.execute(command, command.startsWith('plugin.') ? { ...args, workspaceId: target.workspaceId ?? args.workspaceId } : args, context, { call });
+    }
+    if (command.startsWith('credentials.')) {
+      if (!credentials) throw Object.assign(new Error('The credential broker is not available in this process'), { code: 'unavailable' });
+      return credentials.execute(command, args, context);
     }
     if (command.startsWith('extensions.')) {
       if (!extensions) throw Object.assign(new Error('Browser extensions are unavailable in this process'), { code: 'unavailable' });

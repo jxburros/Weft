@@ -51,6 +51,10 @@ add('administration', 'update.check update.install update.rollback update.config
 // Transactional record batches (#39) and local backups/large-project transfer (#27).
 add('local_write', 'batch.execute');
 add('administration', 'backups.create backups.list backups.verify backups.restore backups.delete workspaces.exportPackage workspaces.importPackage');
+// Credential references and protected login (#6): metadata reads, once-only credential use, human-only administration.
+add('local_read', 'credentials.status credentials.list credentials.get');
+add('credential_use', 'credentials.fill');
+add('administration', 'credentials.create credentials.update credentials.revoke credentials.delete credentials.grantTask credentials.revokeGrant credentials.configureProvider');
 for (const collection of ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules']) {
   for (const operation of ['list', 'get']) classifications.set(`${collection}.${operation}`, 'local_read');
   for (const operation of ['create', 'update', 'delete']) classifications.set(`${collection}.${operation}`, collection === 'siteRules' ? 'administration' : 'local_write');
@@ -99,7 +103,7 @@ export function sensitiveCategoriesForCommand(name) {
 /** Resource a command writes: decides which client write scope applies. Derived from namespace so new commands are covered. */
 export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
-  if (['tabs', 'page', 'downloads'].includes(namespace)) return 'tabs';
+  if (['tabs', 'page', 'downloads'].includes(namespace) || name === 'credentials.fill') return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
   if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions'].includes(namespace)) return 'browser';
   return 'records';

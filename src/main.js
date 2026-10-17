@@ -20,6 +20,8 @@ import { WorkspaceExtensions } from './extensions.js';
 import { PluginRegistry } from './plugins/registry.js';
 import { UpdateService, createElectronTransport, createWindowsSignatureVerifier, detectInstall } from './updater.js';
 import { WEFT_VERSION } from './version.js';
+import { CredentialService, safeStorageProtector } from './credentials.js';
+import { promptCredentialSecret } from './credential-entry.js';
 
 let browser;
 let workspace;
@@ -31,6 +33,7 @@ let lists;
 let listTimer;
 let plugins;
 let updates;
+let credentials;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
 const relay = new TurnRelay();
@@ -133,7 +136,11 @@ app.whenReady().then(async () => {
   // Opt-in only: runs source checks solely for subscriptions where a human enabled scheduledCheck; fetched releases wait for human preview.
   listTimer = setInterval(() => lists.runScheduledChecks().catch(() => {}), 15 * 60_000); listTimer.unref?.();
   const authority = new Authority({ directory, workspace, browser, clients, activity });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, admission, onEvent: event => events.emit('event', event) });
+  // Credential vault and broker (ADR-017): outside workspace-data, so workspace exports and backups never include it.
+  // The broker process starts only when a person creates or uses a credential.
+  credentials = new CredentialService({ directory: join(app.getPath('userData'), 'credentials'), protector: safeStorageProtector(safeStorage), browser, workspace,
+    promptSecret: request => promptCredentialSecret(window, request) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, admission, onEvent: event => events.emit('event', event) });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
   relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
@@ -168,6 +175,7 @@ app.on('before-quit', event => {
   updates?.stopBackground();
   server?.close();
   providers?.close();
+  credentials?.close();
   relay.close();
   plugins?.close();
   const cleanup = browser?.close();
