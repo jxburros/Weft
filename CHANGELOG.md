@@ -599,6 +599,33 @@ alone is not a shipped capability.
   outcomes without a provider, for unsupported currencies or issuer refusals.
   Settings gain a Payments section (payment list, virtual-card configuration).
 
+### Fixed
+
+- Windows CI: tests close every store, server, broker and child they open before
+  removing their temporary profile (shared `test/temp-profile.js`, which on Linux
+  fails a test that removes a directory with a file still open). The failing
+  removal hook had also skipped later cleanup hooks, leaving fake model servers
+  and timers running, which is what timed out `encryption-integration` on Node 22
+  and hung the Node 24 Windows job; the unit runner now also passes
+  `--test-force-exit`. No product handle leak was found: closing a workspace
+  releases every file, and only the test's simulated external database
+  replacement renamed over an open file.
+- Real-Electron tests (archives, protected logins, checkouts, page observation,
+  recording, knowledge GUI, encryption settings) run only in the Linux Chromium
+  job, and every Electron launch, including the packaged smoke test, removes
+  `ELECTRON_RUN_AS_NODE` instead of blanking it (Windows treats an empty value as
+  set and started Electron as Node: `bad option: --no-sandbox`).
+- Crash tests recognise Windows termination (exit code 1, no signal, after the
+  child's crash marker); plaintext-scan paths, linked-file canonical paths (8.3
+  short names) and the permission-bit scenario are platform-correct; AppImage
+  replacement tests are Linux/macOS only, and a database replaced while open is
+  asserted to be refused by Windows itself. None of this was run on Windows
+  here: it is reasoned from the CI log and verified on Linux.
+- The fake 1Password CLI in the credential tests lives in a canonical temporary
+  directory: Node passes the broker's permission-model flags to child Node
+  processes, and under them a script reached through macOS's `/var` symlink
+  could not start.
+
 ### Not completed
 
 - See [all 67 issue dispositions](docs/ISSUE-STATUS.md): 58 completed scopes

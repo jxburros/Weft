@@ -2,9 +2,25 @@
 
 `npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
 once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
-`npm run test:unit` runs non-GUI tests with a one-minute per-test timeout. GitHub CI
-runs these on Node 22/24 and Linux/macOS/Windows; a successful matrix is evidence
-for that commit, not a claim about every operating-system configuration.
+`npm run test:unit` runs non-GUI tests with a three-minute per-file cap and
+`--test-force-exit`, so a server or child left open by a failing test cannot hang
+the job. GitHub CI runs these on Node 22/24 and Linux/macOS/Windows; a successful
+matrix is evidence for that commit, not a claim about every operating-system
+configuration. Every test file that launches the real Electron app must be listed
+in `browserTests` in `scripts/test-unit.mjs` (the runner refuses unlisted files
+that call `electronEnv`), and launches it through `scripts/electron-env.js`, which
+removes `ELECTRON_RUN_AS_NODE`: Windows treats an empty value as set and would
+start Electron as plain Node.
+
+Windows cannot delete or rename over a file that is still open. Tests that open
+stores, logs, servers or children in a temporary profile register them with
+`test/temp-profile.js` (`tempDirectory`, `removeAfter`, `closeAfter`,
+`beforeRemoval`), which closes everything before removing the directory; on Linux
+that removal fails the test when this process still has a file in it open, so a
+leaked handle shows up before Windows CI. Crash tests accept Windows termination
+(exit code 1, no signal, after the child's crash marker) where POSIX reports
+`SIGKILL`; AppImage replacement tests run only off Windows, and the open-database
+replacement scenario asserts that Windows refuses the replacement instead.
 
 The separate Linux Chromium job runs **all** tests under `xvfb-run -a npm test`,
 including native browser isolation and GUI workflows. It archives the test log
