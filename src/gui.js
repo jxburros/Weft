@@ -554,7 +554,7 @@ function privacyView() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project metadata is stored locally. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Text chat works with compatible providers. Optional read-only tools can read an explicitly selected page or search this workspace; image input and browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section><section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}</div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Task records and workflow checklists track your work. They do not run an autonomous agent. External agents connect through the authenticated API. Keep its token private.</div></section>`
   );
 }
 async function manageClients() {
@@ -1090,24 +1090,83 @@ function acknowledgeDisclosure(disclosure) {
     $("acknowledge-disclosure").onclick = () => { accepted = true; closeDialog(); };
   });
 }
+function importReportHtml(report) {
+  const counts = Object.entries(report.records || {}).filter(([, n]) => n).map(([name, n]) => `${esc(name)}: ${Number(n)}`).join(" · ") || "No records";
+  const lossy = (report.lossy || []).map((item) => `<li>${esc(item.collection)} ${esc(item.field)}: ${esc(item.reason)} (${Number(item.count)})</li>`).join("");
+  const rules = report.policies?.siteRules || [], flows = report.policies?.workflows || [];
+  const linked = report.linkedSourcesNotIncluded || { count: 0, items: [] };
+  return `<div class="notice"><strong>${counts}</strong>. ${Number(report.artifactVersions) || 0} capture versions; ${Number(report.remapped?.freeFormCitations) || 0} citations in text updated to new IDs.</div>` +
+    `<h3>Policies and workflows (inactive until you enable them)</h3>${rules.length || flows.length ? `<ul>${rules.map((r) => `<li>Site rule: ${esc(r.behavior)} ${esc(r.hostname)}${esc(r.path === "/" ? "" : r.path)} · ${esc(r.reason)}</li>`).join("")}${flows.map((w) => `<li>Workflow: ${esc(w.title)} · ${Number(w.steps)} steps${w.allowedSites?.length ? ` · sites ${esc(w.allowedSites.join(", "))}` : ""}</li>`).join("")}</ul>` : "<p>None.</p>"}` +
+    `<h3>Not carried over exactly</h3>${lossy ? `<ul>${lossy}</ul>` : "<p>Nothing beyond the exclusions below.</p>"}` +
+    `<h3>Linked sources not included</h3><p>${Number(linked.count)} linked pages, files or services are referenced but their live content is not part of the export.</p>` +
+    `<h3>Never imported</h3><ul>${(report.excluded || []).map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
+}
+// Imports are previewed with a dry run before anything is written.
+async function previewImport(title, command, args) {
+  const preview = await execute(command, { ...args, dryRun: true }, true);
+  openDialog(title, `<p>Review what will be imported. The workspace is created only when you confirm.</p>${importReportHtml(preview.result.importReport)}`,
+    action("close-dialog", "Cancel") + '<button id="confirm-import" class="primary">Import as new workspace</button>', true);
+  $("confirm-import").onclick = async () => {
+    $("confirm-import").disabled = true;
+    try {
+      const result = await execute(command, args);
+      closeDialog();
+      toast("Workspace imported. Review its contents before enabling policies.");
+      if (result.id) await execute("workspaces.switch", { id: result.id });
+    } catch (error) { $("form-error").textContent = errorMessage(error); $("confirm-import").disabled = false; }
+  };
+}
 function importWorkspace() {
   formDialog(
     "Import a workspace",
-    '<p>Imported policies and workflows stay inactive until reviewed. Model keys and browser sessions are not imported.</p><label>Workspace export<input id="import-file" type="file" accept="application/json,.json" required></label>',
+    '<p>Imported policies and workflows stay inactive until reviewed. Model keys and browser sessions are not imported. You will see a preview before anything is imported.</p><label>Workspace export<input id="import-file" type="file" accept="application/json,.json" required></label>',
     async () => {
       const f = $("import-file").files[0];
       if (!f || f.size > 50 * 1024 * 1024)
-        throw new Error("Choose a JSON workspace export under 50 MB.");
-      const result = await execute("workspaces.import", {
-        data: JSON.parse(await f.text()),
-      });
-      toast(
-        "Workspace imported. Review its contents before enabling policies.",
-      );
-      if (result.id) await execute("workspaces.switch", { id: result.id });
+        throw new Error("Choose a JSON workspace export under 50 MB, or use Import large project.");
+      const data = JSON.parse(await f.text());
+      setTimeout(() => previewImport("Review workspace import", "workspaces.import", { data }).catch((error) => toast(errorMessage(error))), 0);
     },
-    { save: "Import as new workspace" },
+    { save: "Preview import" },
   );
+}
+function exportPackage() {
+  const suggested = `${(ws().name || "workspace").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 60) || "workspace"}-${new Date().toISOString().slice(0, 10)}`;
+  formDialog("Export a large project",
+    `<p>Writes a folder with project records, exact capture and file components, and a checksum manifest into the transfers folder of this profile. Copy the folder to move the project. Browser sessions and credentials are excluded.</p>${field("Package name (letters, digits, dots, dashes)", "name", suggested, "text", true)}`,
+    async (values) => {
+      const result = await execute("workspaces.exportPackage", { id: ws().id, name: values.name }, true);
+      toast(`Package written to ${result.path}`);
+    }, { save: "Export package" });
+}
+function importPackage() {
+  formDialog("Import a large project",
+    `<p>Place the package folder in the transfers folder of this profile, then enter its name. Every component is verified against the package manifest.</p>${field("Package name", "name", "", "text", true)}`,
+    async (values) => { setTimeout(() => previewImport("Review package import", "workspaces.importPackage", { name: values.name }).catch((error) => toast(errorMessage(error))), 0); },
+    { save: "Preview import" });
+}
+async function manageBackups() {
+  const { backups, policy, location } = await execute("backups.list", {}, true);
+  const size = (bytes) => bytes > 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`;
+  openDialog("Backups",
+    `<p>Stored in ${esc(location)}. Automatic backups: ${policy.automatic ? `every ${Number(policy.intervalHours)} hours, keeping ${Number(policy.keep)}` : "off"}.${policy.lastError ? ` <strong>Last automatic backup failed:</strong> ${esc(policy.lastError)}` : ""}</p>` +
+    (backups.length ? backups.map((b) => `<div class="settings-row"><div><strong>${esc(b.kind === "automatic" ? "Automatic backup" : "Manual backup")}</strong><small>${esc(b.createdAt ? new Date(b.createdAt).toLocaleString() : b.id)}${b.bytes ? ` · ${size(b.bytes)}` : ""} · ${esc(b.status)}</small></div><div class="inline-actions">${action("verify-backup", "Verify", "", 'data-id="' + esc(b.id) + '"')}${action("restore-backup", "Restore", "", 'data-id="' + esc(b.id) + '"', "secondary danger")}</div></div>`).join("") : empty("No backups yet", "Make a backup before large changes.", "clock")),
+    action("backup-now", "Back up now", "download") + action("close-dialog", "Close"), true);
+}
+async function restoreBackupDialog(id) {
+  const preview = await execute("backups.restore", { id, dryRun: true }, true);
+  const counts = (value) => Object.entries(value || {}).filter(([key]) => !["activity", "history"].includes(key)).map(([key, n]) => `${esc(key)}: ${Number(n)}`).join(" · ");
+  openDialog("Restore this backup?",
+    `<p>The backup passed verification. Restoring replaces current workspaces and records with the backup. Your current data is kept in the profile recovery folder, not deleted.</p><div class="notice">Now: ${counts(preview.changes.current)}<br>After restore: ${counts(preview.changes.restored)}</div>`,
+    action("close-dialog", "Cancel") + '<button id="confirm-restore" class="primary">Restore backup</button>');
+  $("confirm-restore").onclick = async () => {
+    $("confirm-restore").disabled = true;
+    try {
+      const result = await execute("backups.restore", { id });
+      closeDialog();
+      toast(`Backup restored. Previous data kept in ${result.preservedOriginal}.`);
+    } catch (error) { $("form-error").textContent = errorMessage(error); $("confirm-restore").disabled = false; }
+  };
 }
 function modelForm(id) {
   const r = models.find((m) => m.id === id);
@@ -1457,6 +1516,29 @@ async function act(button) {
       break;
     case "import-workspace":
       importWorkspace();
+      break;
+    case "export-package":
+      exportPackage();
+      break;
+    case "import-package":
+      importPackage();
+      break;
+    case "backup-now": {
+      const backup = await execute("backups.create", {}, true);
+      toast(backup.status === "verified" ? "Backup created and verified." : "Backup failed verification.");
+      if ($("dialog").open) await manageBackups();
+      break;
+    }
+    case "manage-backups":
+      await manageBackups();
+      break;
+    case "verify-backup": {
+      const result = await execute("backups.verify", { id }, true);
+      toast(result.status === "verified" ? "Backup verified: every file matches its checksum." : `Backup failed verification: ${result.problems.map((p) => p.problem).join(", ")}`);
+      break;
+    }
+    case "restore-backup":
+      await restoreBackupDialog(id);
       break;
     case "new-tab":
       await execute("tabs.new", {});
