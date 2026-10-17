@@ -649,6 +649,7 @@ export class Providers {
     total.unref?.();
     const disconnect = () => this.stop(run, 'disconnected');
     caller.signal?.addEventListener('abort', disconnect, { once: true });
+    if (caller.signal?.aborted) disconnect();
     const emit = payload => {
       const frame = payload.type === 'start' ? this.relay.start(turnId, payload.meta) : this.relay.push(turnId, payload);
       if (frame) try { caller.onProgress?.(frame); } catch { /* A broken originating stream is handled by its close event. */ }

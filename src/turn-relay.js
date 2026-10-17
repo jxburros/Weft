@@ -1,9 +1,27 @@
 import { EventEmitter } from 'node:events';
+import { z } from 'zod';
 
-/** Turn frame types. Payload fields are defined once here and checked by tests on both sides. */
 export const TURN_FRAME_TYPES = Object.freeze(['start', 'request', 'phase', 'delta', 'end']);
 export const TURN_STATUSES = Object.freeze(['complete', 'partial', 'interrupted', 'failed']);
 export const TURN_ID = /^turn_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The turn frame contract, defined once: the relay validates every emitted frame against it and
+ * tests parse consumed SSE frames with the same schema; OpenAPI publishes it as TurnFrame.
+ */
+const frameBase = { id: z.string().max(80), turnId: z.string().regex(TURN_ID), seq: z.number().int().positive(), at: z.string().max(40) };
+const usage = z.strictObject({ inputTokens: z.number().int().nonnegative().nullable(), outputTokens: z.number().int().nonnegative().nullable() }).nullable();
+const destination = { modelId: z.string().max(128), model: z.string().max(200), endpoint: z.string().max(2048), locality: z.string().max(40) };
+export const turnFrameSchema = z.discriminatedUnion('type', [
+  z.strictObject({ ...frameBase, type: z.literal('start'), conversationId: z.string().max(128), workspaceId: z.string().max(200).nullish(), ...destination, streaming: z.boolean() }),
+  z.strictObject({ ...frameBase, type: z.literal('request'), round: z.number().int().positive() }),
+  z.strictObject({ ...frameBase, type: z.literal('phase'), phase: z.enum(['vision_fallback', 'tools']), count: z.number().int().positive().optional(),
+    ...Object.fromEntries(Object.entries(destination).map(([key, value]) => [key, value.optional()])) }),
+  z.strictObject({ ...frameBase, type: z.literal('delta'), text: z.string() }),
+  z.strictObject({ ...frameBase, type: z.literal('end'), status: z.enum(TURN_STATUSES), finishReason: z.string().max(40).nullish(), continuable: z.boolean().optional(),
+    partialSaved: z.boolean().optional(), usage: usage.optional(), cost: z.strictObject({ estimate: z.literal(true), amount: z.number(), currency: z.string().max(3), basis: z.string().max(200) }).nullable().optional(),
+    deadline: z.enum(['first_token', 'idle', 'total']).optional(), error: z.string().max(500).optional() }),
+]);
 
 /**
  * Bounded per-turn frame relay. Frame ids are `<turnId>:<seq>` so a follower can resume with
@@ -31,9 +49,10 @@ export class TurnRelay extends EventEmitter {
   push(turnId, payload) {
     const turn = this.turns.get(turnId);
     if (!turn || turn.done) return null;
-    if (!TURN_FRAME_TYPES.includes(payload.type)) throw new Error(`Unknown turn frame type: ${payload.type}`);
-    const seq = ++turn.seq;
-    const frame = { ...payload, id: `${turnId}:${seq}`, turnId, seq, at: new Date().toISOString() };
+    const seq = turn.seq + 1;
+    // Emitter-side contract check: a malformed frame is a programming error, never sent.
+    const frame = turnFrameSchema.parse({ ...payload, id: `${turnId}:${seq}`, turnId, seq, at: new Date().toISOString() });
+    turn.seq = seq;
     const size = Buffer.byteLength(JSON.stringify(frame));
     turn.frames.push({ frame, size });
     turn.bytes += size;

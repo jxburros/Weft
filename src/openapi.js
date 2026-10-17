@@ -1,4 +1,6 @@
+import { z } from 'zod';
 import { commands } from './commands.js';
+import { turnFrameSchema } from './turn-relay.js';
 
 /** Generated from the same JSON schemas used by GUI, CLI, REST and MCP. */
 export function createOpenApiDocument(catalog = commands) {
@@ -30,7 +32,7 @@ export function createOpenApiDocument(catalog = commands) {
       '/v1/turns/{turnId}/events': { get: { operationId: 'followTurn', summary: 'Follow or resume one model turn stream',
         description: 'Replays retained turn frames after Last-Event-ID (<turnId>:<seq>) then streams live frames until turn.end. Frames include model reply text and require the read scope and access to the turn workspace. Retention is bounded (10000 frames / 4 MiB per turn, 60 s after the turn ends); dropped frames produce `event: gap`. Disconnecting a follower never stops the turn.',
         parameters: [{ name: 'turnId', in: 'path', required: true, schema: { type: 'string', pattern: '^turn_[0-9a-f-]{36}$' } }, { name: 'Last-Event-ID', in: 'header', required: false, schema: { type: 'string' } }],
-        responses: { 200: { description: 'turn.* frames', content: { 'text/event-stream': { schema: { type: 'string' } } } }, 401: errors[401], 403: errors[403], 404: errors[404], 503: { description: 'Subscriber limit reached' } } } },
+        responses: { 200: { description: 'turn.* frames', content: { 'text/event-stream': { schema: { type: 'string' }, description: 'Each data payload is a TurnFrame' } } }, 401: errors[401], 403: errors[403], 404: errors[404], 503: { description: 'Subscriber limit reached' } } } },
     },
     components: {
       securitySchemes: { localBearer: { type: 'http', scheme: 'bearer', description: 'WEFT_TOKEN configured at startup or the generated local token' } },
@@ -50,6 +52,7 @@ export function createOpenApiDocument(catalog = commands) {
           result: {}, error: { anyOf: [{ type: 'null' }, { $ref: '#/components/schemas/CommandError' }] },
         } },
         ApiError: { $ref: '#/components/schemas/CommandOutcome' },
+        TurnFrame: (({ $schema, ...schema }) => schema)(z.toJSONSchema(turnFrameSchema)),
       },
     },
   };

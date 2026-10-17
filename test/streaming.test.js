@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { createApiServer } from '../src/server.js';
 import { executeOutcome } from '../src/commands.js';
 import { AutomationAdmission } from '../src/admission.js';
-import { TURN_FRAME_TYPES } from '../src/turn-relay.js';
+import { TURN_FRAME_TYPES, TurnRelay, turnFrameSchema } from '../src/turn-relay.js';
 import { fakeEndpoint, modelFixture, sse, ndjson, json, openaiDelta, openaiFinish, tick, until } from './model-test-helpers.js';
 
 const outcomeOf = (fixture, args, caller) => executeOutcome((name, input) => fixture.providers.execute(name, input, caller), 'chat.send', { conversationId: fixture.conversation.id, text: 'Hello', ...args });
@@ -24,6 +24,8 @@ test('OpenAI-compatible SSE deltas stream in order, persist one complete reply a
   assert.deepEqual(frames.filter(frame => frame.type === 'delta').map(frame => frame.text), ['Hel', 'lo, ', 'world.']);
   assert.deepEqual(frames.map(frame => frame.seq), frames.map((_, index) => index + 1), 'frame sequence is gapless');
   assert.ok(frames.every(frame => frame.id === `${result.turnId}:${frame.seq}` && TURN_FRAME_TYPES.includes(frame.type)));
+  // Consumer-side contract check with the same schema the relay enforces on emit.
+  for (const frame of JSON.parse(JSON.stringify(frames))) turnFrameSchema.parse(frame);
   assert.deepEqual(frames.at(-1), { ...frames.at(-1), type: 'end', status: 'complete', finishReason: 'stop' });
   assert.equal(result.message.content, 'Hello, world.');
   assert.equal(result.status, 'complete');
@@ -212,8 +214,15 @@ test('REST streaming: originating disconnect stops the turn; followers replay wi
     while (!predicate(text)) { const { value, done } = await reader.read(); if (done) break; text += decoder.decode(value); }
     return text;
   };
-  const parse = text => text.split('\n\n').filter(block => block.includes('data: ')).map(block => ({
-    id: /^id: (.*)$/m.exec(block)?.[1], event: /^event: (.*)$/m.exec(block)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(block)[1]) }));
+  const parse = text => text.split('\n\n').filter(block => block.includes('data: ')).map(block => {
+    const frame = { id: /^id: (.*)$/m.exec(block)?.[1], event: /^event: (.*)$/m.exec(block)?.[1], data: JSON.parse(/^data: (.*)$/m.exec(block)[1]) };
+    if (frame.event.startsWith('turn.')) {
+      turnFrameSchema.parse(frame.data);
+      assert.equal(frame.event, `turn.${frame.data.type}`);
+      assert.equal(frame.id, frame.data.id);
+    }
+    return frame;
+  });
 
   // 1. A follower can join, leave, and resume without affecting the turn; the originator finishes it.
   const origin = await fetch(`${url}/v1/execute`, { method: 'POST', headers: { ...headers, accept: 'text/event-stream' },
@@ -375,4 +384,22 @@ test('usage absent from the provider is reported as unavailable and no cost is i
   assert.equal(listed.capabilities.streaming, true);
   assert.equal(listed.capabilities.sources.contextWindow, 'assumed default');
   assert.equal(listed.requiresDisclosure, false);
+});
+
+test('the turn relay bounds frames, reports gaps for dropped frames and expires finished turns', async () => {
+  const relay = new TurnRelay({ maxFrames: 3, retainMs: 30 });
+  const turnId = 'turn_12345678-1234-1234-1234-123456789abc';
+  relay.start(turnId, { conversationId: 'conv_1', modelId: 'm', model: 'm', endpoint: 'http://127.0.0.1/v1', locality: 'on-device endpoint', streaming: true });
+  for (const text of ['a', 'b', 'c', 'd']) relay.push(turnId, { type: 'delta', text });
+  assert.throws(() => relay.push(turnId, { type: 'delta', text: 1 }), 'malformed frames are never emitted');
+  assert.deepEqual(relay.replay(turnId).frames.map(frame => frame.seq), [3, 4, 5], 'only the newest frames are retained');
+  assert.deepEqual(relay.replay(turnId, `${turnId}:3`), { frames: relay.replay(turnId).frames.slice(1), gap: null, done: false });
+  const late = relay.replay(turnId, `${turnId}:1`);
+  assert.equal(late.gap, 'expired');
+  assert.deepEqual(late.frames.map(frame => frame.text), ['b', 'c', 'd']);
+  assert.equal(relay.replay(turnId, 'turn_other:1').gap, 'unknown_event_id');
+  relay.end(turnId, { status: 'complete', finishReason: 'stop' });
+  assert.equal(relay.push(turnId, { type: 'delta', text: 'after end' }), null);
+  await tick(60);
+  assert.equal(relay.info(turnId), null, 'finished turns are retained only briefly');
 });
