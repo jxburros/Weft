@@ -228,6 +228,20 @@ if (process.argv.includes("--gui-workflows")) {
       'document.getElementById("palette-results").textContent.includes("Research notes")',
     );
     await click('[data-action="close-dialog"]');
+    // Browser-owned storage modes, security status and rule explanations.
+    await run('window.weft.execute("storage.setSiteMode", {hostname: "example.com", mode: "session"})');
+    await click("#privacy-button");
+    await until('document.getElementById("storage-policy")?.textContent.includes("example.com") && document.getElementById("threat-status")?.textContent.includes("Reputation provider")');
+    await click('[data-action="storage-mode"][data-host="example.com"][data-mode="default"]');
+    await until('!document.getElementById("storage-policy").textContent.includes("example.com")');
+    await click('[data-action="storage-coverage"]');
+    await until('document.querySelector(".coverage-table")?.textContent.includes("IndexedDB")');
+    await click('[data-action="close-dialog"]');
+    await click('[data-action="explain-url"]');
+    await fill("url", "https://xn--bcher-kva.example/");
+    await submit();
+    await until('document.getElementById("dialog-title")?.textContent === "Why this outcome" && document.getElementById("dialog-content").textContent.includes("bücher.example")');
+    await click('[data-action="close-dialog"]');
     window.setSize(1000, 700);
     await click("#agent-toggle");
     await new Promise((resolve) => setTimeout(resolve, 180));
