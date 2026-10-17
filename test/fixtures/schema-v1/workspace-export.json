@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "materials": [],
+  "context": [],
+  "tasks": [],
+  "conversations": [],
+  "workflows": [],
+  "siteRules": [],
+  "artifacts": [],
+  "format": "weft-workspace",
+  "workspace": {
+    "id": "ws_historical",
+    "name": "Historical workspace",
+    "description": "",
+    "color": "#7563A8",
+    "icon": "W",
+    "archived": false,
+    "createdAt": "2026-01-01T00:00:00.000Z",
+    "updatedAt": "2026-01-01T00:00:00.000Z",
+    "revision": 1
+  },
+  "exportedAt": "2026-01-01T00:00:00.000Z"
+}

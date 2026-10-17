@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "activeWorkspaceId": "ws_historical",
+  "workspaces": [
+    {
+      "id": "ws_historical",
+      "name": "Historical workspace",
+      "description": "",
+      "color": "#7563A8",
+      "icon": "W",
+      "archived": false,
+      "createdAt": "2026-01-01T00:00:00.000Z",
+      "updatedAt": "2026-01-01T00:00:00.000Z",
+      "revision": 1
+    }
+  ],
+  "materials": [],
+  "context": [],
+  "tasks": [],
+  "conversations": [],
+  "workflows": [],
+  "siteRules": [],
+  "artifacts": [],
+  "activity": [],
+  "settings": {
+    "theme": "system",
+    "model": {
+      "provider": "compatible",
+      "endpoint": "http://localhost:11434/v1",
+      "model": ""
+    },
+    "sidebarCollapsed": false,
+    "agentPanelOpen": false
+  },
+  "browserSession": {
+    "tabs": [],
+    "activeId": null
+  },
+  "extensionMetadata": {
+    "preserved": "unknown fields must survive"
+  }
+}

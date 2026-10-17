@@ -1,9 +1,12 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, fsyncSync, existsSync, statSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, statSync, openSync, closeSync, fsyncSync } from 'node:fs';
 import { join } from 'node:path';
 import { domainToASCII } from 'node:url';
 import { z } from 'zod';
 import { workspaceSchemas, recordShapes } from './workspace-commands.js';
+import { acquireProfileLock, assertUnchanged, fileStamp, writeVerifiedJson, storageWarnings, syncDirectory } from './storage-safety.js';
+import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
+import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
@@ -11,7 +14,6 @@ const clone = value => structuredClone(value);
 const uuid = prefix => `${prefix}_${randomUUID()}`;
 const digest = value => createHash('sha256').update(value).digest('hex');
 const MAX_FILE = 100 * 1024 * 1024;
-const secretKey = /^(?:password|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization|cookie|cookies|session[_-]?token|secret|client[_-]?secret|credential[s]?)$/i;
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 
 export function sanitizeUrl(value) {
@@ -36,14 +38,19 @@ function normalizeHostname(value) {
   if (!hostname || hostname.length > 253 || hostname.split('.').some(label => !/^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i.test(label))) throw new Error('Invalid hostname');
   return hostname;
 }
-function atomicWrite(path, value) {
-  const temp = `${path}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(temp, value, { mode: 0o600, flag: 'wx' });
-    const fd = openSync(temp, 'r');
-    try { fsyncSync(fd); } finally { closeSync(fd); }
-    renameSync(temp, path);
-  } finally { if (existsSync(temp)) unlinkSync(temp); }
+function validateStoredState(data) {
+  if (!Array.isArray(data.workspaces) || !data.workspaces.length || !collections.every(name => Array.isArray(data[name])) || !Array.isArray(data.activity) || !Array.isArray(data.history) || !data.settings || !Array.isArray(data.browserSession?.tabs)) throw new Error('Unsupported or invalid workspace schema; existing state has been preserved');
+  const workspaceIds = new Set(data.workspaces.map(item => item.id));
+  if (!data.workspaces.some(item => item.id === data.activeWorkspaceId && !item.archived)) throw new Error('Workspace state has no active workspace; existing state has been preserved');
+  const allRecords = [...data.workspaces, ...collections.flatMap(name => data[name])];
+  const ids = new Set();
+  for (const record of allRecords) {
+    if (!record || typeof record.id !== 'string' || ids.has(record.id)) throw new Error('Invalid or duplicate stored record ID; existing state has been preserved');
+    ids.add(record.id);
+  }
+  for (const name of collections) for (const record of data[name]) {
+    if (!(name === 'siteRules' && record.scope === 'global' && record.workspaceId === null) && !workspaceIds.has(record.workspaceId)) throw new Error('Invalid stored workspace reference; existing state has been preserved');
+  }
 }
 function createRecord(fields, workspaceId, prefix = 'record') {
   const timestamp = now();
@@ -60,49 +67,78 @@ function artifactSummary(record) {
   return copy;
 }
 
-/** Single-process, atomic JSON persistence. Does not provide multi-process locking or encryption. */
+/** Locked atomic JSON persistence; no encryption or live multi-process editing. */
 export class WorkspaceService {
-  constructor({ directory, browser } = {}) {
+  constructor({ directory, browser, onWarning = warning => console.warn(`Weft storage: ${warning.message}`) } = {}) {
     if (!directory) throw new Error('Workspace data directory is required');
     this.directory = directory;
     this.path = join(directory, 'workspace-state.json');
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    this.lock = acquireProfileLock(directory);
     this.browser = browser;
     this.queue = Promise.resolve();
-    if (existsSync(this.path)) {
-      if (statSync(this.path).size > MAX_FILE) throw new Error('Workspace state exceeds supported 100 MiB size');
-      try { this.data = JSON.parse(readFileSync(this.path, 'utf8')); } catch { throw new Error('Workspace state is unreadable. Preserve workspace-state.json and restore from an export or backup.'); }
-      if (this.data.schemaVersion !== 1 || !Array.isArray(this.data.workspaces) || !this.data.workspaces.length || !collections.every(name => Array.isArray(this.data[name]))) throw new Error('Unsupported or invalid workspace schema; existing state has been preserved');
-      if (!this.data.workspaces.some(item => item.id === this.data.activeWorkspaceId && !item.archived)) throw new Error('Workspace state has no active workspace; existing state has been preserved');
-    } else {
-      const initial = createWorkspace();
-      this.data = { schemaVersion: 1, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null } };
-      this.save();
-    }
-    this.data.history ??= [];
-    if (!Array.isArray(this.data.history)) throw new Error('Invalid browsing history schema; existing state has been preserved');
+    this.onWarning = onWarning;
+    this.warned = new Set();
+    try {
+      this.stamp = fileStamp(this.path);
+      this.refreshStorageWarnings();
+      if (existsSync(this.path)) {
+        if (statSync(this.path).size > MAX_FILE) throw new Error('Workspace state exceeds supported 100 MiB size');
+        const original = readFileSync(this.path, 'utf8');
+        let raw;
+        try { raw = JSON.parse(original); } catch { throw new Error('Workspace state is unreadable. Preserve workspace-state.json and restore from an export or backup.'); }
+        this.data = migrateSchema(raw, { validate: validateStoredState });
+        rejectSecretKeys(this.data);
+        if (raw.schemaVersion !== CURRENT_SCHEMA_VERSION) {
+          assertUnchanged(this.path, this.stamp);
+          const backup = `${this.path}.schema${raw.schemaVersion}-${digest(original)}.bak`;
+          if (!existsSync(backup)) writeFileSync(backup, original, { flag: 'wx', mode: 0o600 });
+          if (readFileSync(backup, 'utf8') !== original) throw new Error('Migration backup verification failed; original preserved');
+          const backupFd = openSync(backup, 'r');
+          try { fsyncSync(backupFd); } finally { closeSync(backupFd); }
+          syncDirectory(directory);
+          this.save();
+        }
+      } else {
+        if (this.storageWarnings.some(warning => ['SYNC_CONFLICT_COPY', 'SYNC_PLACEHOLDER'].includes(warning.code))) throw new Error('STORE_CONFLICT: Workspace copies/placeholders require human review before creating a new store.');
+        const initial = createWorkspace();
+        this.data = { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null } };
+        this.save();
+      }
+    } catch (error) { this.lock.release(); throw error; }
     const service = this;
     this.store = { get data() { return service.data; }, save: () => service.save() };
+  }
+  close() { this.lock.release(); }
+  refreshStorageWarnings() {
+    this.storageWarnings = storageWarnings(this.directory);
+    for (const warning of this.storageWarnings) {
+      const key = JSON.stringify(warning);
+      if (!this.warned.has(key)) { this.warned.add(key); this.onWarning(warning); }
+    }
+    return this.storageWarnings;
   }
 
   recordVisit({ workspaceId, url, title, tabId }) {
     const cleanUrl = sanitizeUrl(url);
     if (!cleanUrl || cleanUrl === 'about:blank') return;
+    const before = clone(this.data.history || []);
     this.data.history ??= [];
     const previous = this.data.history.at(-1);
     if (previous?.url === cleanUrl && previous.tabId === tabId && Date.now() - Date.parse(previous.visitedAt) < 2000) { previous.title = String(title || cleanUrl).slice(0, 1000); return; }
     this.data.history.push({ id: uuid('visit'), workspaceId, url: cleanUrl, title: String(title || cleanUrl).slice(0, 1000), tabId, visitedAt: now() });
     const current = this.data.history.filter(item => item.workspaceId === workspaceId);
     if (current.length > 1000) { const remove = new Set(current.slice(0, current.length - 1000).map(item => item.id)); this.data.history = this.data.history.filter(item => !remove.has(item.id)); }
-    this.save();
+    try { this.save(); } catch (error) { this.data.history = before; throw error; }
   }
 
   get activeWorkspaceId() { return this.data.activeWorkspaceId; }
   attachBrowser(browser) { this.browser = browser; }
   save() {
+    this.lock.assertOwned();
+    rejectSecretKeys(this.data);
     const serialized = JSON.stringify(this.data, null, 2);
     if (Buffer.byteLength(serialized) > MAX_FILE) throw new Error('Workspace storage exceeds supported 100 MiB limit; export and remove unneeded captures');
-    atomicWrite(this.path, serialized);
+    this.stamp = writeVerifiedJson(this.path, serialized, this.stamp);
   }
   persistSession(session) {
     const before = this.data.browserSession;
@@ -113,7 +149,7 @@ export class WorkspaceService {
     try { this.save(); } catch (error) { this.data.browserSession = before; throw error; }
   }
   snapshot() {
-    return { ...clone(this.data), artifacts: this.data.artifacts.map(artifactSummary), materials: this.data.materials.map(({ fileBase64, ...record }) => clone(record)) };
+    return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(artifactSummary), materials: this.data.materials.map(({ fileBase64, ...record }) => clone(record)) };
   }
   workspace(id = this.activeWorkspaceId) {
     const record = this.data.workspaces.find(item => item.id === id);
@@ -138,6 +174,24 @@ export class WorkspaceService {
   }
   getConversation(id) { return clone(this.record('conversations', id)); }
   appendMessage(id, message) { return this.execute('conversations.message', { id, ...message }); }
+  recordTurnManifest(id, manifest) {
+    const run = this.queue.then(() => {
+      rejectSecretKeys(manifest);
+      const before = clone(this.data);
+      try {
+        const record = this.record('conversations', id);
+        record.turnManifests ??= [];
+        const index = record.turnManifests.findIndex(item => item.id === manifest.id);
+        if (index < 0) record.turnManifests.push(clone(manifest));
+        else record.turnManifests[index] = clone(manifest);
+        this.log('chat.turn', record.workspaceId, id, 'model', JSON.stringify(manifest));
+        this.save();
+      } catch (error) { this.data = before; throw error; }
+    });
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
 
   execute(name, args = {}, context = {}) {
     const run = this.queue.then(() => this.dispatch(name, args, context));
@@ -147,6 +201,7 @@ export class WorkspaceService {
   async dispatch(name, input, context) {
     const schema = workspaceSchemas[name];
     if (!schema) throw new Error(`Unknown workspace command: ${name}`);
+    rejectSecretKeys(input);
     const args = schema.parse(input);
     const actor = context.actor || 'human';
     const admin = actor === 'human' || actor === 'admin';
@@ -159,8 +214,11 @@ export class WorkspaceService {
     if (name === 'history.list') return clone((this.data.history || []).filter(item => item.workspaceId === workspaceId).slice(-(args.limit || 100)).reverse());
     if (name === 'history.clear') {
       if (!admin) throw new Error('History clearing requires human administration');
-      this.data.history = (this.data.history || []).filter(item => item.workspaceId !== workspaceId);
-      this.log(name, workspaceId, null, actor); this.save(); return { cleared: true, workspaceId };
+      const before = clone(this.data);
+      try {
+        this.data.history = (this.data.history || []).filter(item => item.workspaceId !== workspaceId);
+        this.log(name, workspaceId, null, actor); this.save(); return { cleared: true, workspaceId };
+      } catch (error) { this.data = before; throw error; }
     }
     if (name === 'bookmarks.list') return clone(this.data.materials.filter(item => item.workspaceId === workspaceId && item.kind === 'website' && item.pinned));
     if (name === 'bookmarks.create') return this.dispatch('materials.create', { ...args, kind: 'website', pinned: true }, context);
@@ -172,6 +230,7 @@ export class WorkspaceService {
     if (name === 'workspace.snapshot') {
       const snapshot = this.snapshot();
       if (!context.workspaceId) return snapshot;
+      delete snapshot.storageWarnings;
       snapshot.workspaces = snapshot.workspaces.filter(item => item.id === workspaceId);
       for (const key of [...collections, 'activity', 'history']) snapshot[key] = snapshot[key].filter(item => item.workspaceId === workspaceId);
       snapshot.browserSession.tabs = snapshot.browserSession.tabs.filter(item => item.workspaceId === workspaceId);
@@ -183,11 +242,11 @@ export class WorkspaceService {
     if (name === 'search.query') {
       const query = args.query.trim().toLocaleLowerCase();
       if (!query) return [];
-      return collections.flatMap(type => this.data[type].filter(item => item.workspaceId === workspaceId).map(item => ({ type, id: item.id, title: item.title || item.hostname, content: item.content || item.objective || item.description || item.versions?.map(version => version.text || '').join('\n') || '', updatedAt: item.updatedAt }))).filter(item => `${item.title}\n${item.content}`.toLocaleLowerCase().includes(query)).slice(0, args.limit || 50).map(item => ({ ...item, content: item.content.slice(0, 300) }));
+      return collections.flatMap(type => this.data[type].filter(item => item.workspaceId === workspaceId).map(item => ({ type, id: item.id, localOnly: item.localOnly === true, title: item.title || item.hostname, content: item.content || item.objective || item.description || item.versions?.map(version => version.text || '').join('\n') || '', updatedAt: item.updatedAt }))).filter(item => `${item.title}\n${item.content}`.toLocaleLowerCase().includes(query)).slice(0, args.limit || 50).map(item => ({ ...item, content: item.content.slice(0, 300) }));
     }
     if (name === 'workspaces.list') return clone(this.data.workspaces.filter(item => !context.workspaceId || item.id === context.workspaceId));
     if (name === 'workspaces.get') { if (context.workspaceId && args.id !== context.workspaceId) throw new Error('PERMISSION_REQUIRED'); return clone(this.workspace(args.id)); }
-    if (name === 'workspaces.export') return this.exportWorkspace(args.id);
+    if (name === 'workspaces.export') return this.exportWorkspace(args.id, args.sensitiveTerms);
     if (collections.includes(collection) && action === 'list') return this.data[collection].filter(item => item.workspaceId === workspaceId || (collection === 'siteRules' && item.scope === 'global')).map(item => collection === 'artifacts' ? artifactSummary(item) : collection === 'materials' ? clone(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'fileBase64'))) : clone(item));
     if (collections.includes(collection) && action === 'get') {
       const record = this.record(collection, args.id, context);
@@ -357,15 +416,19 @@ export class WorkspaceService {
     this.log('artifacts.capture', workspaceId, record.id, actor, `Version ${version.number}`);
     return artifactSummary(record);
   }
-  exportWorkspace(id) {
+  exportWorkspace(id, sensitiveTerms) {
     const record = this.workspace(id);
-    return cleanExport({ format: 'weft-workspace', schemaVersion: 1, exportedAt: now(), workspace: record, ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global'))])), limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
+    const exported = cleanExport({ format: 'weft-workspace', schemaVersion: CURRENT_SCHEMA_VERSION, exportedAt: now(), workspace: record, ...Object.fromEntries(collections.map(name => [name, this.data[name].filter(item => item.workspaceId === id && !(name === 'siteRules' && item.scope === 'global'))])), limitations: ['Browser sessions, cookies, credentials, provider keys, and global policies are excluded. Imported site rules and workflows remain inactive until reviewed and enabled.', 'Free-form content and screenshots can contain personal information. Review the export before sharing.'] });
+    if (sensitiveTerms !== undefined) exported.residueScan = inspectExportResidue(JSON.stringify(exported, null, 2), sensitiveTerms);
+    return exported;
   }
   importWorkspace(input, actor, activate = true) {
     let raw = input;
     if (typeof input === 'string') { if (Buffer.byteLength(input) > MAX_FILE) throw new Error('Import exceeds 100 MiB'); raw = JSON.parse(input); }
-    if (!raw || typeof raw !== 'object' || raw.format !== 'weft-workspace' || raw.schemaVersion !== 1 || !raw.workspace) throw new Error('Expected a Weft workspace export with schemaVersion 1');
+    if (!raw || typeof raw !== 'object' || raw.format !== 'weft-workspace' || !raw.workspace) throw new Error('Expected a versioned Weft workspace export');
     if (Buffer.byteLength(JSON.stringify(raw)) > MAX_FILE) throw new Error('Import exceeds 100 MiB');
+    rejectSecretKeys(raw);
+    raw = migrateSchema(raw, { kind: 'export' });
     const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon });
     const workspace = { ...createWorkspace(), ...workspaceFields };
     const mapping = new Map([[raw.workspace.id, workspace.id]]);
@@ -383,14 +446,14 @@ export class WorkspaceService {
           if (collection === 'siteRules') { fields.scope = 'workspace'; fields.enabled = false; this.validateRule(fields); }
           if (collection === 'workflows') fields.enabled = false;
           if (collection === 'materials') this.validateMaterial(fields);
-          if (collection === 'conversations') fields.messages = z.array(z.object({ id: z.string().max(128), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: z.string().max(100), model: z.string().max(200).optional(), status: z.string().max(30).optional() })).max(10000).parse(item.messages || []);
+          if (collection === 'conversations') fields.messages = z.array(z.object({ id: z.string().max(128), role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string().max(500000), createdAt: z.string().max(100), model: z.string().max(200).optional(), localOnly: z.boolean().optional(), status: z.string().max(30).optional() })).max(10000).parse(item.messages || []);
         }
         const record = createRecord(fields, workspace.id, collection.slice(0, 4));
         mapping.set(item.id, record.id);
         return record;
       });
     }
-    for (const records of Object.values(imported)) for (const record of records) for (const key of ['evidence', 'materialIds', 'outputs']) if (Array.isArray(record[key])) record[key] = record[key].map(id => mapping.get(id)).filter(Boolean);
+    for (const records of Object.values(imported)) for (const record of records) for (const key of ['evidence', 'materialIds', 'outputs']) if (Array.isArray(record[key])) record[key] = record[key].map(id => { if (!mapping.has(id)) throw new Error('Invalid imported record reference'); return mapping.get(id); });
     this.data.workspaces.push(workspace);
     for (const collection of collections) this.data[collection].push(...imported[collection]);
     if (activate) this.data.activeWorkspaceId = workspace.id;

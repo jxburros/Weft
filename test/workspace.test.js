@@ -26,7 +26,7 @@ test('empty workspace persists notes, revisions, conversations and theme across 
   assert.equal(saved.history.length, 2);
   assert.equal(reopened.getConversation(conversation.id).messages[0].content, 'Read the notes');
   assert.equal(reopened.snapshot().settings.theme, 'dark');
-  assert.deepEqual(readdirSync(directory), ['workspace-state.json']);
+  assert.deepEqual(readdirSync(directory), ['.workspace.lock', 'workspace-state.json']);
 });
 
 test('stale updates fail without changing durable state', async t => {
@@ -109,6 +109,9 @@ test('export/import excludes sessions, secrets and global policy; rekeys related
   assert.deepEqual(exported.siteRules, []);
   exported.apiKey = 'never import this';
   exported.materials[0].password = 'never import this';
+  await assert.rejects(service.execute('workspaces.import', { data: exported }), /SECRET_FIELD/);
+  delete exported.apiKey;
+  delete exported.materials[0].password;
   const imported = await service.execute('workspaces.import', { data: exported });
   const importedMaterial = service.snapshot().materials.find(item => item.workspaceId === imported.id);
   const importedTask = service.snapshot().tasks.find(item => item.workspaceId === imported.id);
