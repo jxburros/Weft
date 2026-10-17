@@ -1328,7 +1328,6 @@ function workspaceForm(record) {
 // ---- Durable tasks, uncertain work and workflows (ADR 016) ---------------------------------
 const phaseLabels = { queued: "Queued", running: "Running", waiting_on_human: "Waiting for you", paused: "Paused", completed: "Completed", failed: "Failed", cancelled: "Cancelled", uncertain: "Outcome unknown" };
 const phaseLabel = (status) => phaseLabels[status === "waiting" ? "waiting_on_human" : status] || status;
-const phaseTone = (status) => (status === "completed" ? "sage" : ["waiting_on_human", "uncertain", "failed"].includes(status) ? "clay" : "");
 const unresolvedOps = (t) => (t.operations || []).filter((op) => ["attempted", "uncertain"].includes(op.status) && !["completed", "not_completed", "unknown"].includes(op.determination?.status));
 const needsAttention = (t) => t.status === "uncertain" || unresolvedOps(t).some((op) => op.status === "uncertain") || (t.executor && t.status === "waiting_on_human");
 let recordingTab = null;
@@ -2712,7 +2711,8 @@ let restoreNotices = [];
 let navigationSerial = 0;
 async function applyResume(announce = false) {
   // A person who navigates while the saved view loads keeps their choice.
-  const serial = navigationSerial;
+  // At startup, any navigation since the window loaded (for example a URL typed while the profile opens) wins.
+  const serial = announce ? 0 : navigationSerial;
   const resume = await execute("resume.get", { workspaceId: ws().id }, true);
   if (serial !== navigationSerial) return;
   splitTabId = resume.view.split.tabId;

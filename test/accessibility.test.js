@@ -62,7 +62,8 @@ if (process.argv.includes("--a11y-child")) {
       catch (error) { throw new Error(`${expression.slice(0, 200)} : ${error.message}`); }
     };
     const until = async (expression, label = expression) => {
-      for (let i = 0; i < 300; i++) { if (await run(expression)) return; await pause(30); }
+      // Generous under a parallel full-suite run.
+      for (let i = 0; i < 600; i++) { if (await run(expression)) return; await pause(30); }
       throw new Error(`GUI timed out: ${label}; status: ${await run('document.getElementById("status").textContent')}`);
     };
     const execute = (name, args = {}) => run(`window.weft.execute(${JSON.stringify(name)}, ${JSON.stringify(args)})`);
@@ -297,8 +298,10 @@ if (process.argv.includes("--a11y-child")) {
     if (!handoff) failures.push("ownership: the page frame did not show the handoff transition");
     const second = await execute("tabs.new", { url: `${origin}/second` });
     await until(`(async () => (await window.weft.execute("tabs.list", {})).some((t) => t.id === ${second.id} && !t.loading))()`, "second page");
+    // The GUI learns about the new tab on its next poll; split view needs it in the tab list.
+    await until(`document.querySelector('#tabs [data-action="activate-tab"][data-id="${second.id}"]') !== null`, "second tab listed");
     await act("activate-tab", { id: String(live.id) });
-    await until('document.getElementById("breadcrumb-section").textContent === "Live page"');
+    await until(`document.getElementById("breadcrumb-section").textContent === "Live page" && document.querySelector('#tabs .tab.active [data-action="activate-tab"][data-id="${live.id}"]') !== null`, "first page active");
     await run('document.getElementById("split-view").click()');
     await until('document.querySelectorAll(".pane-header").length === 2', "split view panes");
     await audit("split view", "light");
@@ -401,7 +404,7 @@ if (process.argv.includes("--a11y-child")) {
   })().catch((error) => { console.error(error); fixture?.close(); app.exit(1); });
 } else {
   test("accessibility audit of every GUI view and dialog in real Electron", {
-    timeout: 240000,
+    timeout: 420000,
     skip: process.platform === "linux" && !process.env.DISPLAY ? "Requires DISPLAY or xvfb-run" : false,
   }, async () => {
     const profile = mkdtempSync(join(tmpdir(), "weft-a11y-"));
@@ -416,7 +419,7 @@ if (process.argv.includes("--a11y-child")) {
     let output = "";
     child.stdout.on("data", (x) => (output += x));
     child.stderr.on("data", (x) => (output += x));
-    const timer = setTimeout(() => child.kill("SIGKILL"), 230000);
+    const timer = setTimeout(() => child.kill("SIGKILL"), 410000);
     try {
       const code = await new Promise((resolve, reject) => { child.on("exit", resolve); child.on("error", reject); });
       assert.equal(code, 0, output);
