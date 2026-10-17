@@ -215,7 +215,12 @@ if (mainSmoke) {
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready');
           await window.webContents.executeJavaScript(`document.getElementById('address').value = ${JSON.stringify(fixtureUrl)}; document.getElementById('navigation').requestSubmit()`);
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("page.title")')) === 'GUI fixture');
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
           await until(() => window.contentView.children.length > 0);
+          // A title and attached view precede the first composited page frame.
+          const page = window.contentView.children.find(view => view.webContents?.getURL() === fixtureUrl + '/');
+          assert.ok(page, 'the fixture page must be visible before MCP captures it');
+          await page.webContents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
           console.log('WEFT_GUI_SMOKE_OK');
           if (process.argv.includes('--weft-close-gui')) window.close();
           return;
@@ -337,8 +342,9 @@ if (mainSmoke) {
           assert.equal(JSON.parse(answer.content[0].text).result, 42);
           assert.equal(answer.structuredContent.execution, 'succeeded');
           const screenshot = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.screenshot', args: { tabId: mcpTab.id } } });
+          assert.equal(screenshot.isError, undefined, JSON.stringify(screenshot.structuredContent ?? screenshot.content));
           assert.equal(screenshot.content[0].type, 'text');
-          assert.equal(screenshot.content[1].type, 'image');
+          assert.equal(screenshot.content[1]?.type, 'image', JSON.stringify(screenshot.structuredContent ?? screenshot.content));
           assert.equal(Buffer.from(screenshot.content[1].data, 'base64').subarray(1, 4).toString(), 'PNG');
         } finally { await mcp.close(); }
         assert.equal((await request('browser.close')).status, 200);
