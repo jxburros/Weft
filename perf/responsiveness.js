@@ -103,7 +103,8 @@ if (harness) {
     await gui(`document.getElementById("address").value = ${JSON.stringify(`${origin}/human`)}; document.getElementById("navigation").requestSubmit()`);
     await until(async () => window.contentView.children.some(view => view.webContents?.getURL().startsWith(`${origin}/human`)));
     const page = window.contentView.children.find(view => view.webContents?.getURL().startsWith(`${origin}/human`)).webContents;
-    await page.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    // Start mid-page so every ±120 px wheel probe can scroll: a wheel at the top edge fires no scroll event.
+    await page.executeJavaScript('scrollTo(0, 4000); new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
     const navigation = [];
     const agentWork = tokens.map(async (token, index) => {
       // Agents work in the other workspaces: opening a tab in the person's active workspace would switch the visible tab.
