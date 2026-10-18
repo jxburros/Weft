@@ -111,4 +111,7 @@ test('the profile folder the uninstaller may remove is the one packaged Weft use
   assert.match(main, new RegExp(`app\\.setPath\\('userData', join\\(app\\.getPath\\('appData'\\), '${name}'\\)\\)`));
   const removed = [...nsis.matchAll(/RMDir \/r "\$APPDATA\\([^"]+)"/g)].map(match => match[1]);
   assert.deepEqual(removed, [`${name}\\updates`, name]);
+  // The Windows install check plants its keep-me file in that same folder.
+  const check = readFileSync(join(root, 'scripts/release/windows-install-check.ps1'), 'utf8');
+  assert.match(check, new RegExp(`\\$profileDir = Join-Path \\$env:APPDATA '${name}'`));
 });

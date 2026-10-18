@@ -107,7 +107,7 @@ Please know before relying on it:
 
 - **It is a local, single-user application.** Sync and collaboration are
   deliberately deferred ([ADR-002](docs/decisions/002-sync-collaboration-remote.md)).
-- **Installers are unsigned** until signing credentials are configured.
+- **Installers are unsigned** until signing credentials are configured. Windows may show a SmartScreen warning; see [Using Weft](docs/USING-WEFT.md#installers-and-updates).
 - **Not yet independently verified:** the credential broker, payment
   authorization with real merchants and card issuers, screen-reader behavior, and
   the OS key stores used by optional workspace encryption.

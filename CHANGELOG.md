@@ -21,6 +21,46 @@ Documentation only; no behavior changed.
 - Verified: `npm run test:docs` passes and every relative Markdown link resolves.
   Not verified: the full test suite, which this change does not touch.
 
+## 2026-10-18 — Windows installer in CI and releases
+
+### Added
+
+- CI builds the unsigned Windows NSIS installer on `windows-latest` for every PR
+  and push to `main`, verifies its `latest.yml`, and runs
+  `scripts/release/windows-install-check.ps1`: silent per-user install, the
+  uninstall registry entry, Start menu and desktop shortcuts, a packaged smoke
+  test of the installed app, a reinstall over the existing copy (the upgrade
+  path) and a silent uninstall. Workspace data in `%APPDATA%\weft` must survive
+  both the reinstall and the uninstall, and the update cache must be removed by
+  the uninstall. The installer is kept as a 14-day workflow artifact.
+- The release workflow runs the same check before publishing, and unsigned
+  Windows release notes explain how to verify the installer against
+  `SHA256SUMS.txt` and get past SmartScreen.
+
+Verified on GitHub's `windows-latest` runner (Weft 1.1.0, Electron 44.9.0).
+Not verified: a desktop Windows 10/11 machine, an upgrade between two real
+releases (the reinstall uses the same version), and the interactive installer
+and uninstaller pages, which a silent run does not show; installers remain
+unsigned.
+
+## 2026-10-18 — Agent
+
+### Fixed
+
+- Cross-site cookie blocking no longer fails open when Electron cannot resolve
+  the requesting frame (it then omits both `frame` and `webContents`, which
+  made the request look same-site). A request is now cross-site when its
+  requesting document (`initiatorOrigin`) or its top page is on another site,
+  so a cross-site frame also no longer receives the top site's cookies; top-level
+  navigations stay first-party. The intermittent `cross-site cookie header
+  removed` failure was the commit race fixed in 1.1.0, not a test artifact: with
+  the earlier logic the real-Chromium test reproduced the leak
+  (`cookie: 'firstparty=1'`), and the Cookie header was visible to the hook in
+  every probe. The real-Chromium test now repeats the tracker-to-embedding-site
+  transition on several fresh sites. `test/site-security.test.js` covers stale
+  and unresolved frames without timing. Engine findings, including why Chromium's
+  process-wide third-party cookie switch is not used, are in ADR-008.
+
 ## v1.1.0 — 2026-10-18
 
 Minor release. Version strings (`package.json`, `package-lock.json`,
@@ -700,7 +740,7 @@ remain unverified on real machines (`docs/RELEASING.md`).
 
 ### Not completed
 
-- See [all 67 issue dispositions](docs/maintainers/ISSUE-STATUS.md): 58 completed scopes
+- See [all 67 issue dispositions](docs/ISSUE-STATUS.md): 58 completed scopes
   (26 in the first pass, PR #71, and 32 in the second pass on this branch) and 9
   items left open (#4 tracker, #6, #20, #26, #31, #33, #36, #54, #60). Each stays
   open for validation that code cannot supply: independent security review,

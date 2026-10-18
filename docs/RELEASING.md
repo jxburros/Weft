@@ -74,11 +74,16 @@ A release tag is blocked unless all of these hold:
    `CHANGELOG.md` with the user-visible changes, verification limits and the Electron
    version.
 3. `npm run release:check` locally, commit, open a PR and merge after CI passes.
-   CI also packages and launches a Linux AppImage on every PR.
+   CI also packages and launches a Linux AppImage on every PR, and builds the
+   Windows NSIS installer on `windows-latest`, installs it silently, launches the
+   installed app, reinstalls over it and uninstalls it
+   (`scripts/release/windows-install-check.ps1`). The unsigned installer is kept as
+   the `weft-windows-installer-unsigned-<sha>` workflow artifact for 14 days.
 4. Tag the merge commit: `git tag -s vX.Y.Z -m "Weft X.Y.Z" && git push origin vX.Y.Z`.
 5. `.github/workflows/release.yml` runs the gate and full suite, builds Windows,
    macOS and Linux packages, signs where credentials exist, verifies signatures,
-   smoke-tests each package, uploads everything to a **draft** release, confirms the
+   smoke-tests each package (Windows also runs the install/reinstall/uninstall
+   check against the real installer), uploads everything to a **draft** release, confirms the
    draft has exactly the verified assets plus `SHA256SUMS.txt`, then publishes it as
    the latest release. Updaters see a release only after publication.
 6. Spot-check the published release: install on a clean machine per platform, and
@@ -99,7 +104,9 @@ higher version promptly. Never re-upload different bytes under an existing versi
 
 Without these secrets the workflow still releases, but each package is labelled
 **UNSIGNED** in the release notes and on Windows the updater verifies only the
-manifest's size and SHA-512.
+manifest's size and SHA-512. Unsigned Windows release notes also tell people how
+to check the installer against `SHA256SUMS.txt` and get past the SmartScreen
+"Windows protected your PC" prompt (**More info** > **Run anyway**).
 
 | Secret | Purpose |
 | --- | --- |
@@ -165,6 +172,7 @@ manifest. Code signing (Windows/macOS) is what defends against that.
 | Updater policy (prerelease/downgrade refusal, size/SHA-512 mismatch, tampered manifest, redirect host/repository limits, kill switch, offline, rollback state machine, background cadence) | Unit-tested with fixtures, no network (`test/updater.test.js`) |
 | Electron network transport (redirect surfacing, streaming, no cookies) | Real Electron against a loopback fixture (`test/update-transport.test.js`) |
 | Linux AppImage and `.deb` packaging; generated `latest-linux.yml` parsed by the app's parser | Built locally with electron-builder 26.15.3; packaged AppImage smoke-tested under Xvfb |
-| Windows NSIS scripts (custom pages, uninstall data choice, branded bitmaps) | Both installer and uninstaller scripts compiled with makensis 3.0.4.1 on Linux; generated `latest.yml` parsed. **Not run on Windows**, and the uninstaller stub needs Windows/Wine to generate, so no runnable installer was produced |
+| Windows NSIS scripts (custom pages, uninstall data choice, branded bitmaps) | Both installer and uninstaller scripts compiled with makensis 3.0.4.1 on Linux; generated `latest.yml` parsed |
+| Windows installer (silent per-user install, uninstall registry entry, Start menu and desktop shortcuts, launch of the installed app, reinstall over an existing copy, silent uninstall keeping workspace data and removing the update cache) | Checked on every PR and release by `scripts/release/windows-install-check.ps1` on GitHub's `windows-latest` runner (Windows Server, build 26100); first passed 2026-10-18 for 1.1.0. Same-version reinstall only: an upgrade across two real releases is not yet exercised. The interactive pages (welcome, install folder, uninstall data choice and its confirmation) are not exercised by a silent run |
 | macOS dmg/zip, signing, notarization, Gatekeeper | **Not yet verified** (requires macOS runner and Apple credentials) |
 | Install, upgrade across real versions, uninstall data preservation, real rollback on each OS | **Not yet verified** on real machines |
