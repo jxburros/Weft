@@ -25,3 +25,21 @@ test("production text and status colors meet 4.5:1 in both themes", () => {
     }
   }
 });
+const ratio = (a, b) => { const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
+test("state, hover, trusted-surface and focus tokens keep their contrast in both themes (#31, #36)", () => {
+  for (const [name, t] of Object.entries(tokens.themes)) {
+    // Secondary text stays readable on every surface it appears on, including hover and selection.
+    for (const bg of ["surface", "canvas", "white", "hover", "rail", "brand-soft", "sage-soft", "clay-soft"]) assert.ok(ratio(t.muted, t[bg]) >= 4.5, `${name} muted/${bg} ${ratio(t.muted, t[bg])}`);
+    for (const [fg, bg, min] of [["trusted-ink", "trusted-surface", 4.5], ["ink", "trusted-surface", 4.5], ["disabled-ink", "disabled-surface", 3], ["disabled-ink", "surface", 3], ["disabled-ink", "canvas", 3],
+      ["focus-ring", "surface", 3], ["focus-ring", "canvas", 3], ["focus-ring", "white", 3], ["control-border", "white", 3], ["control-border", "surface", 3], ["brand", "hover", 4.5]])
+      assert.ok(ratio(t[fg], t[bg]) >= min, `${name} ${fg}/${bg} ${ratio(t[fg], t[bg])}`);
+  }
+});
+test("production scales: an 11 px type floor and consolidated spacing and radius steps (#36)", () => {
+  const px = (value) => value.endsWith("rem") ? parseFloat(value) * 16 : parseFloat(value);
+  const scale = (prefix) => Object.entries(tokens.common).filter(([key]) => key.startsWith(prefix)).map(([, value]) => px(value)).sort((a, b) => a - b);
+  assert.ok(Math.min(...scale("font-size-")) >= 11);
+  assert.deepEqual(scale("space-"), [2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40]);
+  assert.deepEqual(scale("radius-"), [4, 6, 8, 12]);
+  for (const [key, value] of Object.entries(tokens.common)) if (/^(space|radius|font-size)-(\d+)$/.test(key)) assert.equal(px(value), Number(key.split("-").at(-1)), `${key} is named after its pixel value`);
+});

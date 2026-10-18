@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
+import { Knowledge } from '../src/knowledge.js';
+import { electronEnv } from '../scripts/electron-env.js';
+import { budget } from './time-budget.js';
 
 const smoke = process.argv.includes('--workspace-smoke');
 async function until(check) {
@@ -47,7 +50,15 @@ if (smoke) {
       await browser.restore();
       const firstWorkspace = workspace.activeWorkspaceId;
       const firstTab = browser.activeId;
+      const published = [];
+      browser.onEvent = event => published.push(event);
       await browser.execute('page.navigate', { url: origin });
+      // Committed navigations are replayable metadata events: tab, workspace and version, never the URL or title.
+      await until(() => published.some(event => event.type === 'navigation' && event.status === 'committed'));
+      const navigation = published.find(event => event.type === 'navigation');
+      assert.deepEqual(Object.keys(navigation).sort(), ['status', 'tabId', 'type', 'version', 'workspaceId']);
+      assert.equal(navigation.workspaceId, firstWorkspace);
+      assert.equal(navigation.tabId, firstTab);
       await browser.execute('cookies.set', { url: origin, name: 'isolated', value: 'first' });
       await browser.execute('page.evaluate', { expression: 'localStorage.setItem("project", "first")' });
       assert.ok((await workspace.execute('history.list')).some(visit => visit.url === `${origin}/`));
@@ -57,6 +68,11 @@ if (smoke) {
       assert.equal((await workspace.execute('bookmarks.list')).length, 0);
       await assert.rejects(workspace.execute('history.clear', {}, { actor: 'automation' }), /human/);
       const secondWorkspace = await workspace.execute('workspaces.create', { name: 'Second project' });
+      // Context sharing between the workspaces (#21) must leave their browser containers isolated; the checks below run with it enabled.
+      const knowledge = new Knowledge({ workspace });
+      const shared = await knowledge.execute('collections.create', { workspaceId: firstWorkspace, name: 'Shared facts' }, { actor: 'human' });
+      await knowledge.execute('collections.grant', { id: shared.id, memberWorkspaceId: secondWorkspace.id, role: 'write' }, { actor: 'human' });
+      assert.equal((await knowledge.execute('collections.list', { workspaceId: secondWorkspace.id }, { actor: 'human' }))[0].sessionSharing, 'separate');
       await workspace.execute('workspaces.switch', { id: secondWorkspace.id });
       await browser.execute('page.navigate', { url: origin });
       const secondTab = browser.activeId;
@@ -70,6 +86,9 @@ if (smoke) {
       assert.equal(await browser.execute('page.evaluate', { expression: 'localStorage.getItem("project")' }), 'first');
       assert.equal((await browser.execute('page.readable')).text, 'Saved evidence');
       assert.doesNotMatch(await browser.execute('page.content'), /password-secret|card-secret|otp-secret/);
+      await assert.rejects(browser.execute('page.evaluate', { tabId: firstTab, expectedVersion: browser.tab(firstTab).version, expression: '42' }, { actor: 'automation' }),
+        error => error.code === 'stale_state' && error.details.reason === 'inspection_required', 'a guessed current version is not an inspection after navigation');
+      await browser.execute('page.inspect', { tabId: firstTab }, { actor: 'automation' });
       const currentVersion = browser.tab(firstTab).version;
       await assert.rejects(browser.execute('page.evaluate', { tabId: firstTab, expression: '42' }, { actor: 'automation' }), /expectedVersion/);
       const pending = browser.execute('page.evaluate', { tabId: firstTab, expectedVersion: currentVersion, expression: 'new Promise(resolve => setTimeout(() => resolve(42), 150))' }, { actor: 'automation' });
@@ -98,13 +117,13 @@ if (smoke) {
       await browser.execute('page.navigate', { url: origin });
       await assert.rejects(browser.execute('page.navigate', { url: `${origin}/blocked/direct` }), /Blocked/, 'override expires after leaving the destination');
       await assert.rejects(browser.execute('page.navigate', { url: `${origin}/blocked/redirect` }), /Blocked/);
-      await assert.rejects(browser.execute('page.allowOnce', { tabId: firstTab }), /BLOCKED|ERR_ABORTED|ERR_FAILED/);
+      await assert.rejects(browser.execute('page.allowOnce', { tabId: firstTab }), { code: 'site_blocked' }, 'a redirect from the excepted destination is reported as a structured block');
       assert.equal(hits.includes('/blocked/next'), false, 'override does not permit a redirect chain');
       assert.equal(browser.describe(browser.tab()).blocked.url, `${origin}/blocked/next`);
       await browser.execute('page.back');
       assert.equal(browser.describe(browser.tab()).blocked, null);
 
-      await assert.rejects(browser.execute('page.navigate', { url: `${origin}/redirect` }), /BLOCKED|ERR_ABORTED|ERR_FAILED/);
+      await assert.rejects(browser.execute('page.navigate', { url: `${origin}/redirect` }), error => error.code === 'site_blocked' && error.details.url === `${origin}/blocked/destination`);
       assert.equal(hits.includes('/blocked/destination'), false, 'redirect target is blocked before contact');
       await browser.execute('page.navigate', { url: origin });
       assert.equal(await browser.execute('page.evaluate', { expression: `fetch(${JSON.stringify(`${origin}/blocked/background`)}).then(()=>true,()=>false)` }), false);
@@ -179,10 +198,10 @@ if (smoke) {
     }
   })().catch(error => { console.error(error); app.exit(1); });
 } else {
-  test('real Chromium workspace isolation, persistence, control leases, site rules, and native layout', { timeout: 45000 }, async () => {
+  test('real Chromium workspace isolation, persistence, control leases, site rules, and native layout', { timeout: budget(45000) }, async () => {
     const profile = mkdtempSync(join(tmpdir(), 'weft-workspace-integration-'));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', ...(!process.env.DISPLAY && process.platform === 'linux' ? ['--ozone-platform=headless'] : []), fileURLToPath(import.meta.url), '--workspace-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile }, stdio: ['ignore', 'pipe', 'pipe'],
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

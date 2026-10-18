@@ -1,17 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { CommunityLists } from '../src/community-lists.js';
+import { DatabaseSync } from '../src/sqlite.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 const human = { actor: 'human' };
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-lists-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const workspace = new WorkspaceService({ directory }); t.after(() => workspace.close());
+  removeAfter(t, directory);
+  const workspace = new WorkspaceService({ directory }); closeAfter(t, workspace);
   return { directory, workspace, lists: new CommunityLists({ workspace }) };
 }
 function source(hostname = 'example.com', commit = 'a'.repeat(40)) {
@@ -33,7 +35,7 @@ test('offline list pins and disabled rule provenance persist across restart', as
   assert.deepEqual(rule.provenance, { kind: 'community-list', listId: input.id, subscriptionWorkspaceId: workspace.activeWorkspaceId, sourceRepo: input.sourceRepo, commit: input.commit, path: input.path, sha256: input.sha256, bytes: input.bytes, ruleIndex: 0 });
   await workspace.execute('siteRules.update', { id: rule.id, changes: { enabled: true } }, human);
   assert.equal((await lists.execute('lists.status', {}, human))[0].enabledRuleCount, 1);
-  const reopened = new WorkspaceService({ directory }); t.after(() => reopened.close());
+  const reopened = new WorkspaceService({ directory }); closeAfter(t, reopened);
   assert.equal(new CommunityLists({ workspace: reopened }).summary(reopened.data.siteLists[0]).sha256, input.sha256);
   assert.equal(reopened.matchSiteRule('https://example.com').provenance.commit, input.commit);
 });
@@ -58,7 +60,7 @@ test('updates preserve prior pin, replace only owned rules and rollback disabled
 
 test('list integrity, schema and authority failures preserve store bytes', async t => {
   const { workspace, lists } = fixture(t);
-  const before = readFileSync(workspace.path, 'utf8');
+  const before = workspace.storage.contentDigest();
   for (const input of [{ ...source(), bytes: 1 }, { ...source(), sha256: '0'.repeat(64) }, { ...source(), commit: 'main' }, { ...source(), path: '../sites.json' }]) await assert.rejects(lists.execute('lists.install', input, human));
   const hostile = source();
   const data = JSON.parse(hostile.data); data.rules[0].code = 'process.exit()';
@@ -66,16 +68,16 @@ test('list integrity, schema and authority failures preserve store bytes', async
   await assert.rejects(lists.execute('lists.install', hostile, human));
   for (const name of ['lists.install', 'lists.status', 'lists.rollback']) await assert.rejects(lists.execute(name, name === 'lists.install' ? source() : {}, { actor: 'automation' }), /PERMISSION_REQUIRED/);
   await assert.rejects(lists.execute('lists.rollback', { id: 'community' }, human), /No previous/);
-  assert.equal(readFileSync(workspace.path, 'utf8'), before);
+  assert.equal(workspace.storage.contentDigest(), before);
 });
 
 test('list status is offline, scoped and repeated identical installation is idempotent', async t => {
   const { workspace, lists } = fixture(t);
   const original = workspace.activeWorkspaceId;
   await lists.execute('lists.install', source(), human);
-  const before = readFileSync(workspace.path, 'utf8');
+  const before = workspace.storage.contentDigest();
   assert.equal((await lists.execute('lists.install', source(), human)).unchanged, true);
-  assert.equal(readFileSync(workspace.path, 'utf8'), before);
+  assert.equal(workspace.storage.contentDigest(), before);
   const other = await workspace.execute('workspaces.create', { name: 'Other' });
   assert.deepEqual(await lists.execute('lists.status', {}, human), []);
   await assert.rejects(lists.execute('lists.status', { workspaceId: original }, { actor: 'human', workspaceId: other.id }), /PERMISSION_REQUIRED/);
@@ -84,12 +86,15 @@ test('list status is offline, scoped and repeated identical installation is idem
 
 test('external store changes roll back all subscription and rule mutations', async t => {
   const { workspace, lists } = fixture(t);
-  const external = readFileSync(workspace.path, 'utf8') + '\n';
-  writeFileSync(workspace.path, external);
+  const external = new DatabaseSync(workspace.path);
+  external.prepare("INSERT INTO state_meta(key, value) VALUES ('externalMarker', '1')").run();
+  const before = workspace.storage.contentDigest();
   await assert.rejects(lists.execute('lists.install', source(), human), /STORE_CONFLICT/);
   assert.equal(workspace.data.siteLists, undefined);
   assert.deepEqual(workspace.data.siteRules, []);
-  assert.equal(readFileSync(workspace.path, 'utf8'), external);
+  assert.equal(workspace.storage.contentDigest(), before);
+  assert.equal(external.prepare("SELECT count(*) AS count FROM records WHERE collection = 'siteRules'").get().count, 0);
+  external.close();
 });
 
 test('rollback rechecks preserved bytes rather than trusting cached rule descriptors', async t => {
@@ -101,7 +106,7 @@ test('rollback rechecks preserved bytes rather than trusting cached rule descrip
   assert.equal(restored.integrity, 'verified');
   assert.equal(workspace.data.siteRules[0].hostname, 'example.com');
   workspace.data.siteLists[0].previous.data += '\n';
-  const before = readFileSync(workspace.path, 'utf8');
+  const before = workspace.storage.contentDigest();
   await assert.rejects(lists.execute('lists.rollback', { id: 'community' }, human), /LIST_INTEGRITY/);
-  assert.equal(readFileSync(workspace.path, 'utf8'), before);
+  assert.equal(workspace.storage.contentDigest(), before);
 });

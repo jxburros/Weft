@@ -2,9 +2,27 @@
 
 `npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
 once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
-`npm run test:unit` runs non-GUI tests with a one-minute per-test timeout. GitHub CI
-runs these on Node 22/24 and Linux/macOS/Windows; a successful matrix is evidence
-for that commit, not a claim about every operating-system configuration.
+`npm run test:unit` runs non-GUI tests with a three-minute per-file cap (multiplied, like
+every explicit per-test timeout, by `WEFT_TEST_TIME_SCALE`; CI sets 4 on Windows, whose synced
+disk writes are several times slower) and
+`--test-force-exit`, so a server or child left open by a failing test cannot hang
+the job. GitHub CI runs these on Node 22/24 and Linux/macOS/Windows; a successful
+matrix is evidence for that commit, not a claim about every operating-system
+configuration. Every test file that launches the real Electron app must be listed
+in `browserTests` in `scripts/test-unit.mjs` (the runner refuses unlisted files
+that call `electronEnv`), and launches it through `scripts/electron-env.js`, which
+removes `ELECTRON_RUN_AS_NODE`: Windows treats an empty value as set and would
+start Electron as plain Node.
+
+Windows cannot delete or rename over a file that is still open. Tests that open
+stores, logs, servers or children in a temporary profile register them with
+`test/temp-profile.js` (`tempDirectory`, `removeAfter`, `closeAfter`,
+`beforeRemoval`), which closes everything before removing the directory; on Linux
+that removal fails the test when this process still has a file in it open, so a
+leaked handle shows up before Windows CI. Crash tests accept Windows termination
+(exit code 1, no signal, after the child's crash marker) where POSIX reports
+`SIGKILL`; AppImage replacement tests run only off Windows, and the open-database
+replacement scenario asserts that Windows refuses the replacement instead.
 
 The separate Linux Chromium job runs **all** tests under `xvfb-run -a npm test`,
 including native browser isolation and GUI workflows. It archives the test log
@@ -19,11 +37,25 @@ Performance budgets are regression thresholds, not a throughput guarantee.
 
 Hostile-input tests use fixed random seeds, compare record operations against a
 shadow model, and verify invalid imports leave both memory and disk unchanged.
-Import filenames are reduced to basenames and their bytes stay inside the JSON
-store: imports never write a caller-supplied path. This does not claim arbitrary
-archive extraction support. Loopback URL tests deliberately reject DNS names even
+Import filenames are reduced to basenames and their bytes are stored only as
+content-addressed component files named by digest: imports never write a
+caller-supplied path. Package imports reject links, malformed manifest paths and
+digest mismatches. This does not claim arbitrary archive extraction support. Loopback URL tests deliberately reject DNS names even
 if they might currently resolve to loopback; control-plane authorization never
 relies on mutable DNS answers.
+
+Extension compatibility evidence (`test/extensions-browser.test.js`, summarized
+in ADR-007) comes from Electron 44.9.0 / Chromium 152 on Linux under Xvfb. Run
+it again after any Electron upgrade before changing the allowed extension
+permission set; macOS and Windows behaviour has not been observed. Plugin
+sandbox tests rely on Node's permission model as shipped with the running Node
+or Electron version.
+
+Headless-session, tab-suspension and responsiveness tests (`test/headless.test.js`,
+`test/suspension.test.js`, `test/responsiveness.test.js`) launch real Electron and
+run only in the Linux Chromium job under Xvfb with software rendering. Their
+evidence is Linux-only; the responsiveness budgets are deliberately generous
+regression ceilings, and `perf/README.md` records the reference numbers.
 
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
 malware-feed, payment-provider, or multi-user deployment validation. Those items

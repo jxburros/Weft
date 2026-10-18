@@ -9,16 +9,28 @@ import { WorkspaceService } from '../src/workspace.js';
 import { fileStamp, writeVerifiedJson, storageWarnings } from '../src/storage-safety.js';
 import { inspectExportResidue } from '../src/export-safety.js';
 import { migrateSchema, CURRENT_SCHEMA_VERSION } from '../src/migrations.js';
+import { DatabaseSync } from '../src/sqlite.js';
+import { ComponentStore } from '../src/components.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
+import { budget } from './time-budget.js';
 
 function fixture(t, options = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-storage-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  removeAfter(t, directory);
   const service = new WorkspaceService({ directory, ...options });
-  t.after(() => service.close());
-  return { directory, service, path: join(directory, 'workspace-state.json') };
+  closeAfter(t, service);
+  return { directory, service, path: join(directory, 'workspace.sqlite') };
 }
+// Simulates a writer that ignores the profile lock (another tool or a stale process).
+function externalWrite(path) {
+  const db = new DatabaseSync(path);
+  db.prepare("UPDATE state_meta SET value = json_set(value, '$.theme', 'dark') WHERE key = 'settings'").run();
+  db.close();
+}
+const externalTheme = path => { const db = new DatabaseSync(path, { readOnly: true }); try { return JSON.parse(db.prepare("SELECT value FROM state_meta WHERE key = 'settings'").get().value).theme; } finally { db.close(); } };
+const count = (path, collection) => { const db = new DatabaseSync(path, { readOnly: true }); try { return db.prepare('SELECT count(*) AS count FROM records WHERE collection = ?').get(collection).count; } finally { db.close(); } };
 
-test('another process cannot open a profile; explicit close releases its lock', { timeout: 10000 }, t => {
+test('another process cannot open a profile; explicit close releases its lock', { timeout: budget(10000) }, t => {
   const { directory, service } = fixture(t);
   const code = `import { WorkspaceService } from ${JSON.stringify(new URL('../src/workspace.js', import.meta.url).href)}; const s = new WorkspaceService({directory:process.argv[1]}); s.close();`;
   const second = spawnSync(process.execPath, ['--input-type=module', '-e', code, directory], { encoding: 'utf8', timeout: 5000 });
@@ -30,23 +42,40 @@ test('another process cannot open a profile; explicit close releases its lock', 
   assert.equal(readdirSync(directory).includes('.workspace.lock'), false);
 });
 
-test('external same-size changes with restored timestamps are never overwritten', async t => {
+test('external database writes are detected and never overwritten', async t => {
   const { service, path } = fixture(t);
-  const before = readFileSync(path, 'utf8');
-  const stat = statSync(path);
-  const external = before.replace('My workspace', 'XX workspace');
-  writeFileSync(path, external);
-  utimesSync(path, stat.atime, stat.mtime);
+  externalWrite(path);
   await assert.rejects(service.execute('materials.create', { title: 'Must not write' }), /STORE_CONFLICT/);
-  assert.equal(readFileSync(path, 'utf8'), external);
+  assert.equal(externalTheme(path), 'dark');
+  assert.equal(count(path, 'materials'), 0);
   assert.deepEqual(service.snapshot().materials, []);
+  // The conflict persists until restart: later writes still refuse.
+  await assert.rejects(service.execute('materials.create', { title: 'Still refused' }), /STORE_CONFLICT/);
+});
+
+test('a replaced database file is detected before writing', async t => {
+  const { service, path, directory } = fixture(t);
+  const other = mkdtempSync(join(tmpdir(), 'weft-other-'));
+  removeAfter(t, other);
+  fs.copyFileSync(path, join(other, 'copy.sqlite'));
+  if (process.platform === 'win32') {
+    // Windows itself refuses to replace a file that is open without delete sharing (as SQLite opens it), so the
+    // replacement cannot happen while Weft has the database open; the open database stays canonical and writable.
+    assert.throws(() => fs.renameSync(join(other, 'copy.sqlite'), path), error => ['EPERM', 'EBUSY', 'EACCES'].includes(error.code));
+    await service.execute('materials.create', { title: 'Still the canonical file' });
+    assert.equal(count(path, 'materials'), 1);
+    return;
+  }
+  fs.renameSync(join(other, 'copy.sqlite'), path);
+  await assert.rejects(service.execute('materials.create', { title: 'Must not write' }), /STORE_CONFLICT/);
+  assert.equal(readdirSync(directory).includes('workspace.sqlite'), true);
 });
 
 test('history and session write conflicts restore in-memory state', async t => {
   const { service, path } = fixture(t);
   service.recordVisit({ workspaceId: service.activeWorkspaceId, url: 'https://example.com/', title: 'Existing', tabId: 1 });
   const before = service.snapshot();
-  writeFileSync(path, readFileSync(path, 'utf8') + '\n');
+  externalWrite(path);
   assert.throws(() => service.recordVisit({ workspaceId: service.activeWorkspaceId, url: 'https://different.test/', title: 'New', tabId: 1 }), /STORE_CONFLICT/);
   await assert.rejects(service.execute('history.clear'), /STORE_CONFLICT/);
   assert.throws(() => service.persistSession({ tabs: [], activeId: 7 }), /STORE_CONFLICT/);
@@ -55,30 +84,36 @@ test('history and session write conflicts restore in-memory state', async t => {
 
 test('same-process readers cannot overwrite each other and lost locks block writes', async t => {
   const { service, directory, path } = fixture(t);
-  const other = new WorkspaceService({ directory }); t.after(() => other.close());
+  const other = new WorkspaceService({ directory }); closeAfter(t, other);
   await service.execute('materials.create', { title: 'First writer' });
   await assert.rejects(other.execute('materials.create', { title: 'Stale writer' }), /STORE_CONFLICT/);
   writeFileSync(join(directory, '.workspace.lock'), 'replacement lock');
   await assert.rejects(service.execute('materials.create', { title: 'Lost lock' }), /STORE_LOCKED/);
   service.close(); other.close();
   assert.equal(readFileSync(join(directory, '.workspace.lock'), 'utf8'), 'replacement lock');
-  assert.equal(JSON.parse(readFileSync(path)).materials.length, 1);
+  assert.equal(count(path, 'materials'), 1);
 });
 
 test('temporary-byte verification refuses replacement and cleans failed temporary files', t => {
-  const { directory, path } = fixture(t);
+  const { directory } = fixture(t);
+  const path = join(directory, 'client-grants.json');
+  writeFileSync(path, '{"original":true}');
   const original = readFileSync(path, 'utf8');
   const stamp = fileStamp(path);
+  const components = new ComponentStore(join(directory, 'components'));
   const write = fs.writeFileSync;
   fs.writeFileSync = (target, value, options) => write(target, String(target).endsWith('.tmp') ? '{"wrong":true}' : value, options);
   syncBuiltinESMExports();
-  try { assert.throws(() => writeVerifiedJson(path, '{"expected":true}', stamp), /STORE_VERIFY_FAILED/); }
-  finally { fs.writeFileSync = write; syncBuiltinESMExports(); }
+  try {
+    assert.throws(() => writeVerifiedJson(path, '{"expected":true}', stamp), /STORE_VERIFY_FAILED/);
+    assert.throws(() => components.put(Buffer.from('component bytes')), /STORE_VERIFY_FAILED/);
+  } finally { fs.writeFileSync = write; syncBuiltinESMExports(); }
   assert.equal(readFileSync(path, 'utf8'), original);
   assert.equal(readdirSync(directory).some(name => name.endsWith('.tmp')), false);
+  assert.deepEqual(components.list(), { hashes: [], temporary: [] });
 });
 
-test('historical schemas migrate deterministically, retain unknown fields and back up original bytes', t => {
+test('historical schemas migrate deterministically, retain unknown fields and preserve original bytes', t => {
   for (const version of [1, 2]) {
     const original = readFileSync(new URL(`./fixtures/schema-v${version}/workspace-state.json`, import.meta.url), 'utf8');
     const raw = JSON.parse(original);
@@ -86,28 +121,30 @@ test('historical schemas migrate deterministically, retain unknown fields and ba
     assert.equal(raw.schemaVersion, version);
     assert.equal(migrated.schemaVersion, CURRENT_SCHEMA_VERSION);
     assert.deepEqual(migrateSchema(migrated), migrated);
-    const { service, path, directory } = fixture(t);
-    service.close(); writeFileSync(path, original);
-    const opened = new WorkspaceService({ directory }); t.after(() => opened.close());
+    const directory = mkdtempSync(join(tmpdir(), 'weft-legacy-'));
+    removeAfter(t, directory);
+    writeFileSync(join(directory, 'workspace-state.json'), original);
+    const opened = new WorkspaceService({ directory }); closeAfter(t, opened);
     assert.equal(opened.data.extensionMetadata.preserved, 'unknown fields must survive');
     assert.deepEqual(opened.data.history, []);
-    if (version === 1) {
-      const backups = readdirSync(directory).filter(name => name.includes('.schema1-'));
-      assert.equal(backups.length, 1);
-      assert.equal(readFileSync(join(directory, backups[0]), 'utf8'), original);
-    }
+    assert.equal(readdirSync(directory).includes('workspace-state.json'), false);
+    const preserved = readdirSync(join(directory, 'recovery')).filter(name => name.startsWith('workspace-state.'));
+    assert.equal(preserved.length, 1);
+    assert.equal(readFileSync(join(directory, 'recovery', preserved[0]), 'utf8'), original);
   }
 });
 
 test('newer schemas and invalid workspace ownership fail without writes or backups', t => {
-  const { service, path, directory } = fixture(t);
-  service.close();
-  const invalid = service.data;
+  const { service } = fixture(t);
+  const invalid = service.snapshot();
+  delete invalid.storageWarnings;
   invalid.materials.push({ id: 'orphan', workspaceId: 'missing', title: 'Orphan' });
   for (const state of [{ schemaVersion: 999 }, invalid]) {
-    const original = JSON.stringify(state); writeFileSync(path, original);
+    const directory = mkdtempSync(join(tmpdir(), 'weft-invalid-'));
+    removeAfter(t, directory);
+    const original = JSON.stringify(state); writeFileSync(join(directory, 'workspace-state.json'), original);
     assert.throws(() => new WorkspaceService({ directory }), /Unsupported|reference/);
-    assert.equal(readFileSync(path, 'utf8'), original);
+    assert.equal(readFileSync(join(directory, 'workspace-state.json'), 'utf8'), original);
     assert.deepEqual(readdirSync(directory), ['workspace-state.json']);
   }
 });
@@ -127,8 +164,8 @@ test('historical export chain works and invalid imported relationships roll back
 });
 
 test('secret fields are rejected recursively before importing, storing or accepting workflow names', async t => {
-  const { service, path } = fixture(t);
-  const before = readFileSync(path, 'utf8');
+  const { service } = fixture(t);
+  const before = service.storage.contentDigest();
   await assert.rejects(service.execute('workflows.create', { title: 'Unsafe', parameters: ['api_key'] }), /SECRET_FIELD/);
   await assert.rejects(service.execute('tasks.create', { title: 'Unsafe', ignored: { deeply: [{ clientSecret: 'do-not-log' }] } }), /SECRET_FIELD/);
   const exported = service.exportWorkspace(service.activeWorkspaceId);
@@ -136,7 +173,7 @@ test('secret fields are rejected recursively before importing, storing or accept
   await assert.rejects(service.execute('workspaces.import', { data: JSON.stringify(exported) }), error => error.code === 'SECRET_FIELD' && !error.message.includes('do-not-log'));
   service.data.extensionMetadata = { private_key: 'do-not-log' };
   assert.throws(() => service.save(), /SECRET_FIELD/);
-  assert.equal(readFileSync(path, 'utf8'), before);
+  assert.equal(service.storage.contentDigest(), before);
 });
 
 test('residue scanning inspects escaped JSON, notes, capture text and decoded text files', async t => {
@@ -169,7 +206,7 @@ test('local-only metadata and turn manifests persist for provider routing', asyn
   await service.appendMessage(conversation.id, { role: 'user', content: 'Local evidence', localOnly: true });
   await service.recordTurnManifest(conversation.id, { id: 'turn1', status: 'pending', requests: [] });
   await service.recordTurnManifest(conversation.id, { id: 'turn1', status: 'complete', requests: [{ bytes: 123 }] });
-  const reopened = new WorkspaceService({ directory }); t.after(() => reopened.close());
+  const reopened = new WorkspaceService({ directory }); closeAfter(t, reopened);
   const stored = reopened.getConversation(conversation.id);
   assert.equal(stored.messages[0].localOnly, true);
   assert.deepEqual(stored.turnManifests, [{ id: 'turn1', status: 'complete', requests: [{ bytes: 123 }] }]);
@@ -188,15 +225,17 @@ test('sync locations, copy and placeholder warnings surface without changing cop
   writeFileSync(conflict, 'keep these original bytes');
   writeFileSync(join(directory, 'workspace-state.json.icloud'), 'placeholder');
   writeFileSync(join(directory, 'workspace-state-MY-LAPTOP.json'), 'device copy');
-  assert.equal(service.snapshot().storageWarnings.length, 3);
+  writeFileSync(join(directory, 'workspace (conflicted copy).sqlite'), 'database copy');
+  writeFileSync(join(directory, 'workspace.sqlite.icloud'), 'placeholder');
+  assert.deepEqual(service.snapshot().storageWarnings.map(item => item.code).sort(), ['SYNC_CONFLICT_COPY', 'SYNC_CONFLICT_COPY', 'SYNC_CONFLICT_COPY', 'SYNC_PLACEHOLDER', 'SYNC_PLACEHOLDER']);
   service.save();
   assert.equal(readFileSync(conflict, 'utf8'), 'keep these original bytes');
-  assert.equal(warnings.length, 3);
+  assert.equal(warnings.length, 5);
 });
 
 test('a conflicted copy without a canonical file blocks silent creation', t => {
-  const { service, path, directory } = fixture(t);
-  service.close(); rmSync(path);
+  const directory = mkdtempSync(join(tmpdir(), 'weft-conflict-'));
+  removeAfter(t, directory);
   writeFileSync(join(directory, 'workspace-state (conflicted copy).json'), 'preserved');
   assert.throws(() => new WorkspaceService({ directory, onWarning() {} }), /STORE_CONFLICT/);
   assert.deepEqual(readdirSync(directory), ['workspace-state (conflicted copy).json']);

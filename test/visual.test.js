@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
+import { electronEnv } from "../scripts/electron-env.js";
+import { budget } from './time-budget.js';
 const root = fileURLToPath(new URL("../", import.meta.url));
 const goldenDir = join(root, "test/visual/golden");
 const failureDir = join(root, "test/visual/_failures");
@@ -25,6 +27,8 @@ if (process.argv.includes("--visual-child")) {
   let window;
   let stopped = false, sent = null, exportArgs = null, clientArgs = null;
   const grants = [];
+  const updateCalls = [];
+  const updateStatus = {currentVersion:"1.0.0",channel:"stable",repository:"jxburros/Weft",install:{kind:"appimage",platform:"linux",arch:"x64",supported:true,method:"replace",reason:null},killSwitch:{active:false,variable:"WEFT_DISABLE_UPDATES"},automaticChecks:{enabled:false,intervalHours:24,stagesOnly:true,nextCheckAt:null},egress:{hosts:["github.com","objects.githubusercontent.com","release-assets.githubusercontent.com"],sends:"IP address, Weft version, platform and architecture (User-Agent). No workspace data, tokens or browsing data.",contactsNetwork:"only when you choose Check now"},lastCheck:null,staged:null,activation:{pending:null,health:null,history:[],failedVersions:[],rollback:{available:false,guidance:"Download the previous release from GitHub and verify it against SHA256SUMS.txt."}},warning:null};
   const run = async expression => {
     try { return await window.webContents.executeJavaScript(expression); }
     catch (error) { throw new Error(`${expression}: ${error.message}`); }
@@ -71,6 +75,7 @@ if (process.argv.includes("--visual-child")) {
       if(name==="tabs.list") return tabs;
       if(name==="models.list") return models;
       if(name==="browser.info") return {automation:{stopped}};
+      if(name==="encryption.status") return {enabled:false,locked:false,lockReason:null,unlockMode:null,keyVersion:null,rotation:null,methods:{os:{configured:false,available:true,backend:"gnome_libsecret",protects:true,reason:null},recovery:{configured:false},passphrase:{configured:false}},coverage:{encrypted:[],notEncrypted:[],threatModel:""}};
       if(name==="browser.resumeAutomation") { stopped=false; return {}; }
       if(name==="conversations.create") { const c={id:"chat",workspaceId:"fixture",title:args.title,messages:[]};state.conversations.push(c);return c; }
       if(name==="chat.preview") return {disclosure:{endpoint:"https://model.example/v1",model:"fixture",locality:"remote",requiresAcknowledgement:true,items:[{kind:"message",title:"Your request",bytes:10}],tools:[],totalBytes:10}};
@@ -78,9 +83,24 @@ if (process.argv.includes("--visual-child")) {
       if(name==="workspaces.export") { exportArgs=args;return {format:"weft",residueScan:{status:"found",found:["sha256"],unverifiable:["image"],scope:"Text only"}}; }
       if(name==="settings.update") { Object.assign(state.settings,args); return state.settings; }
       if(name==="clients.list") return grants;
+      if(name==="autonomy.get") return {bootstrapLevel:"autonomous",workspaceCeiling:null};
       if(name==="clients.create") { clientArgs=args; const grant={...args,clientId:"client-fixture",expiresAt:1893456000000,revoked:false};grants.push(grant);return {...grant,token:"weft1.fixture-secret-token"}; }
       if(name==="clients.revoke") { grants.find(g=>g.clientId===args.clientId).revoked=true;return {revoked:true}; }
       if(name==="tabs.activate") return tabs[0];
+      if(name==="resume.get") return {workspaceId:"fixture",saved:false,view:{section:"overview",activeTabId:null,split:{tabId:null,focusedPane:"primary"},panels:{}},missing:{},pinned:[],pinnedMaterials:[],continue:{blockers:[],tasks:[],handoffs:[]},tabs:{count:0,suspended:0,groups:[]},notices:[]};
+      if(name==="resume.save") return {};
+      if(name==="search.status") return {lexical:{documents:1},vector:{enabled:false}};
+      if(name==="display.status") return {mode:"headed",windowVisible:true,launchedHeadless:false,renderMode:"onscreen",tabs:{total:1,offscreen:0,onscreen:1,suspended:0},pendingApprovals:0,profile:{fingerprint:"0123456789abcdef"},transitions:[]};
+      if(name==="resources.status") return {limits:{maxAgentCommands:8,maxPerClient:4,maxPerTask:2,captureConcurrency:1,captureQueueLimit:8,idleSuspendMinutes:30,memoryBudgetMb:null,maxCaptureEdge:4096},agentCommands:{running:0,byCommand:[]},captures:{running:0,queued:0,jobs:[]},memory:null,suspendedTabs:[],budgets:null};
+      if(name.startsWith("update.")) updateCalls.push([name,args]);
+      if(name==="update.status") return structuredClone(updateStatus);
+      if(name==="update.configure") { updateStatus.automaticChecks.enabled=args.automaticChecks; return structuredClone(updateStatus); }
+      if(name==="update.check") {
+        updateStatus.lastCheck={at:"2026-10-17T12:00:00.000Z",status:"staged",message:"Weft 1.1.0 was downloaded and verified. It installs only when you choose Install.",latestVersion:"1.1.0",automatic:false};
+        updateStatus.staged={version:"1.1.0",file:"Weft-1.1.0-x86_64.AppImage",size:128524649,sha512:"8rEgr2490uwZjPIerIGR3IcNvCzjsW+RyMS57E+nKZ+yQ3DbtMKQBshmzbRbP4q933KLSkUuTPykB1cgW4BN3w==",releaseTag:"v1.1.0",verifiedAt:"2026-10-17T12:00:00.000Z",verification:{sizeAndSha512:"verified_at_download",onDisk:"present",recheckedBeforeInstall:true},signature:{status:"platform_verified_on_open",subject:null,reason:"Linux packages are verified by release manifest size and SHA-512 only."},releaseUrl:"https://github.com/jxburros/Weft/releases/tag/v1.1.0"};
+        return {status:"staged",message:updateStatus.lastCheck.message};
+      }
+      if(name==="update.install") return {status:"restarting",message:"Weft 1.1.0 is installed and will restart now."};
       throw Error(`Unexpected fixture command ${name}`);
     };
     ipcMain.handle("weft:execute", (_event, name, args) => ({ result: fixtureExecute(name, args) }));
@@ -105,7 +125,12 @@ if (process.argv.includes("--visual-child")) {
     window.webContents.sendInputEvent({type:"keyDown",keyCode:"Escape"});
     window.webContents.sendInputEvent({type:"keyUp",keyCode:"Escape"});
     await until('!document.getElementById("dialog").open');
-    assert.equal(await run('document.activeElement.id'),"search-button");
+    // Chromium can finish its own modal-close steps a tick after the dialog reports closed; focus must still return.
+    try { await until('document.activeElement?.id === "search-button"'); }
+    catch (error) {
+      const where = await run('JSON.stringify({ tag: document.activeElement?.tagName, id: document.activeElement?.id, cls: document.activeElement?.className, dialogOpen: document.getElementById("dialog").open, hasFocus: document.hasFocus(), searchExists: Boolean(document.getElementById("search-button")) })');
+      throw new Error(`${error.message}; focus is on ${where}`);
+    }
     // Safety decisions stay in trusted chrome, and cancellation never sends a request.
     await click('#agent-toggle');
     await run('document.getElementById("chat-input").value="Private draft";document.getElementById("chat-form").requestSubmit()');
@@ -143,7 +168,7 @@ if (process.argv.includes("--visual-child")) {
     await run('document.querySelector("#client-form [name=name]").value="Research assistant";document.querySelectorAll("#client-form [name=scope]")[1].checked=true;document.getElementById("client-form").requestSubmit()');
     await until('document.getElementById("new-client-token") !== null');
     assert.equal(await run('document.getElementById("new-client-token").value'),"weft1.fixture-secret-token");
-    assert.deepEqual(clientArgs,{name:"Research assistant",scopes:["read","records.write"],workspaceIds:["fixture"],ttlSeconds:3600});
+    assert.deepEqual(clientArgs,{name:"Research assistant",purpose:"",scopes:["read","records.write"],actionClasses:[],autonomy:"scoped",dataAccess:["workspace_records","conversations","page_content","page_capture","browsing_history","activity"],destinations:["*"],maxCommands:null,workspaceIds:["fixture"],crossWorkspace:false,ttlSeconds:3600});
     assert.doesNotMatch(await run('document.getElementById("result").textContent'),/fixture-secret-token/);
     await click('[data-action="close-dialog"]');
     await until('document.getElementById("new-client-token") === null');
@@ -154,6 +179,28 @@ if (process.argv.includes("--visual-child")) {
     assert.equal(grants[0].revoked,true);
     await click('[data-action="close-dialog"]');
     await until('document.getElementById("safety-notices").hidden');
+    // Update Center: disclosed, human-triggered checks; installs only the staged version shown.
+    await click('[data-section="updates"]');
+    await until('document.getElementById("update-center")?.textContent.includes("Weft 1.0.0")');
+    assert.match(await run('document.getElementById("update-center").textContent'),/github\.com.*No workspace data/s);
+    assert.equal(await run('document.querySelector("[data-action=install-update]")'),null);
+    assert.deepEqual(updateCalls.map(([name])=>name),["update.status"],"opening the Update Center performs no check");
+    await click('[data-action="check-updates"]');
+    await until('document.querySelector("[data-action=install-update]") !== null');
+    assert.match(await run('document.getElementById("update-center").textContent'),/Size and SHA-512 match the release manifest/);
+    await run('document.getElementById("auto-updates").click()');
+    await until('document.getElementById("auto-updates").checked');
+    assert.equal(updateStatus.automaticChecks.enabled,true);
+    await click('[data-action="install-update"]');
+    await until('document.getElementById("toast").textContent.includes("restart")');
+    assert.deepEqual(updateCalls.filter(([name])=>name!=="update.status"),[["update.check",{}],["update.configure",{automaticChecks:true}],["update.install",{version:"1.1.0"}]]);
+    updateStatus.killSwitch.active=true;
+    await click('#settings-button');
+    await click('[data-section="updates"]');
+    await until('document.getElementById("update-center")?.textContent.includes("turned off by WEFT_DISABLE_UPDATES")');
+    assert.equal(await run('document.querySelector("[data-action=check-updates]").disabled'),true);
+    assert.equal(await run('document.querySelector("[data-action=install-update]").disabled'),true);
+    updateStatus.killSwitch.active=false;
     for(const theme of ["light","dark"]) {
       state.settings.theme=theme;
       state.materials=[];
@@ -192,9 +239,14 @@ if (process.argv.includes("--visual-child")) {
     console.log("WEFT_VISUAL_OK"); app.quit();
   })().catch(error=>{console.error(error);app.exit(1);});
 } else {
-  test("Linux GUI goldens and keyboard accessibility",{timeout:90000,skip:process.env.WEFT_VISUAL!=="1"?"Set WEFT_VISUAL=1 under xvfb-run":process.platform!=="linux"?"Goldens target Linux":false},async()=>{
+  test("Linux GUI goldens and keyboard accessibility",{timeout: budget(90000),skip:process.env.WEFT_VISUAL!=="1"?"Set WEFT_VISUAL=1 under xvfb-run":process.platform!=="linux"?"Goldens target Linux":false},async()=>{
     const profile=mkdtempSync(join(tmpdir(),"weft-visual-"));
-    const child=spawn(electron,["--no-sandbox","--disable-gpu",fileURLToPath(import.meta.url),"--visual-child"],{env:{...process.env,ELECTRON_RUN_AS_NODE:"",WEFT_VISUAL_PROFILE:profile,TZ:"UTC",LANG:"en_US.UTF-8"},stdio:["ignore","pipe","pipe"]});
+    // Glyph rasterisation follows fontconfig even for the bundled web fonts. Pin the stock Ubuntu
+    // rendering (slight hinting, greyscale antialiasing, DejaVu Sans as the sans-serif fallback) so a
+    // machine-local override such as forced unhinted text or a preferred UI font cannot shift goldens.
+    const fontconfig=join(profile,"fonts.conf");
+    writeFileSync(fontconfig,`<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd"><fontconfig><include ignore_missing="yes">/etc/fonts/fonts.conf</include><match target="pattern"><test name="family"><string>sans-serif</string></test><edit name="family" mode="prepend_first" binding="strong"><string>DejaVu Sans</string></edit></match><match target="font"><edit name="antialias" mode="assign"><bool>true</bool></edit><edit name="hinting" mode="assign"><bool>true</bool></edit><edit name="hintstyle" mode="assign"><const>hintslight</const></edit><edit name="autohint" mode="assign"><bool>false</bool></edit><edit name="rgba" mode="assign"><const>none</const></edit><edit name="lcdfilter" mode="assign"><const>lcddefault</const></edit></match></fontconfig>`);
+    const child=spawn(electron,["--no-sandbox","--disable-gpu",fileURLToPath(import.meta.url),"--visual-child"],{env:electronEnv({ WEFT_VISUAL_PROFILE:profile,FONTCONFIG_FILE:fontconfig,TZ:"UTC",LANG:"en_US.UTF-8" }),stdio:["ignore","pipe","pipe"]});
     let output=""; child.stdout.on("data",x=>output+=x);child.stderr.on("data",x=>output+=x);
     const timer=setTimeout(()=>child.kill("SIGKILL"),80000);
     try { const code=await new Promise((resolve,reject)=>{child.on("exit",resolve);child.on("error",reject);}); assert.equal(code,0,output); assert.match(output,/WEFT_VISUAL_OK/); }

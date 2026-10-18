@@ -13,7 +13,7 @@ surfaces, plum controls, and deliberate light/dark themes.
 
 ## Run
 
-Requires **Node.js 22.12+**, npm, and a desktop session. Electron supplies Chromium.
+Requires **Node.js 22.13+** (for the built-in `node:sqlite` module), npm, and a desktop session. Electron supplies Chromium.
 
 ```sh
 npm ci
@@ -34,6 +34,26 @@ Set `WEFT_PORT` to change the port. In PowerShell, use `$env:WEFT_TOKEN = ...`.
 A desktop display is required. On headless Linux, `xvfb-run -a npm start` provides
 a virtual display. Normal startup keeps Chromium's sandbox enabled.
 
+To run without a visible window (same profile, policies and agent API; pages
+render offscreen), start with `npm start -- --headless` or `WEFT_HEADLESS=1`.
+Launch Weft again or run `weft attach` to show the window of that running
+session; agent requests that need your decision wait until you do. Linux still
+needs a display server for this (a desktop session or `xvfb-run`). See
+[ADR-015](docs/decisions/015-headless-resume-and-resource-scheduling.md).
+
+### Installers and updates
+
+Stable releases are packaged for Windows x64 (branded per-user NSIS installer),
+macOS arm64/x64 (dmg/zip) and Linux x64 (AppImage/deb) from GitHub Releases of
+`jxburros/Weft`. Settings > Updates shows the installed version, the stable
+channel and any verified staged update. Weft contacts GitHub only when you choose
+Check now or turn on daily checks; downloads are size- and SHA-512-verified and
+installed only when you choose. `WEFT_DISABLE_UPDATES=1` turns all update traffic
+off. Upgrades and uninstalls keep your workspaces unless you explicitly remove
+them. Release, signing and support details: [docs/RELEASING.md](docs/RELEASING.md).
+Code signing and notarization depend on credentials that are not yet configured,
+so current builds are labelled unsigned.
+
 ## What you can do
 
 - **Browse:** address/search bar, native Chromium pages, separate workspace
@@ -43,7 +63,9 @@ a virtual display. Normal startup keeps Chromium's sandbox enabled.
   keep editable notes, website references, and copied files; track confirmed
   information, findings, questions, instructions, and decisions.
 - **Continue work:** save task objectives, owners, states, blockers, checkpoints,
-  and next steps. Turn reusable workflow instructions into queued human tasks.
+  and next steps. Plan multi-step tasks and run parameterized workflows through a durable task
+  runtime that pauses for approvals and marks work with an unknown outcome
+  `uncertain` instead of retrying it blindly.
 - **Keep evidence:** save readable page text and PNG screenshots as immutable
   capture versions. Open them offline without executing source HTML or contacting
   the original site. Capture limitations and source metadata remain visible.
@@ -96,9 +118,19 @@ opt-in. They are limited to the selected tab and conversation workspace, allow
 at most five calls, and cannot click, fill forms, change policies, or execute
 arbitrary code. Tool results retain their source and are expandable in chat.
 
-Image input, token streaming, autonomous task execution, and vision fallback are
-not implemented. Errors, cancellation, and unsupported responses are shown as
-such; the application does not manufacture an assistant reply.
+Replies stream as they are written. **Attach** adds a tab snapshot, materials,
+context, tasks, exact capture versions or a pasted passage; before sending, the
+review lists what the selected model receives item by item, lets you exclude
+items, and shows when older history is omitted to fit the model's context window
+(your saved conversation is never rewritten). Images go only to connections you
+mark or discover (`models.probe`) as image-capable, or to a vision fallback you
+configure, after acknowledgement. Each reply shows endpoint locality,
+provider-reported tokens and, if you set prices, a labeled cost estimate. The
+Ollama native API (`http://127.0.0.1:11434`) is also supported.
+
+Errors, cancellation, and
+unsupported responses are shown as such; a stopped reply is kept and marked
+interrupted, and the application does not manufacture an assistant reply.
 
 ## CLI and MCP
 
@@ -137,7 +169,7 @@ For MCP, configure your client:
 }
 ```
 
-MCP advertises eight grouped tools, including `weft_reference` for command
+MCP advertises nine grouped tools, including `weft_reference` for command
 discovery. Execution tools accept a canonical command as `action` and its `args`;
 legacy underscore names such as `page_readable` remain accepted but unadvertised.
 Schemas and structured outcomes are shared. Screenshots retain MCP image content.
@@ -151,24 +183,49 @@ Requests require `Authorization: Bearer <token>`:
 - `GET /v1/commands` returns descriptions and input schemas.
 - `GET /v1/openapi.json` returns the generated OpenAPI 3.1 contract.
 - `GET /v1/events` streams authenticated command metadata through SSE, without
-  arguments, page content, model messages, credentials, or results.
-- `POST /v1/execute` accepts `{ "command": "...", "args": {} }` and returns
-  a versioned outcome with `schemaVersion`, `command`, `execution`, `validation`,
-  `review`, `workspaceId`, `tabId`, `normalized`, `result` and `error`.
+  arguments, page content, model messages, credentials, or results. Reconnect
+  with `Last-Event-ID` to replay recently retained events.
+- `GET /v1/turns/{turnId}/events` follows or resumes one model turn; send
+  `Accept: text/event-stream` to `POST /v1/execute` to stream a turn you start.
+  See [agent integration](docs/AGENT-INTEGRATION.md).
+- `POST /v1/execute` accepts `{ "command": "...", "args": {} }` (optionally a
+  `deadlineMs` field or `Weft-Deadline-Ms` header) and returns a versioned outcome
+  with `schemaVersion`, `command`, `status`, `execution`, `validation`, `review`,
+  `workspaceId`, `tabId`, `normalized`, `request`, `result` and `error`.
   See [the command contract](docs/COMMANDS.md) for status and error meanings.
+- `GET /v1/capabilities` reports the API version, catalog hash, outcome table,
+  limits and features; `GET /v1/download` streams stored bytes.
 
 Discovery is the authoritative list of available commands and arguments. Unknown
-fields are rejected. API request bodies are capped at 1 MiB, so large file imports
-should use the GUI. REST rejects browser-origin requests and does not enable CORS.
+fields are rejected. API request bodies are capped at 1 MiB, so large projects
+move as package folders (`workspaces.exportPackage`/`workspaces.importPackage`,
+human-only) or through the GUI, and single large files move through verified
+chunked uploads (`transfers.begin`, `transfers.append`, `transfers.commit`). Large
+collections accept `page: {limit, cursor}`. REST rejects browser-origin requests and does not enable CORS.
+
+Mutating record commands accept an optional `requestId`: retrying the same command
+and arguments returns the original result (`idempotency.replayed: true`) instead of
+applying twice. `batch.execute` applies up to 100 record commands all-or-nothing, and
+destructive record commands, imports and batches accept `dryRun` to preview the exact
+changes. See [ADR 011](docs/decisions/011-transactional-storage-search-and-recovery.md).
 
 Human-only policy, configuration, storage-administration, override, and takeover
-commands appear in discovery but reject automation callers. The bootstrap token
-retains broad access. In Settings → Agent connections, issue a separate token for
-each client with workspace restrictions, read/record-write/tab-control scopes and
-a finite lifetime. Revocation takes effect on every subsequent command and event;
-idle event streams close at their next heartbeat. Tokens are displayed once and
-never stored in the project. Scoped clients cannot execute arbitrary JavaScript,
-configure providers, change site policy, or mint other tokens. This remains a
+commands appear in discovery but reject automation callers. Every other agent
+command passes one authority gate (ADR-005): reads run, local work runs at the
+default level, and external actions such as clicks, form fills, scripts and model
+sends wait in the Agent requests queue until you approve them once or for a
+period, unless you granted standing autonomy. The bootstrap token defaults to
+standing autonomy; lower it in Settings → Agent connections. There, issue a
+separate token for each client with a purpose, workspace restrictions (several
+workspaces need an explicit cross-workspace grant), read/record-write/tab-control
+scopes, allowed sites, readable data classes, an autonomy level, an optional
+command limit and a finite lifetime. Changes and revocation take effect on every
+subsequent command and event; idle event streams close at their next heartbeat.
+Tokens are displayed once and never stored in the project. Scoped clients cannot
+execute page scripts or send to models unless granted, configure providers,
+change site policy, approve requests, or mint other tokens. Activity records
+decisions, approvals and outcomes with hash-chain tamper evidence and
+configurable retention; it is not proof that an external action succeeded. This remains a
 local single-user application, not a remote multi-user service. Takeovers revoke leases and state versions, but cannot undo
 an external action or arbitrary page script that already executed.
 
@@ -188,16 +245,27 @@ in the destination workspace's storage container and may change its login state.
 The original foundation's shared `persist:weft` session is not merged into new
 workspace containers.
 
-Exports include versioned project records, copied material bytes, and captures.
-They exclude browser sessions, configured model keys, and global policies.
-Imports create new IDs and leave imported rules/workflows inactive for review.
-Copies use this same behavior. Linked-file/service entries are manual reference
-metadata; their sources are not automatically copied or refreshed.
+Exports (format 2) include project records with revisions and revision history,
+conversations, exact capture versions with their hashes, annotations, copied
+material bytes and task/workflow/evidence links. They exclude browser sessions,
+cookies, configured model keys, global policies, activity and browsing history.
+Imports create new IDs, rewrite citations of exported IDs, verify capture hashes,
+report every lossy mapping and leave imported rules/workflows inactive for review;
+the GUI shows a preview first. Copies use this same behavior. Linked files, folders and
+service references export as metadata only; their content, local paths and
+credentials are omitted and listed in the import report.
 
-The project store is a bounded, single-process JSON file written with atomic
-replacement. It is **not encrypted**, and is not a transactional multi-process
-database. Stored materials are limited to 10 MiB, PNGs to 20 MiB, and total
-project state to 100 MiB. Exports are the current manual backup mechanism.
+Project metadata is a transactional SQLite database (`workspace.sqlite`, WAL
+mode, owned by one Weft process through a profile lock); captures and stored
+files are verified content-addressed files under `components/`, so editing
+metadata never rewrites them. Search uses a local FTS5 index. Weft keeps
+verified automatic backups (daily, latest five) and manual backups under
+`backups/`; restoring preserves the replaced data under `recovery/`. With Weft
+closed, `weft store backups|verify|restore <workspace-data directory>` recovers
+a profile whose database cannot be opened. Unless you turn on opt-in workspace
+encryption (Settings > Encryption; [ADR-014](docs/decisions/014-workspace-encryption-and-key-management.md)),
+none of this is **encrypted**, and backups on the same disk do not protect against losing that disk. Stored
+materials are limited to 10 MiB, PNGs to 20 MiB and JSON imports to 100 MiB.
 Free-form content, files, and captures can contain private data; export does not
 perform comprehensive secret or personal-information redaction.
 
@@ -207,10 +275,16 @@ This is a working browser build, **not every requirement in the full product
 specification**. The exact section-by-section and acceptance-criteria assessment
 is in [implementation coverage](docs/IMPLEMENTATION.md).
 
-The largest remaining capabilities are the isolated credential/payment broker,
-fine-grained agent grants and autonomous execution, comprehensive storage
-block/session modes, community subscriptions, extension support, synchronization,
-and signed installers/automatic updates. Provider key storage is not a credential
+The largest remaining capabilities are independent review of the credential
+broker, validation of payment authorization with real merchants and card issuers
+([ADR-019](docs/decisions/019-payment-authorization.md)), screen-reader and
+cross-platform accessibility evidence, exercising the OS key stores used by workspace
+encryption, any hosted moderation service for community lists, synchronization and
+collaboration (deferred in [ADR-002](docs/decisions/002-sync-collaboration-remote.md)),
+and signed (rather than labelled-unsigned) installers and updates verified on real machines. Browser extension support is limited to unpacked
+Manifest V3 extensions installed per workspace with audited permissions
+([ADR-007](docs/decisions/007-extension-compatibility.md)); Weft plugins are
+described in [docs/PLUGINS.md](docs/PLUGINS.md). Provider key storage is not a credential
 broker. The application does not make strong secret-isolation claims against
 agents that can control the host computer.
 
@@ -218,7 +292,7 @@ Remote pages are sandboxed and have no Node integration or privileged preload.
 Unsupported protocols and native launches are blocked; permission requests are
 denied. Site rules cover documented Chromium request paths, not an external
 agent's independent network tools. Unsolicited downloads are cancelled and can be approved from Downloads. Downloads are never executed automatically
-and are not claimed to have been scanned for malware. Keep Electron current for
+and are not claimed to have been scanned for malware unless you configure a local scanner (ADR-009). Keep Electron current for
 Chromium security fixes.
 
 ## Development and validation
@@ -230,6 +304,8 @@ npm run evals
 npm run test:perf
 # Include actual Chromium and GUI tests on headless Linux:
 xvfb-run -a npm test
+# Package locally (outputs in dist/, see docs/RELEASING.md):
+npm run dist -- --linux AppImage
 ```
 
 No bundler or compilation step is needed. Tests cover command validation,
@@ -244,7 +320,7 @@ Agent contributors should read [AGENTS.md](AGENTS.md). The packaged
 registry. [Offline task evals](evals/README.md) measure reference success and tool
 calls; [performance budgets](perf/README.md) cover large-store writes, capture
 search and catalog generation. [Architecture decisions](docs/decisions/) record
-current scope and outstanding encryption/plugin work.
+the product scope, deferred sync and collaboration, the plugin/extension boundaries, workspace encryption and the other design decisions.
 
 The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
 variants are documented in [assets/logo/README.md](assets/logo/README.md).

@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
+import { closeAfter, removeAfter } from './temp-profile.js';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-workspace-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  return { directory, service: new WorkspaceService({ directory }) };
+  removeAfter(t, directory);
+  return { directory, service: closeAfter(t, new WorkspaceService({ directory })) };
 }
 
 test('empty workspace persists notes, revisions, conversations and theme across restart', async t => {
@@ -20,13 +21,14 @@ test('empty workspace persists notes, revisions, conversations and theme across 
   const conversation = await service.execute('conversations.create', {});
   await service.appendMessage(conversation.id, { role: 'user', content: 'Read the notes' });
   await service.execute('settings.update', { theme: 'dark' });
-  const reopened = new WorkspaceService({ directory });
+  const reopened = closeAfter(t, new WorkspaceService({ directory }));
   const saved = await reopened.execute('materials.get', { id: note.id });
   assert.equal(saved.content, 'Second version');
   assert.equal(saved.history.length, 2);
   assert.equal(reopened.getConversation(conversation.id).messages[0].content, 'Read the notes');
   assert.equal(reopened.snapshot().settings.theme, 'dark');
-  assert.deepEqual(readdirSync(directory), ['.workspace.lock', 'workspace-state.json']);
+  assert.ok(readdirSync(directory).includes('workspace.sqlite'));
+  assert.equal(readdirSync(directory).includes('workspace-state.json'), false);
 });
 
 test('stale updates fail without changing durable state', async t => {
@@ -34,7 +36,7 @@ test('stale updates fail without changing durable state', async t => {
   const task = await service.execute('tasks.create', { title: 'Check references' });
   await service.execute('tasks.update', { id: task.id, expectedRevision: 1, changes: { objective: 'Inspect primary sources' } });
   await assert.rejects(service.execute('tasks.update', { id: task.id, expectedRevision: 1, changes: { title: 'Overwrite' } }), /STALE_STATE/);
-  assert.equal(new WorkspaceService({ directory }).snapshot().tasks[0].title, 'Check references');
+  assert.equal(closeAfter(t, new WorkspaceService({ directory })).snapshot().tasks[0].title, 'Check references');
   assert.equal(service.snapshot().tasks[0].status, 'queued');
   await service.execute('tasks.transition', { id: task.id, status: 'paused', cause: 'Need source access' });
   assert.match(service.snapshot().activity.at(-1).detail, /Need source access/);
@@ -87,7 +89,7 @@ test('artifacts retain immutable offline versions and hashes without active HTML
   const versionId = first.versions[0].id;
   await service.execute('artifacts.create', { artifactId: first.id, title: 'Source', text: 'Second' });
   await service.execute('artifacts.annotate', { id: first.id, note: 'Reviewed' });
-  const exact = await new WorkspaceService({ directory }).execute('artifacts.get', { id: first.id, versionId });
+  const exact = await closeAfter(t, new WorkspaceService({ directory })).execute('artifacts.get', { id: first.id, versionId });
   assert.equal(exact.text, '<script>untrusted()</script> First');
   assert.equal(exact.url, 'https://example.com/reference?q=research');
   assert.equal(exact.components[0].sha256.length, 64);
@@ -126,7 +128,8 @@ test('export/import excludes sessions, secrets and global policy; rekeys related
 });
 
 test('corrupt and unsupported storage fails explicitly without replacing the original file', t => {
-  const { directory } = fixture(t);
+  const directory = mkdtempSync(join(tmpdir(), 'weft-corrupt-'));
+  removeAfter(t, directory);
   const path = join(directory, 'workspace-state.json');
   writeFileSync(path, '{broken');
   assert.throws(() => new WorkspaceService({ directory }), /unreadable/);
@@ -134,6 +137,7 @@ test('corrupt and unsupported storage fails explicitly without replacing the ori
   writeFileSync(path, '{"schemaVersion":99}');
   assert.throws(() => new WorkspaceService({ directory }), /Unsupported/);
   assert.equal(readFileSync(path, 'utf8'), '{"schemaVersion":99}');
+  assert.deepEqual(readdirSync(directory), ['workspace-state.json']);
 });
 
 test('imported policies and workflows remain inactive until a human reviews them', async t => {

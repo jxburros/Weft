@@ -1,0 +1,26 @@
+{
+  "_comment": "Test-only unpacked extension fixtures, materialized into temporary directories by test/extension-policy.test.js and test/extensions-browser.test.js. Stored as JSON so the Node test runner never executes their scripts.",
+  "extensions": {
+    "all-urls": {
+      "content.js": "// Hostile test fixture: would read every page. Refused unless <all_urls> is granted explicitly.\ndocument.documentElement.dataset.allUrls = 'injected';\n",
+      "manifest.json": "{\n  \"manifest_version\": 3,\n  \"name\": \"Hostile fixture: every site\",\n  \"version\": \"1.0.0\",\n  \"host_permissions\": [\"<all_urls>\"],\n  \"content_scripts\": [{ \"matches\": [\"<all_urls>\"], \"js\": [\"content.js\"], \"all_frames\": true }]\n}\n"
+    },
+    "mv2": {
+      "background.js": "// Legacy test fixture: Manifest V2 background pages are unsupported.\nchrome.storage.local.set({ legacy: true });\n",
+      "manifest.json": "{\n  \"manifest_version\": 2,\n  \"name\": \"Legacy fixture: Manifest V2\",\n  \"version\": \"1.0.0\",\n  \"permissions\": [\"storage\", \"http://127.0.0.1/*\"],\n  \"background\": { \"scripts\": [\"background.js\"], \"persistent\": true }\n}\n"
+    },
+    "native-messaging": {
+      "manifest.json": "{\n  \"manifest_version\": 3,\n  \"name\": \"Hostile fixture: native messaging\",\n  \"version\": \"1.0.0\",\n  \"permissions\": [\"nativeMessaging\", \"storage\"],\n  \"background\": { \"service_worker\": \"worker.js\" }\n}\n",
+      "worker.js": "// Hostile test fixture: would bridge pages to a native host. Must be refused before loading.\nchrome.runtime.onMessage.addListener(message => { chrome.runtime.connectNative('com.example.native').postMessage(message); });\n"
+    },
+    "overprivileged": {
+      "manifest.json": "{\n  \"manifest_version\": 3,\n  \"name\": \"Hostile fixture: policy bypass\",\n  \"version\": \"1.0.0\",\n  \"permissions\": [\"debugger\", \"proxy\", \"webRequest\", \"webRequestBlocking\", \"cookies\", \"declarativeNetRequest\", \"management\", \"alarms\", \"madeUpPermission\"],\n  \"host_permissions\": [\"*://*/*\", \"file:///*\"],\n  \"externally_connectable\": { \"matches\": [\"https://*.example/*\"] },\n  \"optional_host_permissions\": [\"https://*/*\"],\n  \"background\": { \"service_worker\": \"worker.js\" }\n}\n",
+      "worker.js": "// Hostile test fixture: requests interception, debugging and credential APIs. Must be refused before loading.\nchrome.debugger?.attach({ tabId: 1 }, '1.3');\n"
+    },
+    "probe": {
+      "content.js": "// Test fixture content script. Writes observed API behaviour into the page so\n// the Electron compatibility test can read it; it never sends data anywhere.\n(async () => {\n  const result = { contentApis: Object.keys(chrome).sort(), cookie: document.cookie };\n  try {\n    await chrome.storage.local.set({ probe: 'stored' });\n    result.storage = (await chrome.storage.local.get('probe')).probe;\n  } catch (error) { result.storage = `error: ${error.message}`; }\n  try { result.worker = await chrome.runtime.sendMessage({ urls: JSON.parse(document.body.dataset.urls || '{}') }); }\n  catch (error) { result.worker = `error: ${error.message}`; }\n  document.documentElement.dataset.weftProbe = JSON.stringify(result);\n})();\n",
+      "manifest.json": "{\n  \"manifest_version\": 3,\n  \"name\": \"Weft compatibility probe\",\n  \"version\": \"1.0.0\",\n  \"description\": \"Test fixture: reports which extension APIs work inside a Weft workspace session.\",\n  \"permissions\": [\"storage\", \"scripting\", \"tabs\"],\n  \"host_permissions\": [\"http://127.0.0.1/*\"],\n  \"background\": { \"service_worker\": \"service-worker.js\" },\n  \"content_scripts\": [{ \"matches\": [\"http://127.0.0.1/*\"], \"js\": [\"content.js\"], \"run_at\": \"document_idle\" }],\n  \"action\": { \"default_title\": \"Probe\" }\n}\n",
+      "service-worker.js": "// Test fixture service worker: exercises APIs and network paths for the\n// Electron compatibility test and replies with what happened.\nconst attempt = async action => { try { return await action(); } catch (error) { return `error: ${error.message}`; } };\nchrome.runtime.onMessage.addListener((message, sender, reply) => {\n  (async () => {\n    const urls = message.urls || {};\n    const fetchStatus = url => attempt(async () => (await fetch(url, { cache: 'no-store' })).status);\n    reply({\n      workerApis: Object.keys(chrome).sort(),\n      tabs: await attempt(async () => (await chrome.tabs.query({})).map(tab => tab.url)),\n      scripting: await attempt(async () => (await chrome.scripting.executeScript({ target: { tabId: sender.tab.id }, func: () => location.pathname }))[0].result),\n      nativeMessaging: await attempt(async () => { chrome.runtime.connectNative('com.example.native'); return 'connected'; }),\n      cookies: typeof chrome.cookies,\n      webRequest: typeof chrome.webRequest,\n      debuggerApi: typeof chrome.debugger,\n      fetchGranted: await fetchStatus(urls.granted),\n      fetchSiteBlocked: await fetchStatus(urls.siteBlocked),\n      fetchUngranted: await fetchStatus(urls.ungranted),\n    });\n  })();\n  return true;\n});\n"
+    }
+  }
+}

@@ -18,9 +18,10 @@ export class AutomationAdmission {
 }
 
 /** Resolve once, before awaiting work, so human focus changes cannot retarget a call. */
-export function resolveCommandTargets(name, input, context, { workspace, browser, commands }) {
+export function resolveCommandTargets(name, input, context, { workspace, browser, commands, transfers = null }) {
   const args = { ...input };
-  const state = workspace.snapshot();
+  // Read-only lookup: the live state avoids copying every record per command.
+  const state = workspace.data ?? workspace.snapshot();
   const candidates = state.workspaces.filter(value => !value.archived).map(value => value.id);
   const visible = id => !context.workspaceIds || context.workspaceIds.includes(id);
   const human = ['human', 'admin'].includes(context.actor);
@@ -42,8 +43,10 @@ export function resolveCommandTargets(name, input, context, { workspace, browser
   let workspaceId = args.workspaceId ?? tab?.workspaceId;
   if (!workspaceId && args.downloadId != null) workspaceId = browser.downloads.get(args.downloadId)?.record.workspaceId;
   if (!workspaceId && name.startsWith('workspaces.') && args.id) workspaceId = args.id;
+  // Upload sessions belong to the workspace they were opened for.
+  if (!workspaceId && typeof args.transferId === 'string') workspaceId = transfers?.sessions.get(args.transferId)?.workspaceId;
   if (!workspaceId) {
-    const recordId = args.id ?? args.conversationId ?? args.artifactId;
+    const recordId = args.id ?? args.conversationId ?? args.artifactId ?? (args.source?.kind !== 'package' ? args.source?.id : undefined);
     if (recordId) for (const records of Object.values(state)) {
       if (!Array.isArray(records)) continue;
       const record = records.find(record => record.id === recordId && record.workspaceId);

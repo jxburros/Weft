@@ -14,7 +14,17 @@ heights changing the screenshot size. Captures reset transient status and move
 the pointer off controls. No provider or external network is used. The twelve
 committed goldens cover
 empty workspace, populated materials/sidebar, Ask Weft, settings, agent connections, and restricted
-destination in both themes. This tests browser-owned chrome, not page rendering.
+destination in both themes. The harness also drives the Update Center with
+fixture update states (no captures). This tests browser-owned chrome, not page rendering.
+
+Glyph rasterisation follows fontconfig even for the bundled web fonts, so the
+harness writes its own `fonts.conf` (passed as `FONTCONFIG_FILE`): it includes the
+system configuration and then pins the stock Ubuntu result (slight hinting,
+greyscale antialiasing, no subpixel order, DejaVu Sans first for sans-serif
+fallback glyphs). Without it, a machine-local override such as a forced
+unhinted/greyscale rule or a preferred UI font (for example Inter) shifts text
+edges by roughly 0.85% of pixels even on unchanged code. With the pin, the
+references captured on a stock CI image reproduce on such machines.
 
 Color-channel differences up to 12 are ignored. At most 0.3% of pixels may differ;
 a failing capture is retried once after settling. Larger differences write
@@ -32,5 +42,8 @@ git diff --stat -- test/visual/golden
 Review the resulting PNGs alongside the style guide, then rerun without
 `WEFT_UPDATE_GOLDEN` and commit the reviewed references with the change. Never
 update goldens to silence an unexplained failure. The initial references were
-captured and inspected on Linux using Electron 44.9.0. Cross-platform screen-reader
+captured and inspected on Linux using Electron 44.9.0. They were regenerated and
+reviewed for the accessibility and design-system pass (#31, #36: 11 px type floor,
+consolidated spacing/radius scales, disabled-state treatment, trusted stop-page
+band, landmark and heading fixes) with the pinned font configuration above. Cross-platform screen-reader
 and brand acceptance are separate outstanding work (see `docs/DESIGN-SYSTEM.md`).

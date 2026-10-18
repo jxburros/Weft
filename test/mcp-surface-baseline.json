@@ -1,15 +1,16 @@
 {
-  "toolCount": 8,
-  "totalCharacters": 5312,
+  "toolCount": 9,
+  "totalCharacters": 10113,
   "maxToolCharacters": 2000,
   "tools": {
-    "weft_tabs": 567,
-    "weft_page": 671,
-    "weft_workspace": 845,
-    "weft_records": 1059,
-    "weft_artifacts": 554,
-    "weft_browser": 700,
-    "weft_models": 520,
+    "weft_tabs": 854,
+    "weft_page": 832,
+    "weft_workspace": 1795,
+    "weft_records": 1746,
+    "weft_knowledge": 1095,
+    "weft_artifacts": 924,
+    "weft_browser": 1833,
+    "weft_models": 637,
     "weft_reference": 387
   }
 }

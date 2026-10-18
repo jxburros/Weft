@@ -17,7 +17,10 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 12
+    timeout-minutes: 20
+    env:
+      # Synced disk writes are several times slower on Windows runners; per-test hang guards scale with this (test/time-budget.js).
+      WEFT_TEST_TIME_SCALE: ${{ matrix.os == 'windows-latest' && '4' || '1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -61,3 +64,24 @@ jobs:
             test/visual/_failures/
           if-no-files-found: warn
           retention-days: 7
+  package:
+    name: Package and smoke-test (Linux, unsigned)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      WEFT_DISABLE_UPDATES: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install display and browser libraries
+        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64
+      - run: npm ci
+      - run: node scripts/release/metadata.js
+      - run: npx electron-builder --config electron-builder.config.cjs --linux AppImage --x64 --publish never
+      - name: Verify the update manifest and checksums
+        run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
+      - name: Launch the packaged AppImage
+        run: xvfb-run -a node scripts/release/smoke-packaged.js "dist/Weft-$(node -p 'require("./package.json").version')-x86_64.AppImage" appimage

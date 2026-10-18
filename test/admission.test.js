@@ -41,11 +41,11 @@ test('automation cannot follow changing human focus across workspaces', () => {
 });
 
 test('catalog classifications are exhaustive; approval cannot override a hard floor', () => {
-  for (const name of Object.keys(commands)) assert.notEqual(actionClassForCommand(name), 'restricted', name);
-  assert.equal(actionClassForCommand('future.unknown'), 'restricted');
-  for (const actionClass of ['administration', 'restricted', 'future-class']) {
-    assert.equal(evaluateAutonomy({ actor: 'automation', actionClass, approved: true }).decision, 'deny');
-  }
+  for (const name of Object.keys(commands)) assert.notEqual(actionClassForCommand(name), 'unclassified', name);
+  // Unknown commands are the most restricted non-denied class: an exact approval for every use.
+  assert.equal(actionClassForCommand('future.unknown'), 'unclassified');
+  assert.equal(evaluateAutonomy({ actor: 'automation', actionClass: 'future-class', level: 'autonomous', standing: true }).decision, 'approval');
+  assert.equal(evaluateAutonomy({ actor: 'automation', actionClass: 'administration', level: 'autonomous', approvedOnce: true, standing: true }).decision, 'deny');
   assert.equal(evaluateAutonomy({ actor: 'automation', actionClass: 'external_write' }).decision, 'approval');
-  assert.equal(evaluateAutonomy({ actor: 'automation', actionClass: 'local_write', level: 'observe', approved: true }).decision, 'deny');
+  assert.equal(evaluateAutonomy({ actor: 'automation', actionClass: 'local_write', level: 'observe', approvedOnce: true }).decision, 'deny');
 });

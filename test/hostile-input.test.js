@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WorkspaceService } from '../src/workspace.js';
 import { createClient } from '../src/client.js';
+import { budget } from './time-budget.js';
 
 function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'weft-hostile-'));
@@ -16,7 +17,7 @@ function random(seed) {
   return () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
 }
 
-test('seeded record mutations agree with a shadow model and rejected revisions preserve disk', { timeout: 15000 }, async t => {
+test('seeded record mutations agree with a shadow model and rejected revisions preserve disk', { timeout: budget(15000) }, async t => {
   const { service } = fixture(t);
   const next = random(0x57ef7);
   const records = new Map();
@@ -38,9 +39,9 @@ test('seeded record mutations agree with a shadow model and rejected revisions p
       await service.execute('materials.delete', { id });
       records.delete(id);
     } else {
-      const before = readFileSync(service.path, 'utf8');
+      const before = service.storage.contentDigest();
       await assert.rejects(service.execute('materials.update', { id, expectedRevision: 99999, changes: { content: 'must not commit' } }));
-      assert.equal(readFileSync(service.path, 'utf8'), before);
+      assert.equal(service.storage.contentDigest(), before);
     }
     const actual = await service.execute('materials.list');
     assert.equal(actual.length, records.size);
@@ -48,7 +49,7 @@ test('seeded record mutations agree with a shadow model and rejected revisions p
   }
 });
 
-test('malformed and seeded hostile imports fail atomically without changing project bytes', { timeout: 15000 }, async t => {
+test('malformed and seeded hostile imports fail atomically without changing project bytes', { timeout: budget(15000) }, async t => {
   const { service } = fixture(t);
   await service.execute('materials.create', { title: 'Keep me', content: 'Original' });
   const valid = await service.execute('workspaces.export', { id: service.activeWorkspaceId });
@@ -65,15 +66,15 @@ test('malformed and seeded hostile imports fail atomically without changing proj
     bad.push(copy);
   }
   for (const data of bad) {
-    const before = readFileSync(service.path, 'utf8');
+    const before = service.storage.contentDigest();
     const snapshot = service.snapshot();
     await assert.rejects(service.execute('workspaces.import', { data }));
     assert.deepEqual(service.snapshot(), snapshot);
-    assert.equal(readFileSync(service.path, 'utf8'), before);
+    assert.equal(service.storage.contentDigest(), before);
   }
 });
 
-test('imported filenames are inert basenames and HTML remains stored data', { timeout: 5000 }, async t => {
+test('imported filenames are inert basenames and HTML remains stored data', { timeout: budget(5000) }, async t => {
   const { service, directory } = fixture(t);
   const bundle = await service.execute('workspaces.export', { id: service.activeWorkspaceId });
   bundle.materials = [{ id: 'hostile-file', title: 'Untrusted', kind: 'file', filename: '../../outside.txt', fileBase64: Buffer.from('<script>throw new Error("untrusted")</script>').toString('base64') }];
@@ -85,7 +86,7 @@ test('imported filenames are inert basenames and HTML remains stored data', { ti
   assert.match(Buffer.from(stored.fileBase64, 'base64').toString(), /<script>/);
 });
 
-test('control-plane origins use a narrow syntactic loopback allowlist without DNS trust', { timeout: 5000 }, () => {
+test('control-plane origins use a narrow syntactic loopback allowlist without DNS trust', { timeout: budget(5000) }, () => {
   for (const url of ['http://127.0.0.1:9222', 'http://localhost:9222', 'http://[::1]:9222', 'http://2130706433:9222']) {
     assert.doesNotThrow(() => createClient({ url, token: 'fixture' }), url);
   }

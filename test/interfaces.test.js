@@ -12,6 +12,7 @@ import { commands, validateCommand, executeOutcome, resultExitCode } from '../sr
 import { createApiServer } from '../src/server.js';
 import { createClient } from '../src/client.js';
 import { createMcpServer, mcpTools } from '../src/mcp.js';
+import { budget } from './time-budget.js';
 
 async function fixture(t, options = {}) {
   const calls = [];
@@ -159,7 +160,7 @@ test('MCP stdio entry point performs a real protocol handshake without stdout no
   });
   t.after(() => client.close());
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 8);
+  assert.equal((await client.listTools()).tools.length, 9);
   const response = await client.callTool({ name: 'tabs_list', arguments: {} });
   assert.deepEqual(JSON.parse(response.content[0].text).result, { command: 'tabs.list', args: {} });
 });
@@ -187,13 +188,11 @@ test('generated OpenAPI describes every canonical command and requires authoriza
   assert.ok(document.paths['/v1/events'].get.responses[200].content['text/event-stream']);
 });
 
-test('SSE authenticates, strips content and secrets, and unsubscribes disconnected clients', { timeout: 5000 }, async t => {
+test('SSE authenticates, strips content and secrets, and unsubscribes disconnected clients', { timeout: budget(5000) }, async t => {
   const events = new EventEmitter();
-  let removed;
-  const removedPromise = new Promise(resolve => { removed = resolve; });
-  const { url, headers } = await fixture(t, { subscribe: listener => {
+  const { url, headers, server } = await fixture(t, { subscribe: listener => {
     events.on('event', listener);
-    return () => { events.off('event', listener); removed(); };
+    return () => events.off('event', listener);
   } });
   assert.equal((await fetch(`${url}/v1/events`)).status, 401);
   assert.equal((await fetch(`${url}/v1/events`, { headers: { ...headers, 'sec-fetch-site': 'same-origin' } })).status, 403);
@@ -212,12 +211,16 @@ test('SSE authenticates, strips content and secrets, and unsubscribes disconnect
   assert.equal(event.version, 4);
   assert.deepEqual(Object.keys(event).sort(), ['actor', 'command', 'createdAt', 'status', 'tabId', 'type', 'version', 'workspaceId']);
   assert.doesNotMatch(message, /secret|private|Private|provider/);
+  assert.match(message, /^id: [a-f0-9]{12}-1$/m);
   await reader.cancel();
-  await removedPromise;
+  while (server.eventStats().subscribers) await new Promise(resolve => setTimeout(resolve, 5));
+  // The single retention subscription remains until the server closes.
+  assert.equal(events.listenerCount('event'), 1);
+  await new Promise(resolve => { server.closeAllConnections(); server.close(resolve); });
   assert.equal(events.listenerCount('event'), 0);
 });
 
-test('standalone API events report successful and failed commands without result payloads', { timeout: 5000 }, async t => {
+test('standalone API events report successful and failed commands without result payloads', { timeout: budget(5000) }, async t => {
   const { url, headers, client } = await fixture(t);
   const response = await fetch(`${url}/v1/events`, { headers });
   const reader = response.body.getReader();
@@ -338,7 +341,7 @@ test('in-process, REST, CLI and MCP return identical outcomes', async t => {
   assert.deepEqual(reference.structuredContent.result.inputSchema, commands['tabs.new'].inputSchema);
 });
 
-test('per-client authentication reaches dispatch and scopes/revokes SSE', { timeout: 5000 }, async t => {
+test('per-client authentication reaches dispatch and scopes/revokes SSE', { timeout: budget(5000) }, async t => {
   const events = new EventEmitter();
   const workspaceId = 'ws_12345678-1234-1234-1234-123456789abc';
   let enabled = true; let received;
@@ -352,7 +355,9 @@ test('per-client authentication reaches dispatch and scopes/revokes SSE', { time
   const url = `http://127.0.0.1:${server.address().port}`;
   const headers = { authorization: 'Bearer client-token' };
   await createClient({ url, token: 'client-token' }).execute('tabs.list');
-  assert.deepEqual(received, identity);
+  const { signal, ...receivedIdentity } = received;
+  assert.deepEqual(receivedIdentity, identity);
+  assert.ok(signal instanceof AbortSignal, 'the originating request propagates cancellation');
   const stream = await fetch(`${url}/v1/events`, { headers }); const reader = stream.body.getReader();
   await reader.read();
   events.emit('event', { type: 'command', command: 'tabs.list', actor: identity.actor });
@@ -364,7 +369,7 @@ test('per-client authentication reaches dispatch and scopes/revokes SSE', { time
   enabled = false;
   events.emit('event', { type: 'command', command: 'tabs.list', workspaceId });
   assert.equal((await reader.read()).done, true);
-  assert.equal(events.listenerCount('event'), 0);
+  assert.equal(server.eventStats().subscribers, 0);
   assert.equal((await fetch(`${url}/v1/commands`, { headers })).status, 401);
 });
 

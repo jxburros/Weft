@@ -15,6 +15,7 @@ import { AutomationAdmission } from '../src/admission.js';
 import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { createApiServer } from '../src/server.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 const cliPath = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
@@ -59,7 +60,7 @@ async function fixture(t) {
   return { workspace, firstId, other, privateNote, browser, admission, clients, dispatch, request, cli, url, token, closed: () => closed };
 }
 
-test('central emergency stop blocks REST, CLI, MCP and internal agent dispatch until human resume', { timeout: 15000 }, async t => {
+test('central emergency stop blocks REST, CLI, MCP and internal agent dispatch until human resume', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const mcp = new Client({ name: 'admission-test', version: '1' });
   await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [cliPath, 'mcp'], env: { WEFT_API_URL: f.url, WEFT_TOKEN: f.token } }));
@@ -83,7 +84,7 @@ test('central emergency stop blocks REST, CLI, MCP and internal agent dispatch u
   assert.equal(f.browser.tab(1).controller, 'human', 'resume does not give away tab control');
 });
 
-test('resolved targets are explicit and echoed across REST, CLI and MCP', { timeout: 15000 }, async t => {
+test('resolved targets are explicit and echoed across REST, CLI and MCP', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   assert.equal((await f.request('page.inspect')).outcome.error.code, 'ambiguous_target');
   assert.equal((await f.request('workspace.snapshot')).outcome.error.code, 'ambiguous_target');
@@ -109,7 +110,7 @@ test('resolved targets are explicit and echoed across REST, CLI and MCP', { time
   assert.equal(humanDefault.tabId, 1);
 });
 
-test('scoped clients cannot read, mutate or cancel another workspace and revocation applies immediately', { timeout: 15000 }, async t => {
+test('scoped clients cannot read, mutate or cancel another workspace and revocation applies immediately', { timeout: budget(15000) }, async t => {
   const f = await fixture(t);
   const created = await f.dispatch('clients.create', { name: 'Researcher', scopes: ['read', 'records.write', 'tabs.control'], workspaceIds: [f.firstId] }, human);
   assert.equal(created.error, null);
@@ -144,7 +145,7 @@ test('scoped clients cannot read, mutate or cancel another workspace and revocat
   assert.equal((await f.request('materials.list', { workspaceId: f.firstId })).outcome.error, null);
 });
 
-test('emergency stop aborts providers even when pausing a task cannot persist', { timeout: 10000 }, async t => {
+test('emergency stop aborts providers even when pausing a task cannot persist', { timeout: budget(10000) }, async t => {
   const f = await fixture(t);
   await f.workspace.execute('tasks.create', { workspaceId: f.firstId, title: 'Running task', status: 'running' }, human);
   const original = f.workspace.execute.bind(f.workspace);
@@ -158,7 +159,7 @@ test('emergency stop aborts providers even when pausing a task cannot persist', 
   assert.equal(f.closed(), 1, 'active providers must abort even if task metadata cannot be saved');
 });
 
-test('independent scoped clients contend for leases and expiry stops new admission', { timeout: 10000 }, async t => {
+test('independent scoped clients contend for leases and expiry stops new admission', { timeout: budget(10000) }, async t => {
   const f = await fixture(t);
   const grants = [];
   for (const name of ['First agent', 'Second agent']) grants.push((await f.dispatch('clients.create', { name, scopes: ['read', 'tabs.control'], workspaceIds: [f.firstId], ttlSeconds: 60 }, human)).result);

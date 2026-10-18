@@ -7,6 +7,7 @@ import { WorkspaceService } from '../src/workspace.js';
 import { ClientGrants } from '../src/clients.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
+import { budget } from './time-budget.js';
 
 const human = { actor: 'human', source: 'gui' };
 function fixture(t) {
@@ -23,7 +24,7 @@ function fixture(t) {
   return { workspace, caller, dispatch };
 }
 for (const category of ['confirmed', 'instructions', 'decisions']) {
-  test(`automation cannot delete or demote human ${category} context`, { timeout: 5000 }, async t => {
+  test(`automation cannot delete or demote human ${category} context`, { timeout: budget(5000) }, async t => {
     const f = fixture(t);
     const record = await f.workspace.execute('context.create', { title: 'Trusted', content: 'Human established', category }, human);
     await assert.rejects(f.workspace.execute('context.delete', { id: record.id }, { actor: 'automation' }), /human approval/);
@@ -40,7 +41,7 @@ for (const category of ['confirmed', 'instructions', 'decisions']) {
     assert.equal(f.workspace.snapshot().context.length, 0);
   });
 }
-test('scoped writers can delete findings and questions without gaining promotion rights', { timeout: 5000 }, async t => {
+test('scoped writers can delete findings and questions without gaining promotion rights', { timeout: budget(5000) }, async t => {
   const f = fixture(t);
   for (const category of ['findings', 'questions']) {
     const record = await f.workspace.execute('context.create', { title: 'Unreviewed', category }, human);

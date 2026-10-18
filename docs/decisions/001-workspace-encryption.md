@@ -1,12 +1,15 @@
 # ADR 001: workspace encryption and recovery
 
-Status: architecture direction recorded; implementation deferred. Issue #26
-remains open. Last code review: 2026-10-17.
+Status: requirements and threat model. The decisions and implementation are in
+[ADR 014](014-workspace-encryption-and-key-management.md) (issue #26). This record
+is kept as the requirement list ADR 014 is measured against; where they differ,
+ADR 014 states what was built. Last code review: 2026-10-17.
 
 ## Decision and threat model
 
-Do not describe Weft's workspace as encrypted. Provider-key OS safe storage is
-not workspace encryption. Local project records, captured text/images, exports,
+Do not describe a profile as encrypted unless a person turned on workspace
+encryption for it (ADR 014), and then only for the covered stores. Provider-key
+OS safe storage is not workspace encryption. Local project records, captured text/images, exports,
 indexes and artifacts require a coordinated storage design before an encryption
 claim is made. OS full-disk encryption is the current host-level mitigation;
 it does not protect data from another process running as the unlocked user.
@@ -52,6 +55,17 @@ on one machine's OS key store.
 Before shipping: exercise interrupted migration/rotation and restart; every
 locked read/write/provider path; missing/corrupt/wrong keys; authenticated
 corruption and rollback; recovery on a second OS account/machine; encrypted
-backup verification and explicit plaintext export. No such encryption lifecycle
-or cross-platform tests are implemented by this ADR. Storage migration, key UX
-and recovery implementation are outstanding; issue #26 is not resolved.
+backup verification and explicit plaintext export.
+
+## Outcome (ADR 014)
+
+Implemented with node:crypto AES-256-GCM rather than a separate library, an
+in-place crash-safe migration (single SQLite transaction plus key-free startup
+recovery) rather than a second store, and an in-memory search index. Tested:
+interrupted enable/disable/rotation with real process kills, locked access on
+every surface, wrong/tampered keys and ciphertext, OS-key unavailability with
+recovery-key unlock and OS re-enrolment (simulated second account), encrypted
+backups with locked restore and acknowledged plaintext exports. Not verified on
+real macOS Keychain, Windows DPAPI or a Linux secret service; rollback of a
+whole profile to an older copy is not detectable; secure deletion is not
+claimed.

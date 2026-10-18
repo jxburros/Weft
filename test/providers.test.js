@@ -6,6 +6,7 @@ import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Providers } from '../src/providers.js';
+import { budget } from './time-budget.js';
 
 async function fixture(t, handler, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'weft-providers-'));
@@ -144,7 +145,9 @@ test('cancellation, concurrent-send exclusion, and bounded timeout terminate act
   const rejection = assert.rejects(pending, /cancelled/);
   await arrived;
   await assert.rejects(send(), /already has a running/);
-  assert.deepEqual(await providers.execute('chat.cancel', { conversationId: 'conversation-1' }), { cancelled: true });
+  const cancelled = await providers.execute('chat.cancel', { conversationId: 'conversation-1' });
+  assert.equal(cancelled.cancelled, true);
+  assert.match(cancelled.turnId, /^turn_/);
   await rejection;
   assert.equal(conversations.get('conversation-1').messages.length, 1);
   providers.timeoutMs = 20;
@@ -169,6 +172,28 @@ const toolReply = (name, args = {}, id = 'read-1') => ({ choices: [{ message: { 
   tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }],
   usage: { prompt_tokens: 2, completion_tokens: 3 } });
 
+test('a model can only propose a task: the proposal is untrusted data for the person, nothing is created or run', async t => {
+  const requests = [];
+  const fixtureData = await fixture(t, (_req, res, body) => {
+    requests.push(body);
+    if (requests.length === 1) reply(res, toolReply('propose_task', { title: 'Compare suppliers', objective: 'Pick the cheapest', steps: [{ title: 'List prices' }, { title: 'Recommend one', instruction: 'Cite sources' }] }, 'propose-1'));
+    else reply(res, { choices: [{ message: { content: 'I proposed a task for you to review.' } }] });
+  }, { searchWorkspace: async () => [] });
+  await enableTools(fixtureData);
+  await fixtureData.send({ allowReadTools: true });
+  assert.match(requests[1].messages.at(-1).content, /Nothing was created, started or authorized/);
+  const proposal = fixtureData.conversations.get('conversation-1').messages.find(message => message.role === 'tool');
+  const parsed = JSON.parse(proposal.content);
+  assert.equal(parsed.tool, 'propose_task');
+  assert.equal(parsed.untrusted, true);
+  assert.deepEqual(parsed.proposal.steps.map(step => step.title), ['List prices', 'Recommend one']);
+  // Invalid proposals are refused before anything is recorded.
+  requests.length = 0;
+  const bad = await fixture(t, (_req, res, body) => { requests.push(body); reply(res, toolReply('propose_task', { title: 'x', executor: { type: 'runner', autonomy: 'autonomous' } })); }, { searchWorkspace: async () => [] });
+  await enableTools(bad);
+  await assert.rejects(bad.send({ allowReadTools: true }), /Invalid read-only tool arguments/);
+});
+
 test('explicit read-only tool loop uses fixed tab/workspace scope, persists evidence, and sums usage', async t => {
   const requests = [];
   const reads = [];
@@ -186,7 +211,7 @@ test('explicit read-only tool loop uses fixed tab/workspace scope, persists evid
   assert.deepEqual(reads, [{ tabId: 7, workspaceId: 'project-a' }, { query: 'decision', workspaceId: 'project-a' }]);
   assert.equal(result.toolCalls, 2);
   assert.deepEqual(result.usage, { inputTokens: 8, outputTokens: 11 });
-  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), ['page_readable', 'workspace_search']);
+  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), ['page_readable', 'workspace_search', 'propose_task']);
   assert.equal(requests[1].messages.at(-1).tool_call_id, 'read-1');
   assert.equal(JSON.parse(requests[1].messages.at(-1).content).untrusted, true);
   const persisted = fixtureData.conversations.get('conversation-1').messages;
@@ -195,6 +220,29 @@ test('explicit read-only tool loop uses fixed tab/workspace scope, persists evid
   await fixtureData.send({ text: 'Continue without tools' });
   assert.equal(requests[3].tools, undefined);
   assert.ok(requests[3].messages.some(message => message.content?.includes('Previous read-only tool result')));
+});
+
+test('search results returned to a model tool are capped at 0.4 of the window after the reserved reply', async t => {
+  const requests = [];
+  const items = Array.from({ length: 60 }, (_, index) => ({ id: `context-${index}`, title: `Result ${index}`, content: 'evidence '.repeat(40), citation: { recordId: `context-${index}` } }));
+  const fixtureData = await fixture(t, (_req, res, body) => {
+    requests.push(body);
+    if (requests.length === 1) reply(res, toolReply('workspace_search', { query: 'evidence' }));
+    else reply(res, { choices: [{ message: { content: 'Summarized.' } }] });
+  }, { searchWorkspace: async () => ({ items, nextCursor: null, total: 60, absence: null }) });
+  const { providers, model, conversations } = fixtureData;
+  conversations.get('conversation-1').workspaceId = 'project-a';
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: model.endpoint, model: model.model, tools: true,
+    capabilities: { contextWindow: 8192, maxOutputTokens: 2048 } });
+  await fixtureData.send({ allowReadTools: true });
+  const tool = JSON.parse(requests[1].messages.at(-1).content);
+  const framed = JSON.parse(tool.result.split('\n')[1]);
+  const sent = JSON.parse(framed.content);
+  const cap = Math.floor(0.4 * (8192 - 2048));
+  assert.equal(sent.retrievalCap.capTokens, cap);
+  assert.ok(sent.retrievalCap.sentTokens <= cap);
+  assert.ok(sent.retrievalCap.omitted > 0 && sent.items.length === 60 - sent.retrievalCap.omitted);
+  assert.deepEqual(sent.items.map(item => item.id), items.slice(0, sent.items.length).map(item => item.id), 'highest-ranked results are kept whole');
 });
 
 test('tools need explicit request consent plus enabled model capability', async t => {
@@ -387,7 +435,7 @@ test('concurrent sends cannot race during asynchronous preflight', async t => {
   await first;
 });
 
-test('only normalized loopback allowlist endpoints bypass cloud disclosure', { timeout: 10000 }, async t => {
+test('only normalized loopback allowlist endpoints bypass cloud disclosure', { timeout: budget(10000) }, async t => {
   const { providers, model } = await fixture(t, () => { throw new Error('Preview must not make a request'); });
   const cases = [
     ['http://localhost:11434/v1', false],

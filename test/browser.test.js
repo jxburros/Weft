@@ -13,13 +13,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Browser, safeUrl } from '../src/browser.js';
 import electron from 'electron';
+import { electronEnv } from '../scripts/electron-env.js';
 
 const smoke = process.argv.includes('--weft-browser-smoke');
 const mainSmoke = process.argv.includes('--weft-main-smoke');
 const profile = process.env.WEFT_TEST_PROFILE;
 
-async function until(predicate) {
-  for (let attempt = 0; attempt < 200; attempt++) {
+async function until(predicate, timeoutMs = 4000) {
+  for (let attempt = 0; attempt < timeoutMs / 20; attempt++) {
     const result = await predicate();
     if (result) return result;
     await new Promise(resolve => setTimeout(resolve, 20));
@@ -159,9 +160,13 @@ if (mainSmoke) {
           assert.equal(count, Object.keys(commands).length);
           const guiInfo = await window.webContents.executeJavaScript('window.weft.executeOutcome("browser.info")');
           const rawInfo = await window.webContents.executeJavaScript('window.weft.execute("browser.info")');
-          assert.deepEqual(guiInfo, await executeOutcome(() => rawInfo, 'browser.info'));
+          // The dispatcher adds the authenticated request linkage; everything else is the shared outcome.
+          const { request, ...guiOutcome } = guiInfo;
+          assert.deepEqual(request, { apiVersion: 1, requestId: null, actor: 'human', clientId: null, taskId: null, deadlineMs: null });
+          assert.deepEqual(guiOutcome, await executeOutcome(() => rawInfo, 'browser.info'));
           const invalidInput = { tab_id: -1 };
-          const guiInvalid = await window.webContents.executeJavaScript(`window.weft.executeOutcome('tabs.close', ${JSON.stringify(invalidInput)})`);
+          const { request: invalidRequest, ...guiInvalid } = await window.webContents.executeJavaScript(`window.weft.executeOutcome('tabs.close', ${JSON.stringify(invalidInput)})`);
+          assert.equal(invalidRequest.actor, 'human');
           assert.deepEqual(guiInvalid, await executeOutcome(() => assert.fail('invalid input must not execute'), 'tabs.close', invalidInput));
           const preferences = window.webContents.getLastWebPreferences();
           assert.equal(preferences.sandbox, true);
@@ -209,10 +214,12 @@ if (mainSmoke) {
           await assert.rejects(window.webContents.executeJavaScript('window.weft.commands()'));
           await assert.rejects(window.webContents.executeJavaScript('window.weft.execute("tabs.list")'));
           await window.loadURL(guiUrl);
-          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("command").options.length')) === Object.keys(commands).length);
+          // First render of the trusted GUI under a loaded test run: wait up to the documented
+          // GUI first-render budget (ADR 015, 15 s) rather than a fixed 4 s.
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("command").options.length')) === Object.keys(commands).length, 15000);
           // Restoring the application opens its workspace overview. Use the actual
           // browser controls to show a live page before exercising MCP capture.
-          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready');
+          await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Ready', 15000);
           await window.webContents.executeJavaScript(`document.getElementById('address').value = ${JSON.stringify(fixtureUrl)}; document.getElementById('navigation').requestSubmit()`);
           await until(async () => (await window.webContents.executeJavaScript('window.weft.execute("page.title")')) === 'GUI fixture');
           await until(async () => (await window.webContents.executeJavaScript('document.getElementById("status").textContent')) === 'Done');
@@ -282,7 +289,7 @@ if (mainSmoke) {
     // CI lacks a configured setuid sandbox helper; production startup never uses these flags.
     const testFlags = ['--no-sandbox', '--disable-gpu'];
     const child = spawn(electron, [...testFlags, fileURLToPath(import.meta.url), '--weft-browser-smoke'], {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_TEST_PROFILE: profile },
+      env: electronEnv({ WEFT_TEST_PROFILE: profile }),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -299,7 +306,7 @@ if (mainSmoke) {
       await new Promise(resolve => portReservation.close(resolve));
       const token = 'browser-integration-test-token';
       const main = spawn(electron, [...testFlags, `--user-data-dir=${profile}/main`, fileURLToPath(import.meta.url), '--weft-main-smoke'], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile },
+        env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile }),
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let mainOutput = '';
@@ -350,7 +357,7 @@ if (mainSmoke) {
         assert.equal((await request('browser.close')).status, 200);
         await new Promise(resolve => main.once('exit', resolve));
         const lifecycle = spawn(electron, [...testFlags, `--user-data-dir=${profile}/gui-close`, fileURLToPath(import.meta.url), '--weft-main-smoke', '--weft-close-gui'], {
-          env: { ...process.env, ELECTRON_RUN_AS_NODE: '', WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile },
+          env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile }),
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let lifecycleOutput = '';
