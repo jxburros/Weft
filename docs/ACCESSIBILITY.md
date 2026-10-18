@@ -176,7 +176,9 @@ tables or code.
 rings, ownership badges, state markers and disabled controls stay visible.
 
 **Reduced motion.** Turn on the OS setting: the loading line and working markers
-are static, and handoffs show no border animation while the text still changes.
+are static, handoffs show no border animation while the text still changes, views,
+dialogs, the toast and the agent panel appear without an entrance, and the Vixl
+animations (the overview mark, "Waiting for your model") show their resting frame.
 
 ## Known limits
 

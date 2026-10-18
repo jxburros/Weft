@@ -77,15 +77,11 @@ summary:focus-visible,
   outline: 2px solid var(--focus-ring);
   outline-offset: 3px;
 }
+/* Icons are Vixl drawings (src/icons.js): their shapes carry their own paint and stroke. */
 button svg,
 .icon svg {
   width: 18px;
   height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
   flex-shrink: 0;
 }
 input,
@@ -638,6 +634,27 @@ button.danger {
   right: 35px;
   transform: rotate(-8deg);
 }
+.intro-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* Artwork drawn for one theme: Vixl exports a light and a dark version of each animation. */
+:root[data-theme="dark"] .only-light,
+:root:not([data-theme="dark"]) .only-dark {
+  display: none;
+}
+.chat-waiting {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+}
+.waiting-art img {
+  display: block;
+  width: 48px;
+  height: 16px;
+}
 .inline-actions {
   display: flex;
   align-items: center;
@@ -677,6 +694,15 @@ button.danger {
   gap: var(--space-12);
   min-height: 92px;
   justify-content: flex-start;
+}
+.quick-card {
+  transition: background var(--motion-fast) var(--motion-easing), border-color var(--motion-fast) var(--motion-easing),
+    box-shadow var(--motion-fast) var(--motion-easing), transform var(--motion-fast) var(--motion-easing);
+}
+.quick-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-subtle);
+  transform: translateY(-1px);
 }
 .quick-card .tile-icon {
   height: 33px;
@@ -733,6 +759,24 @@ button.danger {
   width: 25px;
   height: 25px;
 }
+.empty-art svg {
+  width: 120px;
+  height: 90px;
+  margin-bottom: var(--space-4);
+}
+/* Token paints for the Vixl illustrations (src/icons.js), so they follow the theme. */
+.f-canvas { fill: var(--canvas); }
+.f-white { fill: var(--white); }
+.f-brand { fill: var(--brand); }
+.f-brand-soft { fill: var(--brand-soft); }
+.f-sage { fill: var(--sage); }
+.f-sage-soft { fill: var(--sage-soft); }
+.f-clay { fill: var(--clay); }
+.f-clay-soft { fill: var(--clay-soft); }
+.s-muted { stroke: var(--muted); }
+.s-brand { stroke: var(--brand); }
+.s-sage { stroke: var(--sage); }
+.s-clay { stroke: var(--clay); }
 .empty-card h3 {
   font-size: var(--font-size-14);
   margin-bottom: var(--space-8);
@@ -1383,6 +1427,32 @@ dialog::backdrop {
   width: 35%;
   animation: loading var(--motion-loading) var(--motion-loading-easing) infinite alternate;
 }
+/* Entrances: short and calm (style guide 11). Reduced motion turns them off with every other animation. */
+dialog[open] {
+  animation: rise-in var(--motion-enter) var(--motion-enter-easing);
+}
+dialog[open]::backdrop {
+  animation: fade-in var(--motion-enter) var(--motion-enter-easing);
+}
+#toast:not([hidden]) {
+  animation: rise-in var(--motion-enter) var(--motion-enter-easing);
+}
+.agent-panel:not([hidden]) {
+  animation: slide-in var(--motion-enter) var(--motion-enter-easing);
+}
+/* A new view fades in once on navigation (navigateSection); opacity only, so live page bounds never move. */
+#content.view-enter > * {
+  animation: fade-in var(--motion-enter) var(--motion-enter-easing);
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+}
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(12px); }
+}
 @keyframes loading {
   to {
     transform: translateX(180%);
@@ -1484,11 +1554,6 @@ dialog::backdrop {
 svg {
   width: 18px;
   height: 18px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6;
-  stroke-linecap: round;
-  stroke-linejoin: round;
   flex-shrink: 0;
 }
 .eyebrow svg {
@@ -1908,21 +1973,21 @@ button { min-height: 24px; min-width: 24px; }
   padding: 0 var(--space-6);
   max-width: 100%;
 }
+/* Marker shapes are Vixl drawings (assets/graphics/states) painted in their badge's colour. */
 .state-marker {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   flex: none;
-  box-sizing: border-box;
 }
-.state-working .state-marker { border-radius: 50%; background: var(--brand); animation: working var(--motion-loading) var(--motion-loading-easing) infinite alternate; }
-.state-waiting .state-marker { border-radius: 50%; border: 2px solid var(--clay); }
-.state-paused .state-marker { border-left: 3px solid var(--muted); border-right: 3px solid var(--muted); }
-.state-done .state-marker { width: 5px; height: 9px; border-right: 2px solid var(--sage); border-bottom: 2px solid var(--sage); transform: rotate(45deg) translate(-1px, -1px); }
-.state-blocked .state-marker { background: var(--danger); transform: rotate(45deg) scale(0.85); }
-.state-agent .state-marker { border: 2px solid var(--brand); transform: rotate(45deg) scale(0.85); }
-.state-you .state-marker { background: var(--ink); border-radius: var(--radius-4); }
-.state-assist .state-marker { border-radius: 50%; border: 2px solid var(--sage); background: linear-gradient(90deg, var(--sage) 50%, transparent 50%); }
-.state-available .state-marker { border-radius: 50%; border: 2px dashed var(--muted); }
+.state-working .state-marker { color: var(--brand); animation: working var(--motion-loading) var(--motion-loading-easing) infinite alternate; }
+.state-waiting .state-marker { color: var(--clay); }
+.state-paused .state-marker,
+.state-available .state-marker { color: var(--muted); }
+.state-done .state-marker,
+.state-assist .state-marker { color: var(--sage); }
+.state-blocked .state-marker { color: var(--danger); }
+.state-agent .state-marker { color: var(--brand); }
+.state-you .state-marker { color: var(--ink); }
 @keyframes working {
   from { opacity: 1; }
   to { opacity: 0.35; }

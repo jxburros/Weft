@@ -1,4 +1,4 @@
-import { icon } from "./icons.js";
+import { icon, illustration } from "./icons.js";
 import { knowledgeUI } from "./gui-knowledge.js";
 import { announce, focusView, keyboardScrollable, stateBadge, trustedBand } from "./gui-a11y.js";
 import { listsUI } from "./gui-lists.js";
@@ -400,8 +400,13 @@ function renderShell() {
 function heading(title, subtitle, button = "") {
   return `<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${button}</div>`;
 }
+// Vixl animations (assets/graphics/motion), drawn for each theme; reduced motion shows the resting frame.
+function motionArt(name, className) {
+  return ["light", "dark"].map((theme) => `<picture class="only-${theme}"><source media="(prefers-reduced-motion: reduce)" srcset="../assets/graphics/motion/${name}-${theme}-still.svg"><img class="${className}" src="../assets/graphics/motion/${name}-${theme}.webp" alt=""></picture>`).join("");
+}
 function empty(title, body, ico, button = "") {
-  return `<div class="empty-card"><div class="empty-icon icon">${icon(ico)}</div><h3>${esc(title)}</h3><p>${esc(body)}</p>${button}</div>`;
+  const art = illustration(ico);
+  return `<div class="empty-card">${art ? `<div class="empty-art">${art}</div>` : `<div class="empty-icon icon">${icon(ico)}</div>`}<h3>${esc(title)}</h3><p>${esc(body)}</p>${button}</div>`;
 }
 function overview() {
   const pending = records("tasks").filter(
@@ -417,7 +422,7 @@ function overview() {
     .slice(0, 3);
   const artifacts = records("artifacts").slice(-3).reverse();
   return `<div class="eyebrow">${icon("grid")} YOUR WORK, WOVEN TOGETHER</div>${heading(ws().name, ws().description || "A little space for everything you’re working on.", action("workspace-menu", "Workspace options", "more"))}${attentionSection()}
- <div class="intro-panel"><div class="intro-copy"><h2>${records("materials").length || pending.length ? "Pick up where you left off." : "Make room for your next idea."}</h2><p>${records("materials").length || pending.length ? "Your tabs, references, and next steps are right here. Open a page or continue a task to keep your project moving." : "Bring your tabs, notes, and references together. Start with a page, save what matters, and build from there."}</p><div class="inline-actions">${action("new-tab", "Open a new tab", "plus", "", "primary")}${action("section", "Explore materials", "arrow", 'data-section="materials"', "text-button")}</div></div><img class="intro-mark" src="../assets/logo/svg/mark-full-color.svg" alt=""></div>
+ <div class="intro-panel"><div class="intro-copy"><h2>${records("materials").length || pending.length ? "Pick up where you left off." : "Make room for your next idea."}</h2><p>${records("materials").length || pending.length ? "Your tabs, references, and next steps are right here. Open a page or continue a task to keep your project moving." : "Bring your tabs, notes, and references together. Start with a page, save what matters, and build from there."}</p><div class="inline-actions">${action("new-tab", "Open a new tab", "plus", "", "primary")}${action("section", "Explore materials", "arrow", 'data-section="materials"', "text-button")}</div></div><span class="intro-mark" aria-hidden="true">${motionArt("mark-in", "mark-art")}</span></div>
  <div class="section-heading"><h2>A place to start</h2><span class="muted micro">Built around your project</span></div>
  <div class="quick-grid">${[
    [
@@ -472,7 +477,7 @@ function renderContent() {
     // The live page is drawn by Chromium over this area: nothing focusable may sit hidden underneath it.
     const stop = blocked
       ? `<div class="browser-placeholder stop-page" role="region" aria-labelledby="stop-title">${trustedBand(blocked.kind === "security" ? "Security stop" : "Site rule stop", icon("shield"))}<h1 id="stop-title">${blocked.kind === "security" ? "Known harmful destination" : "This destination is restricted"}</h1><p>${esc(blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.")}</p><p>${esc(blocked.url)}</p>${blocked.kind === "security" ? `<p>Security intelligence from ${esc(blocked.publisher || blocked.source)}${blocked.stale ? " (stale list)" : ""}. This is not a personal preference rule.</p>` : ""}${blocked.provenance ? (blocked.provenance.signed ? `<p>Signed community list (untrusted claim; ${esc(blocked.provenance.claimKind)}): ${esc(blocked.provenance.listName)} sequence ${esc(blocked.provenance.sequence)}, entry ${esc(blocked.provenance.entryId)} revision ${esc(blocked.provenance.entryRevision)}. Review it in Community site lists.</p>` : `<p>Community list provenance (untrusted): ${esc(blocked.provenance.sourceRepo)} @ ${esc(blocked.provenance.commit)}</p>`) : ""}<div class="inline-actions">${action("blocked-back", "Go back", "back")}${action("allow-once", blocked.kind === "security" ? "Proceed anyway…" : "Allow this visit", "globe")}${action("explain-url", "Why?", "search", `data-url="${esc(blocked.url)}"`)}${action("section", "Change rule", "shield", 'data-section="privacy"')}${blocked.provenance?.signed ? action("manage-lists", "Community site lists", "") : ""}</div>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`
-      : `<div class="browser-placeholder" ${live ? "hidden" : ""}><img src="../assets/logo/svg/mark-full-color.svg" alt=""><h1>Where would you like to go?</h1><p>Enter a website or a search in the address bar above.</p>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+      : `<div class="browser-placeholder" ${live ? "hidden" : ""}><img class="only-light" src="../assets/logo/svg/mark-full-color.svg" alt=""><img class="only-dark" src="../assets/logo/dark/mark-dark.svg" alt=""><h1>Where would you like to go?</h1><p>Enter a website or a search in the address bar above.</p>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
     setHTML($("content"), `${tab?.loading ? '<div class="loading-line" aria-hidden="true"></div>' : ""}${live ? `<h1 class="visually-hidden">Live page: ${esc(displayTitle(tab))}</h1>${paneFrames(tab)}` : ""}${stop}`);
     layout();
     return;
@@ -1195,6 +1200,13 @@ async function focusPage() {
   if (result?.focused) announce(`Focus is in the ${splitTab() ? (focusedPane === "secondary" ? "right" : "left") + " pane" : "page"}. Press F6 to return to Weft.`);
   else announce("No page is shown. Open a website first.");
 }
+/** Plays the view entrance (gui.css `.view-enter`) once; re-renders after it has finished stay still. */
+function enterView(content) {
+  content.classList.remove("view-enter");
+  void content.offsetWidth;
+  content.classList.add("view-enter");
+  content.addEventListener("animationend", () => content.classList.remove("view-enter"), { once: true });
+}
 function navigateSection(next, remember = true) {
   navigationSerial++;
   section = next;
@@ -1203,6 +1215,7 @@ function navigateSection(next, remember = true) {
   taskFilter = "";
   renderShell();
   renderContent();
+  enterView($("content"));
   $("content").scrollTop = 0;
   // Keyboard and screen-reader users land on the new view's heading; a live page offers the way in.
   if (section === "browse" && !$("focus-page").hidden) $("focus-page").focus({ preventScroll: true });
@@ -2500,7 +2513,7 @@ function renderMessages() {
         .join("")
     : `<div class="chat-welcome"><span class="agent-symbol icon">${icon("spark")}</span><h3>A little help,<br>a fresh perspective.</h3><p>Think through an idea, make a plan, or ask a question. Choose a model above to get started.</p><button data-action="chat-prompt" data-text="Help me turn a project idea into a clear plan.">Help me make a plan ${icon("arrow")}</button><button data-action="chat-prompt" data-text="Help me organize my research. What should I collect first?">Organize my research ${icon("arrow")}</button><button data-action="section" data-section="settings">Configure a model ${icon("settings")}</button></div>`);
   if (chatBusy) {
-    $("chat-messages").innerHTML += '<p class="muted">Waiting for your model…</p>';
+    $("chat-messages").innerHTML += `<p class="muted chat-waiting"><span class="waiting-art" aria-hidden="true">${motionArt("waiting-dots", "waiting-dots")}</span>Waiting for your model…</p>`;
     $("chat-messages").__weftHTML = null;
   }
   renderLiveTurn();
@@ -2624,7 +2637,7 @@ async function sendChat(e) {
     chatAttachments = [];
     renderAttachments();
     $("chat-messages").innerHTML +=
-      `<div class="chat-message user"><div class="message-author">YOU</div><div class="message-body">${esc(text)}</div></div><p class="muted" id="chat-waiting">Waiting for your model… ${action("cancel-chat", "Cancel", "", "", "text-button")}</p>`;
+      `<div class="chat-message user"><div class="message-author">YOU</div><div class="message-body">${esc(text)}</div></div><p class="muted chat-waiting" id="chat-waiting"><span class="waiting-art" aria-hidden="true">${motionArt("waiting-dots", "waiting-dots")}</span>Waiting for your model… ${action("cancel-chat", "Cancel", "", "", "text-button")}</p>`;
     $("chat-messages").__weftHTML = null;
     $("chat-messages").setAttribute("aria-busy", "true");
     announce("Message sent. Waiting for the model.");

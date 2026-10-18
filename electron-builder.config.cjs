@@ -17,6 +17,8 @@ module.exports = {
     'assets/tokens.css', 'assets/fonts/**/*',
     'assets/logo/svg/mark-full-color.svg', 'assets/logo/svg/horizontal-full-color.svg',
     'assets/logo/icons/favicon.ico', 'assets/logo/icons/app-icon-plum-512.png',
+    'assets/logo/dark/mark-dark.svg', 'assets/logo/dark/horizontal-dark.svg',
+    'assets/graphics/motion/**/*',
   ],
   asar: true,
   // Stable channel only. The updater ignores this provider's URLs and uses the fixed

@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+Entries describe implemented changes and verification limits. Product direction
+alone is not a shipped capability.
+
+## v1.1.2 — 2026-10-18
+
+Patch release with the release-pipeline fix for the failed v1.1.1 macOS build,
+and Weft's interface graphics drawn with Vixl.
+
+### Changed
+
+- Interface graphics are drawn with Vixl ([assets/graphics](assets/graphics/README.md)):
+  the 41 interface icons were redrawn on one grid (1.6 px round strokes, 2–3 px
+  corners), and the agent and ownership state markers are now Vixl glyphs
+  instead of CSS shapes. The optical favicon variant and the Windows installer
+  art keep their designs but are drawn with Vixl too; `scripts/logo-optical.js`
+  is removed and `scripts/generate-installer-art.js` only encodes the Vixl PNGs
+  as BMP.
+
+### Added
+
+- Empty states show a spot illustration in the workspace palette (14 of them),
+  painted with theme tokens so they follow light and dark.
+- Motion: the overview mark slides its two bands into place once
+  (`mark-in`), "Waiting for your model" shows three small knots passing over
+  and under a thread (`waiting-dots`), dialogs, the toast and the agent panel
+  rise or slide in, a new view fades in once on navigation, and the quick-start
+  cards lift on hover. New tokens `motion-enter` (200 ms) and
+  `motion-enter-easing`. Under reduced motion all of it is off and the
+  animations show their resting frame.
+- `test/graphics.test.js` checks the generated icons against the Vixl exports,
+  token-only colours, and each animation's themes, still and play count.
 
 ### Fixed
 
@@ -12,11 +42,18 @@
   independently and verify their update manifests before uploading artifacts.
 - CI now packages both macOS architectures and launches the native app, using
   the same packaging entry point as releases to catch unsigned-build failures.
+- Packaged builds now include the dark-theme wordmark and mark
+  (`assets/logo/dark/`), which the GUI loads in dark mode but
+  `electron-builder.config.cjs` did not ship, and the new animation files. A
+  test checks that every asset the interface references is packaged.
 
-Signed/notarized builds and real cross-version upgrades remain unverified.
+### Verification
 
-Entries describe implemented changes and verification limits. Product direction
-alone is not a shipped capability.
+- Linux GUI goldens were regenerated and reviewed; they are now captured with
+  reduced motion so animations cannot make them timing-dependent. The
+  animations were checked frame by frame in Electron under Xvfb. Not checked on
+  Windows or macOS.
+- Signed/notarized builds and real cross-version upgrades remain unverified.
 
 ## v1.1.1 — 2026-10-18
 

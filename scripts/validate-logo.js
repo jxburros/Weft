@@ -3,19 +3,19 @@
  * exactly as a browser or the OS would at each size):
  *
  *   npm run logo:validate                # print measurements, exit 1 if a small icon is illegible
- *   npm run logo:validate -- --write     # also write the contact sheet, optical PNGs and favicon.ico
+ *   npm run logo:validate -- --write     # also write the contact sheet and favicon.ico
  *
  * Each supplied variant and the optical variant is rendered at 16, 24, 32, 48, 64, 128 and 256 px
  * and measured from the rendered pixels: how many separate band pieces remain (the over-under
  * crossing is legible only while the pieces stay apart), the band width in pixels, and the peak
- * contrast against the tile or background. The 256 px rendering is the reference.
+ * contrast against the tile or background. The 256 px rendering is the reference. The optical
+ * variant's SVGs and 16-32 px PNGs are Vixl exports (`python scripts/graphics/build.py logo`).
  */
 import { app, BrowserWindow } from "electron";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { opticalFiles } from "./logo-optical.js";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const write = process.argv.includes("--write");
@@ -163,14 +163,6 @@ if (process.argv.slice(1).some((arg) => resolve(arg) === fileURLToPath(import.me
   app.whenReady().then(async () => {
     const scratch = mkdtempSync(join(tmpdir(), "weft-logo-"));
     try {
-      // The optical SVGs are generated text; keep them current before measuring.
-      for (const [path, svg] of opticalFiles()) {
-        const current = existsSync(join(root, path)) ? readFileSync(join(root, path), "utf8") : null;
-        if (current === svg) continue;
-        if (!write) throw new Error(`${path} is stale; run node scripts/logo-optical.js`);
-        mkdirSync(join(root, "assets/logo/optical"), { recursive: true });
-        writeFileSync(join(root, path), svg);
-      }
       const page = join(scratch, "logo.html");
       writeFileSync(page, `<!doctype html><meta charset="utf-8"><style>@font-face{font-family:"Source Sans 3";src:url("${asset("assets/fonts/SourceSans3-Regular.woff2")}")}@font-face{font-family:"Source Sans 3";font-weight:600;src:url("${asset("assets/fonts/SourceSans3-Semibold.woff2")}")}</style><body style="font-family:'Source Sans 3'">Weft logo</body>`);
       const window = new BrowserWindow({ show: false, width: 400, height: 300, webPreferences: { sandbox: true, contextIsolation: true } });
@@ -202,10 +194,9 @@ if (process.argv.slice(1).some((arg) => resolve(arg) === fileURLToPath(import.me
         const rows = results.map((r) => ({ label: r.label, verdict: `${r.verdict}\nreference: ${r.reference} pieces at 256 px`, cells: r.cells }));
         const contact = await run(sheet, { rows, sizes: SIZES, small: SMALL });
         writeFileSync(join(root, "artifacts/logo-contact-sheet.png"), Buffer.from(contact.split(",")[1], "base64"));
-        const pngOf = (id, size) => Buffer.from(results.find((r) => r.id === id).cells.find((c) => c.size === size).png.split(",")[1], "base64");
-        for (const palette of ["light", "dark", "plum"]) for (const size of SMALL) writeFileSync(join(root, `assets/logo/optical/app-icon-${palette}-small-${size}.png`), pngOf(`optical-${palette}`, size));
         // favicon.ico: the optical variant where the supplied mark loses its crossing, the supplied export above that.
-        writeFileSync(join(root, "assets/logo/icons/favicon.ico"), icoFromPngs([...SMALL.map((size) => ({ size, png: pngOf("optical-light", size) })), { size: 48, png: readFileSync(join(root, "assets/logo/icons/app-icon-light-48.png")) }]));
+        const optical = (size) => readFileSync(join(root, `assets/logo/optical/app-icon-light-small-${size}.png`));
+        writeFileSync(join(root, "assets/logo/icons/favicon.ico"), icoFromPngs([...SMALL.map((size) => ({ size, png: optical(size) })), { size: 48, png: readFileSync(join(root, "assets/logo/icons/app-icon-light-48.png")) }]));
       }
       app.exit(report.decision === "optical-variant-insufficient" ? 1 : 0);
     } catch (error) {

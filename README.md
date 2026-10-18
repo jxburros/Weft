@@ -99,7 +99,7 @@ integration authors is in [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)
 
 ## Status and limits
 
-This is version 1.1.1: a working browser that implements a large part, but not all,
+This is version 1.1.2: a working browser that implements a large part, but not all,
 of the [product specification](AI-Workspace-Browser-Product-Specification.md).
 [Implementation coverage](docs/IMPLEMENTATION.md) assesses it section by section.
 

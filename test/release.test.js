@@ -98,7 +98,7 @@ test('release assets must match their manifests before SHA256SUMS.txt is produce
   assert.match((await verifyReleaseAssets(fixture, '1.2.0')).problems.join('\n'), /missing/);
 });
 
-test('installer bitmaps are reproducible from tokens and logo exports at NSIS dimensions', () => {
+test('installer bitmaps are the Vixl exports in packaging/source, at NSIS dimensions', () => {
   for (const [path, bytes] of Object.entries(renderInstallerArt())) {
     assert.ok(readFileSync(join(root, path)).equals(bytes), `${path} drifted; run node scripts/generate-installer-art.js`);
     assert.equal(bytes.toString('latin1', 0, 2), 'BM');

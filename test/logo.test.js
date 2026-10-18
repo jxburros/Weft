@@ -4,14 +4,16 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import electron from "electron";
-import { opticalFiles } from "../scripts/logo-optical.js";
 import { electronEnv } from "../scripts/electron-env.js";
 
 const root = new URL("../", import.meta.url);
 const read = (path) => readFileSync(new URL(path, root));
 
-test("optical small-size icons are the generator's exact output", () => {
-  for (const [path, svg] of opticalFiles()) assert.equal(read(path).toString("utf8"), svg, `${path} is stale; run node scripts/logo-optical.js`);
+test("optical small-size icons are Vixl exports with their editable masters", () => {
+  for (const palette of ["light", "dark", "plum"]) {
+    assert.match(read(`assets/logo/optical/app-icon-${palette}-small.svg`).toString("utf8"), /<metadata id="vixl-document">/);
+    assert.ok(read(`assets/logo/source/app-icon-${palette}-small.vixl`).length > 0);
+  }
 });
 
 test("favicon.ico carries the optical variant at 16-32 px and the supplied export at 48 px", () => {

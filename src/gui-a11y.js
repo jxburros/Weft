@@ -4,6 +4,8 @@
  * changes (completed replies, new agent requests, control changes, results)
  * instead of every status tick, poll re-render or streamed token.
  */
+import { stateMarker } from "./icons.js";
+
 const $ = (id) => document.getElementById(id);
 let lastMessage = "";
 let lastAt = 0;
@@ -72,5 +74,5 @@ const stateShapes = {
 };
 export function stateBadge(state, label) {
   const shape = stateShapes[state] || "available";
-  return `<span class="state-badge state-${shape}"><span class="state-marker" aria-hidden="true"></span>${label}</span>`;
+  return `<span class="state-badge state-${shape}">${stateMarker(shape)}${label}</span>`;
 }
