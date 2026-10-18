@@ -18,9 +18,10 @@ humans alone change trusted state, and outcomes must be reported honestly.
    `electron-builder.config.cjs`; signing activates only when secrets are present.
 2. **Windows installer:** assisted (not one-click) NSIS, per-user by default with an
    optional all-users choice and changeable directory. Branded welcome/finish and
-   uninstall sidebars and header are generated deterministically from
-   `assets/tokens.json` and the committed logo exports by
-   `scripts/generate-installer-art.js`; `packaging/installer.nsh` supplies Weft's text.
+   uninstall sidebars and header are drawn with Vixl from the brand palette and the
+   committed logo exports (`scripts/graphics/installer.py`, masters and PNGs in
+   `packaging/source/`) and encoded as BMP by `scripts/generate-installer-art.js`;
+   `packaging/installer.nsh` supplies Weft's text.
    Upgrades (`--updated`) never touch user data. Uninstall keeps the `weft` profile
    folder unless the person ticks a separate, confirmed "permanently delete" option;
    the disposable update cache is always removed. Packaged builds pin the profile

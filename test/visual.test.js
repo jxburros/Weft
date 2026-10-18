@@ -16,6 +16,8 @@ if (process.argv.includes("--visual-child")) {
   app.setPath("userData", process.env.WEFT_VISUAL_PROFILE);
   app.commandLine.appendSwitch("force-device-scale-factor", "1");
   app.commandLine.appendSwitch("disable-lcd-text");
+  // Animations (the Vixl weave-in, view entrances) would make captures depend on timing: goldens show resting frames.
+  app.commandLine.appendSwitch("force-prefers-reduced-motion");
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = {
     activeWorkspaceId: "fixture", workspaces: [{id:"fixture",name:"My workspace",icon:"W"}],

@@ -7,6 +7,8 @@
   --motion-loading: 1000ms;
   --motion-easing: ease-out;
   --motion-loading-easing: ease-in-out;
+  --motion-enter: 200ms;
+  --motion-enter-easing: cubic-bezier(0.2, 0.8, 0.2, 1);
   --font-size-11: 0.6875rem;
   --font-size-12: 0.75rem;
   --font-size-13: 0.8125rem;
@@ -109,5 +111,6 @@
     --motion-fast: 0ms;
     --motion-loading: 0ms;
     --motion-handoff: 0ms;
+    --motion-enter: 0ms;
   }
 }
