@@ -92,6 +92,10 @@ if (process.argv.includes("--a11y-child")) {
     const failures = [];
     const audit = async (label, theme) => {
       await settle();
+      // Measure the settled view: jump entrance animations (view fade-in, dialog rise-in) to their end
+      // state. A fixed pause loses that race on a slow runner, and an unpainted window can freeze an
+      // animation's timeline outright. Infinite loops (loading line) are left running.
+      await run("document.getAnimations().filter((a) => a.effect?.getComputedTiming().iterations !== Infinity).forEach((a) => a.finish())");
       const axe = await run(`axe.run(${'document.getElementById("lock-screen") || (document.getElementById("dialog").open ? document.getElementById("dialog") : document)'}, { runOnly: { type: "tag", values: ${JSON.stringify(AXE_TAGS)} }, resultTypes: ["violations"] }).then((r) => r.violations.map((v) => ({ id: v.id, impact: v.impact, help: v.help, nodes: v.nodes.slice(0, 6).map((n) => ({ target: n.target.join(" "), summary: n.failureSummary.split("\\n").slice(0, 3).join(" ") })) })))`);
       const contrast = await run("window.__a11y.contrast()");
       const targets = await run("window.__a11y.targets()");

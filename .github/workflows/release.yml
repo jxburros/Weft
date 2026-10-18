@@ -178,20 +178,23 @@ jobs:
         run: |
           pwsh -NoProfile -File scripts/release/windows-install-check.ps1 "dist/Weft-Setup-${{ needs.verify.outputs.version }}-x64.exe" "${{ needs.verify.outputs.version }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # One flat folder: upload-artifact stores paths relative to the common ancestor of every
+      # match, so mixing dist/ files with the root signing note would nest them under dist/ and
+      # the publish job would find no latest*.yml in release/.
+      - name: Stage release assets
+        shell: bash
+        run: |
+          shopt -s nullglob
+          mkdir release-assets
+          cp dist/*.exe dist/*.blockmap dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb dist/latest*.yml "signing-${{ matrix.name }}.txt" release-assets/
+          ls -l release-assets
+          compgen -G 'release-assets/latest*.yml' > /dev/null || { echo "::error::No latest*.yml staged"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: weft-${{ matrix.name }}
           if-no-files-found: error
           retention-days: 14
-          path: |
-            dist/*.exe
-            dist/*.blockmap
-            dist/*.dmg
-            dist/*.zip
-            dist/*.AppImage
-            dist/*.deb
-            dist/latest*.yml
-            signing-${{ matrix.name }}.txt
+          path: release-assets/
 
   publish:
     name: Draft, verify and publish
