@@ -496,7 +496,7 @@ function renderContent() {
   let html = "";
   if (section === "overview") html = overview();
   else if (section === "mailbox") html = heading("Mailbox", "Forwarded messages stay in this workspace. No email-account credentials required.", action("import-email", "Import email", "upload")) +
-    `<p>Import a forwarded .eml file or paste its message. A local forwarding relay can also deliver messages using Weft’s authenticated API; see the mailbox setup guide.</p>` +
+    `<p>Import a forwarded .eml file or paste its message. A local forwarding relay can also deliver messages using Weft’s authenticated API; see the mailbox setup guide.</p><h2>Messages</h2>` +
     (records("materials").filter(m => m.tags?.includes("mailbox")).map(m => `<article class="record-card"><h3>${esc(m.title)}</h3><small>${esc(m.note)}</small>${m.tags.includes("unread") ? '<span class="tag">Unread</span>' : ''}<div class="inline-actions">${action("read-email", "Read message", "chat", `data-id="${esc(m.id)}"`)}${action("edit-record", "Edit or attach to a task", "", `data-id="${esc(m.id)}" data-kind="materials"`)}</div></article>`).join("") || empty("Your mailbox is empty", "Forward a message into this workspace or import an email to get started.", "chat"));
   else if (
     ["materials", "context", "tasks", "conversations", "workflows"].includes(
