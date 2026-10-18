@@ -3,9 +3,28 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
-## Unreleased
+## v1.1.1 — 2026-10-18
 
-Documentation only; no behavior changed.
+Patch release replacing the failed v1.1.0 release run, which stopped at the
+release gate before any asset was built or published. Version strings
+(`package.json`, `package-lock.json`, `.claude-plugin/plugin.json`) are aligned
+at 1.1.1 and `npm run release:check` passes. It also ships everything listed
+below it down to v1.1.0: the Windows installer check in CI and releases, the
+cross-site cookie decision fix for frames, and the documentation restructure.
+
+### Fixed
+
+- Release workflow: the `WEFT_DISABLE_UPDATES` kill switch is now set only for
+  the packaging and smoke-test job. It was set for the whole workflow, so the
+  release gate's full test suite ran with updates disabled and the GUI test that
+  asserts a source run's update state failed. Packaged smoke tests still set the
+  kill switch themselves.
+- Responsiveness benchmark (`perf/responsiveness.js`): wheel probes now start
+  from the middle of the page. The first probe scrolled up from the top, where
+  no scroll event fires, so a run could wait almost the full 10 s probe timeout
+  and fail the scroll budget on a loaded runner.
+
+### Documentation
 
 - Rewrote the README around the project promise, a concrete scenario, how human
   control works, and a single "Status and limits" section. Moved the detailed
@@ -19,7 +38,6 @@ Documentation only; no behavior changed.
   status table and per-section detail. Verification dates remain only on documents
   that make verification claims.
 - Verified: `npm run test:docs` passes and every relative Markdown link resolves.
-  Not verified: the full test suite, which this change does not touch.
 
 ## 2026-10-18 — Windows installer in CI and releases
 

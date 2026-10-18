@@ -17,9 +17,6 @@ permissions:
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
-env:
-  # Release builds must never reach the network for updates while smoke-testing.
-  WEFT_DISABLE_UPDATES: '1'
 
 jobs:
   verify:
@@ -86,6 +83,10 @@ jobs:
             kind: appimage
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    env:
+      # Packaged builds must never reach the network for updates while smoke-testing. Scoped to
+      # packaging: the verify job runs the same suite as CI, which asserts the source-run update state.
+      WEFT_DISABLE_UPDATES: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
