@@ -3,6 +3,19 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## v1.1.0 — 2026-10-18
+
+Minor release. Version strings (`package.json`, `package-lock.json`,
+`.claude-plugin/plugin.json`) are aligned at 1.1.0 and `npm run release:check`
+passes. The user-visible changes since 1.0.0 are the entries below, including
+bounded background search indexing, OS memory-pressure tab suspension, sealed
+payment records and embedding vectors, the GUI accessibility audit, the finished
+design system, the community-lists and agent-input screens, and the CI/Windows
+test-stability fixes. Electron 44.9.0. Documentation was re-verified against the
+code on this date (`npm run test:docs` and guidance generation are clean).
+Installing, upgrading across real versions and rollback on each operating system
+remain unverified on real machines (`docs/RELEASING.md`).
+
 ## 2026-10-17 — Agent
 
 ### Changed

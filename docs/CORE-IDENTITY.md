@@ -1,6 +1,6 @@
 # Core identity
 
-Last verified against code: 2026-10-17.
+Last verified against code: 2026-10-18.
 
 Weft is a local workspace browser where a person and an agent can work on the
 same project with explicit control, persistent evidence and understandable

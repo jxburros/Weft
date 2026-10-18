@@ -1,6 +1,6 @@
 # Contributing with an agent
 
-Last verified against code: 2026-10-17.
+Last verified against code: 2026-10-18.
 
 Weft is a local workspace browser for explicit human/agent collaboration, durable
 project evidence and visible authority. Read `docs/CORE-IDENTITY.md` for product
