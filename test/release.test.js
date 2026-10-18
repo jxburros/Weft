@@ -9,12 +9,39 @@ import { fileURLToPath } from 'node:url';
 import { renderInstallerArt } from '../scripts/generate-installer-art.js';
 import { changelogSection, releaseMetadata } from '../scripts/release/metadata.js';
 import { verifyReleaseAssets } from '../scripts/release/verify-assets.js';
+import { packagingEnvironment } from '../scripts/release/build-packages.js';
 import { WEFT_VERSION } from '../src/version.js';
 import { createOpenApiDocument } from '../src/openapi.js';
 import { createMcpServer } from '../src/mcp.js';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const require = createRequire(import.meta.url);
+
+test('missing Actions signing secrets do not become certificate paths in electron-builder', () => {
+  const { PlatformPackager } = require('app-builder-lib');
+  const packager = { info: { config: {} }, platformSpecificBuildOptions: {} };
+  const saved = process.env;
+  try {
+    const env = { CSC_LINK: '', WIN_CSC_LINK: '', CSC_KEY_PASSWORD: '', CSC_IDENTITY_AUTO_DISCOVERY: 'false', WEFT_DISABLE_UPDATES: '1' };
+    process.env = env;
+    // This is the upstream lookup that caused v1.1.1 to import the repository
+    // directory as a certificate, even with identity auto-discovery disabled.
+    assert.equal(PlatformPackager.prototype.getCscLink.call(packager), '');
+    process.env = packagingEnvironment(env);
+    assert.equal(PlatformPackager.prototype.getCscLink.call(packager), undefined);
+    assert.equal(PlatformPackager.prototype.getCscLink.call(packager, 'WIN_CSC_LINK'), undefined);
+    assert.equal(process.env.CSC_KEY_PASSWORD, '');
+    assert.equal(process.env.CSC_IDENTITY_AUTO_DISCOVERY, 'false');
+    assert.equal(process.env.WEFT_DISABLE_UPDATES, '1');
+    assert.equal(env.CSC_LINK, '', 'the supplied environment is not mutated');
+
+    process.env = packagingEnvironment({ CSC_LINK: '/certs/mac.p12', WIN_CSC_LINK: '/certs/windows.pfx' });
+    assert.equal(PlatformPackager.prototype.getCscLink.call(packager), '/certs/mac.p12');
+    assert.equal(PlatformPackager.prototype.getCscLink.call(packager, 'WIN_CSC_LINK'), '/certs/windows.pfx');
+    process.env = packagingEnvironment({ CSC_LINK: '/certs/fallback.p12', WIN_CSC_LINK: '' });
+    assert.equal(PlatformPackager.prototype.getCscLink.call(packager, 'WIN_CSC_LINK'), '/certs/fallback.p12');
+  } finally { process.env = saved; }
+});
 
 test('product version is consistent across package, lockfile, plugin and served API metadata', () => {
   const { version, problems } = releaseMetadata(root);

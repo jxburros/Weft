@@ -80,11 +80,39 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libgbm1 libasound2t64
       - run: npm ci
       - run: node scripts/release/metadata.js
-      - run: npx electron-builder --config electron-builder.config.cjs --linux AppImage --x64 --publish never
+      - run: node scripts/release/build-packages.js --linux AppImage --x64
       - name: Verify the update manifest and checksums
         run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
       - name: Launch the packaged AppImage
         run: xvfb-run -a node scripts/release/smoke-packaged.js "dist/Weft-$(node -p 'require("./package.json").version')-x86_64.AppImage" appimage
+  macos-package:
+    name: Package and smoke-test (macOS, unsigned)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      WEFT_DISABLE_UPDATES: '1'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Reproduce the missing-secret inputs from the release workflow.
+      CSC_LINK: ''
+      WIN_CSC_LINK: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/release/metadata.js
+      - name: Build both macOS architectures
+        run: node scripts/release/build-packages.js --mac dmg zip --arm64 --x64
+      - name: Verify update manifests and checksums
+        run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
+      - name: Launch the native packaged app
+        shell: bash
+        run: |
+          app_dir=dist/mac
+          if [[ "$(node -p 'process.arch')" == arm64 ]]; then app_dir=dist/mac-arm64; fi
+          node scripts/release/smoke-packaged.js "$app_dir/Weft.app/Contents/MacOS/Weft" dmg
   windows-installer:
     name: Build, install and uninstall the Windows installer (unsigned)
     runs-on: windows-latest
@@ -101,7 +129,7 @@ jobs:
       - run: npm ci
       - run: node scripts/release/metadata.js
       - name: Build the NSIS installer
-        run: npx electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never
+        run: node scripts/release/build-packages.js --win nsis --x64
       - name: Verify the update manifest and checksums
         shell: bash
         run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"

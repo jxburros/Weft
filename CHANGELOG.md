@@ -3,7 +3,10 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
-## Unreleased
+## v1.1.2 — 2026-10-18
+
+Patch release with the release-pipeline fix for the failed v1.1.1 macOS build,
+and Weft's interface graphics drawn with Vixl.
 
 ### Changed
 
@@ -31,6 +34,14 @@ alone is not a shipped capability.
 
 ### Fixed
 
+- Release packaging now removes empty certificate links supplied by missing
+  GitHub Actions secrets. The v1.1.1 macOS build treated an empty `CSC_LINK` as
+  the repository directory and failed while importing a signing certificate.
+  Configured certificates and empty certificate passwords are preserved.
+- Manual release dry runs now honor `dry_run` on tags. Platform builds finish
+  independently and verify their update manifests before uploading artifacts.
+- CI now packages both macOS architectures and launches the native app, using
+  the same packaging entry point as releases to catch unsigned-build failures.
 - Packaged builds now include the dark-theme wordmark and mark
   (`assets/logo/dark/`), which the GUI loads in dark mode but
   `electron-builder.config.cjs` did not ship, and the new animation files. A
@@ -42,6 +53,7 @@ alone is not a shipped capability.
   reduced motion so animations cannot make them timing-dependent. The
   animations were checked frame by frame in Electron under Xvfb. Not checked on
   Windows or macOS.
+- Signed/notarized builds and real cross-version upgrades remain unverified.
 
 ## v1.1.1 — 2026-10-18
 

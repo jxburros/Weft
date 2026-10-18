@@ -63,7 +63,7 @@ jobs:
     name: Package ${{ matrix.name }}
     needs: verify
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
           - name: windows-x64
@@ -141,7 +141,10 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ steps.signing.outputs.signed == 'true' && 'true' || 'false' }}
-        run: npx electron-builder --config electron-builder.config.cjs ${{ matrix.builder }} --publish never
+        run: node scripts/release/build-packages.js ${{ matrix.builder }}
+      - name: Verify update manifests and checksums
+        shell: bash
+        run: node scripts/release/verify-assets.js dist "${{ needs.verify.outputs.version }}"
       - name: Verify Windows Authenticode signatures
         if: matrix.name == 'windows-x64' && steps.signing.outputs.signed == 'true'
         shell: pwsh
@@ -193,7 +196,7 @@ jobs:
   publish:
     name: Draft, verify and publish
     needs: [verify, build]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && (github.event_name == 'push' || !inputs.dry_run)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
