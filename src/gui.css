@@ -2236,3 +2236,18 @@ dialog.trusted .trusted-band {
 .region-entry {
   margin-top: var(--space-12);
 }
+
+/* Accessible icon grid: names remain available on hover and to assistive technology. */
+#sections { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
+#sections .section-link { position:relative; min-height:54px; justify-content:center; padding:12px; }
+#sections .section-link > span:not(.count) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+#sections .section-link .count { position:absolute; right:3px; top:3px; font-size:var(--font-size-11); }
+#sections .section-link svg { width:24px; height:24px; transition:transform 160ms ease; }
+#sections .section-link:is(:hover,:focus-visible) svg { transform:translateY(-3px) rotate(-7deg) scale(1.12); }
+@media(prefers-reduced-motion:reduce) { #sections .section-link svg { transition:none; } #sections .section-link:is(:hover,:focus-visible) svg { transform:none; } }
+
+:root[data-accent="ocean"] { --brand:var(--accent-ocean); }
+:root[data-accent="forest"] { --brand:var(--accent-forest); }
+:root[data-accent="rose"] { --brand:var(--accent-rose); }
+:root[data-density="compact"] .settings-row { padding-block:8px; }
+:root[data-density="compact"] .record-card { padding:12px; }

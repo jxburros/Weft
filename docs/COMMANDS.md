@@ -185,6 +185,7 @@ Human-only describes an unconditional administration gate. Every other non-human
 | backups.verify | Recompute backup digests, database integrity and component completeness | administration | Human only | GUI IPC, CLI, REST, MCP |
 | backups.restore | Restore a verified backup; current data is preserved in the profile recovery folder | administration | Human only | GUI IPC, CLI, REST, MCP |
 | backups.delete | Delete one local backup folder | administration | Human only | GUI IPC, CLI, REST, MCP |
+| models.discover | List every model visible to a connection key; sends no workspace data | administration | Human only | GUI IPC, CLI, REST, MCP |
 | models.list | List model connections, destinations and capability records (never returns keys) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | models.save | Save a model connection; keys require OS secure storage | administration | Human only | GUI IPC, CLI, REST, MCP |
 | models.probe | Ask the connection endpoint for model capabilities and context window; sends no workspace data | administration | Human only | GUI IPC, CLI, REST, MCP |

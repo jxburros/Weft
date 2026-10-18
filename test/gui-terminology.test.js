@@ -16,7 +16,7 @@ test("workspace sections use the guide's familiar labels", () => {
   const gui = read("src/gui.js");
   const sections = [.../const sections = \[([^\]]+)\]/.exec(gui)[1].matchAll(/"(\w+)"/g)].map((m) => m[1]);
   const names = Object.fromEntries([.../const names = \{([^}]+)\}/.exec(gui)[1].matchAll(/(\w+): "([^"]+)"/g)].map((m) => [m[1], m[2]]));
-  assert.deepEqual(sections.map((key) => names[key]), ["Overview", "Materials", "Context", "Tasks", "Conversations", "Artifacts", "Activity"]);
+  assert.deepEqual(sections.map((key) => names[key]), ["Overview", "Materials", "Context", "Tasks", "Conversations", "Artifacts", "Activity", "Workflows", "Mailbox"]);
 });
 
 test("no textile vocabulary replaces navigation, and project spaces are called workspaces", () => {

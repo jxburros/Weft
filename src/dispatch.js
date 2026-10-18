@@ -28,6 +28,7 @@ const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activi
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
 export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
+  if (providers) { providers.commandCatalog = commands; providers.validateAppCommand = validateCommand; }
   // Agent concurrency, capture queue and budgets apply to every caller (#30), including task-runtime steps.
   // A locked encrypted profile has no settings to read; the defaults apply until unlock.
   scheduler ??= new ResourceScheduler({ settings: () => (workspace?.locked ? {} : workspace?.data?.settings) ?? {}, onEvent });
@@ -273,7 +274,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (command.startsWith('lists.')) return lists.execute(command, args, context);
     if (command.startsWith('clients.')) return clients.execute(command, args, context);
     if (command.startsWith('models.') || command.startsWith('chat.')) {
-      if (['models.save', 'models.delete', 'models.probe'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });
+      if (['models.save', 'models.delete', 'models.probe', 'models.discover'].includes(command) && context.actor !== 'human') throw Object.assign(new Error('Model configuration requires the trusted browser interface'), { code: 'human_required' });
       return providers.execute(command, args, context);
     }
     if (command.startsWith('handoffs.')) return workspace.executeHandoff(command, args, context);

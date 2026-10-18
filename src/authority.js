@@ -96,7 +96,7 @@ export class Authority {
       this.record({ ...base, type: 'decision', decision: 'deny', reason, outcome: 'denied', summary: summarizeArgs(args, command) });
       return authorityError('permission_required', message, authority);
     };
-    const humanOnly = Boolean(spec.humanOnly) || actionClass === 'administration';
+    const humanOnly = (['workspaces.create', 'workspaces.update'].includes(command) && ['instructions', 'contextLocalOnly'].some(field => Object.hasOwn(args.changes || args, field))) || Boolean(spec.humanOnly) || actionClass === 'administration';
     if (humanOnly) throw deny('human_only', `${command} requires the trusted browser interface (human only)`);
     const workspaceIds = this.touchedWorkspaces(command, args, target);
     const destination = this.destinationFor(command, args, target);

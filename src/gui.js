@@ -1,3 +1,5 @@
+import { emailMaterial } from "./mailbox.js";
+import { PROVIDER_PRESETS } from "./provider-presets.js";
 import { icon, illustration } from "./icons.js";
 import { knowledgeUI } from "./gui-knowledge.js";
 import { announce, focusView, keyboardScrollable, stateBadge, trustedBand } from "./gui-a11y.js";
@@ -44,6 +46,7 @@ const ago = (value) => {
         : date(value);
 };
 const names = {
+  mailbox: "Mailbox",
   overview: "Overview",
   tabs: "Tabs",
   materials: "Materials",
@@ -72,8 +75,12 @@ const sections = [
   "conversations",
   "artifacts",
   "activity",
+  "workflows",
+  "mailbox",
 ];
 const sectionIcon = {
+  workflows: "workflow",
+  mailbox: "chat",
   overview: "grid",
   materials: "folder",
   context: "context",
@@ -114,6 +121,7 @@ let tabs = [],
   toastTimer,
   dialogRestore,
   previewing = null;
+let dialogGeneration = 0;
 const ws = () =>
   state.workspaces.find((w) => w.id === state.activeWorkspaceId) || {
     name: "My workspace",
@@ -148,7 +156,7 @@ const controlLabel = (t) => {
 const controlStatus = (t) =>
   `${controlLabel(t)}${t?.version ? " · v" + t.version : ""}${t?.activity ? ` · running ${t.activity.command}` : ""}${t?.queued?.length ? ` · ${t.queued.length} queued` : ""}`;
 const action = (name, label, ico = "", attrs = "", cls = "secondary") =>
-  `<button class="${cls}" data-action="${name}" ${attrs}>${ico ? icon(ico) : ""}${esc(label)}</button>`;
+  `<button type="button" class="${cls}" data-action="${name}" ${attrs}>${ico ? icon(ico) : ""}${esc(label)}</button>`;
 // Shared collections, linked sources, services, proposals, conflicts and citations (src/gui-knowledge.js).
 const knowledge = knowledgeUI({ $: (id) => $(id), esc, short, date, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a),
   closeDialog: () => closeDialog(), field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e),
@@ -269,10 +277,10 @@ async function refreshState(force) {
     if (snapshot !== lastSnapshot || force) {
       lastSnapshot = snapshot;
       const restoreFocus = rememberFocus();
-      renderShell();
+      if (!$("dialog").open || force) renderShell();
       renderSafetyNotices(browserInfo.automation);
       if (
-        !document.activeElement?.closest(
+        (!$("dialog").open || force) && !document.activeElement?.closest(
           "#content input,#content textarea,#content select",
         )
       )
@@ -298,6 +306,9 @@ function theme() {
     value === "dark" ||
     (value === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.dataset.accent = state.settings.appearance?.accent || "plum";
+  document.documentElement.dataset.density = state.settings.appearance?.density || "comfortable";
+  document.documentElement.style.fontSize = `${16 * (state.settings.appearance?.textScale || 1)}px`;
   document.querySelector(".wordmark img").src = dark
     ? "../assets/logo/dark/horizontal-dark.svg"
     : "../assets/logo/svg/horizontal-full-color.svg";
@@ -358,7 +369,7 @@ function renderShell() {
   setHTML($("sections"), sections
     .map(
       (key) =>
-        `<button class="section-link ${section === key ? "active" : ""}" data-action="section" data-section="${key}" ${section === key ? 'aria-current="page"' : ""}>${icon(sectionIcon[key])}<span>${names[key]}</span>${["materials", "tasks", "artifacts"].includes(key) && records(key).length ? `<span class="count">${records(key).length}</span>` : ""}</button>`,
+        `<button class="section-link ${section === key ? "active" : ""}" data-action="section" data-section="${key}" aria-label="${names[key]}" title="${names[key]}" ${section === key ? 'aria-current="page"' : ""}>${icon(sectionIcon[key])}<span>${names[key]}</span>${["materials", "tasks", "artifacts"].includes(key) && records(key).length ? `<span class="count">${records(key).length}</span>` : ""}</button>`,
     )
     .join(""));
   setHTML($("tabs"), tabStrip());
@@ -484,6 +495,9 @@ function renderContent() {
   }
   let html = "";
   if (section === "overview") html = overview();
+  else if (section === "mailbox") html = heading("Mailbox", "Forwarded messages stay in this workspace. No email-account credentials required.", action("import-email", "Import email", "upload")) +
+    `<p>Import a forwarded .eml file or paste its message. A local forwarding relay can also deliver messages using Weft’s authenticated API; see the mailbox setup guide.</p>` +
+    (records("materials").filter(m => m.tags?.includes("mailbox")).map(m => `<article class="record-card"><h3>${esc(m.title)}</h3><small>${esc(m.note)}</small>${m.tags.includes("unread") ? '<span class="tag">Unread</span>' : ''}<div class="inline-actions">${action("read-email", "Read message", "chat", `data-id="${esc(m.id)}"`)}${action("edit-record", "Edit or attach to a task", "", `data-id="${esc(m.id)}" data-kind="materials"`)}</div></article>`).join("") || empty("Your mailbox is empty", "Forward a message into this workspace or import an email to get started.", "chat"));
   else if (
     ["materials", "context", "tasks", "conversations", "workflows"].includes(
       section,
@@ -823,7 +837,7 @@ function privacyView() {
         "primary",
       ),
     ) +
-    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents. Weft never clicks consent banners; these controls apply whether or not a site asks.</div><section class="settings-section"><div class="section-heading"><h2>Site storage</h2>${action("storage-defaults", "Change defaults", "", "", "text-button")}</div><div id="storage-policy"><p>Loading storage policy…</p></div><div class="settings-row"><div><strong>Clear this site</strong><small>Remove cookies and stored data for a specific site in this workspace. Server-side account records are not deleted.</small></div>${action("clear-storage", "Choose a site", "trash")}</div></section><div class="settings-section"><div class="section-heading"><h2>Personal site rules</h2><div class="inline-actions">${action("manage-lists", "Community site lists", "", "", "text-button")}${action("explain-url", "Explain a web address", "search", "", "text-button")}</div></div><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}${r.provenance?.kind === "community-list" ? " · community list" : ""}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)} · created by ${esc(r.createdBy || "unknown")} · revision ${esc(r.revision)}${r.provenance?.signed ? " · " + esc(r.provenance.claimKind) + " from community list " + esc(r.provenance.listName) + " (entry " + esc(r.provenance.entryId) + ")" : ""}</small>${r.evidence?.length ? `<small>Evidence: ${r.evidence.map((e) => esc(host(e))).join(", ")}</small>` : ""}${r.reviewBy ? `<small>${r.reviewBy < today ? "Review overdue" : "Review by"} ${esc(r.reviewBy)}${r.lastReviewedAt ? " · last reviewed " + esc(new Date(r.lastReviewedAt).toLocaleDateString()) : ""}</small>` : ""}<div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("review-rule", "Mark reviewed", "", 'data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><section class="settings-section"><div class="section-heading"><h2>Security intelligence</h2>${action("install-threats", "Install threat list", "upload", "", "text-button")}</div><p>Known malicious destinations come from lists or a provider you choose. Security findings are kept separate from your personal preferences.</p><div id="threat-status"><p>Loading…</p></div></section><section class="settings-section"><div class="section-heading"><h2>Download scanning</h2>${action("configure-scanner", "Configure scanner", "", "", "text-button")}</div><div id="scanner-status"><p>Loading…</p></div></section><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests are denied, and external application launches wait for your approval in Downloads. Popups need a click in their tab. Model chat cannot interact with pages or change your policy. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Threat lists and scanners reduce exposure to known threats only; they cannot prevent browser exploits or detect new malware. Saved sign-ins and cards are filled only on their exact sites with your approval, and every payment needs your approval of its exact terms. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
+    `<div class="notice">Each workspace has its own site storage. Site rules cover browser-managed requests; they do not control independent network tools used by external agents. Weft never clicks consent banners; these controls apply whether or not a site asks.</div><section class="settings-section"><div class="section-heading"><h2>Site storage</h2>${action("storage-defaults", "Change defaults", "", "", "text-button")}</div><div id="storage-policy"><p>Loading storage policy…</p></div><div class="settings-row"><div><strong>Clear this site</strong><small>Remove cookies and stored data for a specific site in this workspace. Server-side account records are not deleted.</small></div>${action("clear-storage", "Choose a site", "trash")}</div></section><div class="settings-section"><div class="section-heading"><h2>Personal site rules</h2><div class="inline-actions">${action("manage-lists", "Community site lists", "", "", "text-button")}${action("explain-url", "Explain a web address", "search", "", "text-button")}</div></div><p>Personal preferences are not malware classifications. Navigation rules stop visits; connection rules also stop matching subresources.</p>${rules.length ? `<div class="record-grid">${rules.map((r) => `<article class="record-card"><span class="tag">${r.enabled === false ? "Inactive · " : ""}${esc(r.behavior)} · ${esc(r.mode)}${r.provenance?.kind === "community-list" ? " · community list" : ""}</span><h3>${esc(r.hostname)}</h3><p>${esc(r.reason)}${r.note ? "\n" + esc(r.note) : ""}</p><small>${r.includeSubdomains ? "Includes subdomains" : "Exact hostname"} · ${esc(r.scope)} · created by ${esc(r.createdBy || "unknown")} · revision ${esc(r.revision)}${r.provenance?.signed ? " · " + esc(r.provenance.claimKind) + " from community list " + esc(r.provenance.listName) + " (entry " + esc(r.provenance.entryId) + ")" : ""}</small>${r.evidence?.length ? `<small>Evidence: ${r.evidence.map((e) => esc(host(e))).join(", ")}</small>` : ""}${r.reviewBy ? `<small>${r.reviewBy < today ? "Review overdue" : "Review by"} ${esc(r.reviewBy)}${r.lastReviewedAt ? " · last reviewed " + esc(new Date(r.lastReviewedAt).toLocaleDateString()) : ""}</small>` : ""}<div class="inline-actions">${action("edit-record", "Edit rule", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"')}${action("review-rule", "Mark reviewed", "", 'data-id="' + esc(r.id) + '"')}${action("delete-record", "Remove", "", 'data-kind="siteRules" data-id="' + esc(r.id) + '"', "secondary danger")}</div></article>`).join("")}</div>` : empty("No personal site rules", "Add a domain when you want this browser to avoid it.", "shield")}</div><section class="settings-section"><div class="section-heading"><h2>Security intelligence</h2>${action("install-threats", "Install threat list", "upload", "", "text-button")}</div><p>Known malicious destinations come from lists or a provider you choose. Security findings are kept separate from your personal preferences.</p><div id="threat-status"><p>Loading…</p></div></section><section class="settings-section"><div class="section-heading"><h2>Download scanning</h2>${action("configure-scanner", "Configure scanner", "", "", "text-button")}</div><div id="scanner-status"><p>Loading…</p></div></section><div class="settings-section"><h2>Protection coverage</h2><p>Remote pages run sandboxed without Node.js access. Site permission requests are denied, and external application launches wait for your approval in Downloads. Popups need a click in their tab. Model chat proposes app actions for your review; each action needs your approval. Optional read-only tools require an explicit choice for each request.</p><div class="notice">Threat lists and scanners reduce exposure to known threats only; they cannot prevent browser exploits or detect new malware. Saved sign-ins and cards are filled only on their exact sites with your approval, and every payment needs your approval of its exact terms. This browser does not claim to isolate secrets from an agent with unrestricted access to your computer.</div></div>`
   );
 }
 const storageModeLabel = { block: "Blocked", session: "This session only", remember: "Remembered", default: "Workspace default" };
@@ -856,7 +870,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; browser actions are not enabled.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. No content is sent until you ask. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; app actions require your approval of an exact proposal.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests", restricted_original: "Restricted capture originals (each read still needs your approval)" };
@@ -1222,6 +1236,7 @@ function navigateSection(next, remember = true) {
   else focusView($("content"));
 }
 function openDialog(title, body, footer = "", wide = false, trusted = "") {
+  dialogGeneration++;
   openTaskDetail = null;
   const desk = $("command-desk");
   if (desk?.closest("#dialog")) {
@@ -1265,6 +1280,7 @@ function closeDialog() {
   }
   openTaskDetail = null;
   $("dialog").close();
+  lastSnapshot = ""; // Repaint changes deferred while the modal was open.
   layout();
   dialogRestore?.();
 }
@@ -1297,17 +1313,19 @@ function formDialog(
     wide,
     trusted,
   );
-  $("edit-form").onsubmit = async (e) => {
+  const generation = dialogGeneration;
+  const form = $("edit-form");
+  form.onsubmit = async (e) => {
     e.preventDefault();
     const button = $("dialog-content").querySelector("button[form]");
     button.disabled = true;
     $("form-error").textContent = "";
     try {
-      await onSave(Object.fromEntries(new FormData($("edit-form"))));
-      closeDialog();
+      await onSave(Object.fromEntries(new FormData(form)));
+      if (generation === dialogGeneration) closeDialog();
       await refresh(true);
     } catch (error) {
-      if ($("dialog").open && $("form-error"))
+      if (generation === dialogGeneration && $("dialog").open && $("form-error"))
         $("form-error").textContent = errorMessage(error);
       else toast(errorMessage(error));
     } finally {
@@ -1324,6 +1342,11 @@ function workspaceForm(record) {
         "description",
         record?.description || "",
       ) +
+      area("Custom instructions", "instructions", record?.instructions || "") +
+      area("Workspace memory", "memory", record?.memory || "") +
+      choice("Workspace type", "workspaceType", [["general", "General · ongoing"], ["project", "Project · time limited"]], record?.workspaceType || "general") +
+      field("Project due date (optional)", "dueDate", record?.dueDate || "", "date") +
+      choice("Workspace context sharing", "contextLocalOnly", [["false", "Include in reviewed model requests"], ["true", "On-device models only"]], String(record?.contextLocalOnly || false)) +
       choice(
         "Workspace symbol",
         "icon",
@@ -1331,8 +1354,10 @@ function workspaceForm(record) {
         record?.icon || "W",
       ),
     async (values) => {
+      values.dueDate = values.dueDate || null;
+      values.contextLocalOnly = values.contextLocalOnly === "true";
       if (record)
-        await execute("workspaces.update", { id: record.id, changes: values });
+        await execute("workspaces.update", { id: record.id, changes: values, expectedRevision: record.revision });
       else {
         const created = await execute("workspaces.create", values);
         await execute("workspaces.switch", { id: created.id });
@@ -1537,6 +1562,11 @@ function workflowFields(r) {
   return (
     choice("Workflow status", "enabled", [["true", "Enabled"], ["false", "Inactive"]], String(r?.enabled !== false)) +
     area("Description", "description", r?.description || "") +
+    field("Watch a web URL (optional)", "watchUrl", r?.watch?.url || "", "url") +
+    field("Check every (minutes)", "watchInterval", r?.watch?.intervalMinutes || 5, "number") +
+    field("Cooldown between runs (minutes)", "watchCooldown", r?.watch?.cooldownMinutes || 5, "number") +
+    field("Wake when this text appears (blank: any content change)", "watchContains", r?.watch?.contains || "") +
+    `<p>Checks run while Weft is open and unlocked. The first check sets a baseline. Only enabled workflows wake, with the normal task permissions. Public content only; no browser cookies are sent.</p>${r?.watchState ? `<p>Watch: ${esc(r.watchState.phase)} · ${esc(r.watchState.checkedAt || "")}${r.watchState.error ? " · " + esc(r.watchState.error) : ""}</p>` : ""}` +
     area("Parameters (one per line: name:type[:optional][:sensitive][=default]; types string, number, boolean, url, enum with a|b options, credential)", "parameters", (r?.parameters || []).map(parameterLine).join("\n")) +
     area(
       simpleSteps(r?.steps) ? "Steps (one instruction per line, or a JSON array of executable steps)" : "Steps (JSON array of executable steps)",
@@ -1551,6 +1581,9 @@ function workflowFields(r) {
   );
 }
 function workflowValues(values) {
+  const watch = values.watchUrl ? { url: values.watchUrl, intervalMinutes: Number(values.watchInterval), cooldownMinutes: Number(values.watchCooldown), ...(values.watchContains ? { contains: values.watchContains } : {}) } : null;
+  for (const key of ['watchUrl', 'watchInterval', 'watchCooldown', 'watchContains']) delete values[key];
+  values.watch = watch;
   const steps = values.steps.trim().startsWith("[") ? parseStepsJson(values.steps) : values.steps.split("\n").filter((s) => s.trim()).map((s, i) => ({ title: `Step ${i + 1}`, instruction: s, reviewRequired: true }));
   const materialIds = [...document.querySelectorAll('#edit-form [name="materialIds"]:checked')].map((box) => box.value);
   delete values.materialIds;
@@ -1597,6 +1630,7 @@ async function workflowRunDialog(id) {
 function proposalCard(m) {
   let parsed;
   try { parsed = JSON.parse(m.content); } catch { return null; }
+  if (parsed?.tool === "propose_action" && parsed.proposal) return `<div class="notice proposal"><strong>Permission requested:</strong> ${esc(parsed.proposal.title)}<p>${esc(parsed.proposal.command)}</p>${action("review-action", "Review action", "shield", `data-id="${esc(m.id)}"`)}</div>`;
   if (parsed?.tool !== "propose_task" || !parsed.proposal) return null;
   const p = parsed.proposal;
   return `<div class="notice proposal"><strong>Proposed task (from the model; review before creating):</strong> ${esc(p.title)}${p.steps?.length ? `<ol>${p.steps.map((s) => `<li>${esc(s.title)}</li>`).join("")}</ol>` : ""}${action("review-proposal", "Review proposed task", "tasks", `data-id="${esc(m.id)}"`)}</div>`;
@@ -1812,7 +1846,7 @@ async function workspaceMenu() {
     state.workspaces
       .map(
         (w) =>
-          `<div class="settings-row"><div><strong>${esc(w.name)}</strong><small>${w.archived ? "Archived" : "Active workspace"} · ${date(w.updatedAt)}</small></div><div class="inline-actions">${action(w.archived ? "restore-workspace" : "switch-workspace", w.archived ? "Restore" : "Open", "", 'data-id="' + esc(w.id) + '"')}${action("edit-workspace", "Edit", "", 'data-id="' + esc(w.id) + '"')}${action("archive-workspace", w.archived ? "Delete" : "Archive", "", 'data-id="' + esc(w.id) + '"')}</div></div>`,
+          `<div class="settings-row"><div><strong>${esc(w.name)}</strong><small>${w.archived ? "Archived" : w.workspaceType === "project" ? "Project" : "General · ongoing"}${w.dueDate ? " · due " + esc(w.dueDate) : ""} · ${date(w.updatedAt)}</small></div><div class="inline-actions">${action(w.archived ? "restore-workspace" : "switch-workspace", w.archived ? "Restore" : "Open", "", 'data-id="' + esc(w.id) + '"')}${action("edit-workspace", "Edit", "", 'data-id="' + esc(w.id) + '"')}${action("archive-workspace", w.archived ? "Delete" : "Archive", "", 'data-id="' + esc(w.id) + '"')}</div></div>`,
       )
       .join("") +
       `<div class="notice">Duplicating copies project records and saved references. Browser login sessions and model credentials are excluded. Copied rules and workflows stay inactive until reviewed.</div><div class="inline-actions">${action("duplicate-workspace", "Duplicate current", "tabs")}${action("export-workspace", "Export current", "download")}</div>`,
@@ -1922,6 +1956,7 @@ async function openPreview(id, versionId) {
 async function closePreview(quiet = false) {
   if (!previewing) return;
   previewing = null;
+let dialogGeneration = 0;
   try { await weftExecute("artifacts.closePreview", {}); } catch { /* already closed */ }
   if (!quiet) { renderContent(); layout(); }
 }
@@ -2341,6 +2376,7 @@ function modelForm(id) {
   const r = models.find((m) => m.id === id);
   formDialog(
     r ? "Configure model connection" : "Add model connection",
+    choice("Provider", "preset", PROVIDER_PRESETS.map(p => [p.id, p.name]), PROVIDER_PRESETS.find(p => p.endpoint === r?.endpoint)?.id || "compatible") +
     field("Connection name", "name", r?.name || "", "text", true) +
       choice(
         "API format",
@@ -2360,12 +2396,13 @@ function modelForm(id) {
         true,
       ) +
       field("Model ID", "model", r?.model || "", "text", true) +
+      action("discover-models", "Fetch available models", "search", r ? `data-id="${esc(r.id)}"` : "") + '<div id="model-catalog" aria-live="polite"></div>' +
       choice(
-        "Read-only tool capability (OpenAI-compatible only)",
+        "Tool capability",
         "tools",
         [
           ["false", "Text only"],
-          ["true", "Enable page reading and workspace search"],
+          ["true", "Enable tools and action proposals"],
         ],
         String(r?.tools || false),
       ) +
@@ -2387,6 +2424,7 @@ function modelForm(id) {
       "</fieldset>" +
       `<fieldset><legend>Cost estimates (optional)</legend><p>Estimates use your prices and provider-reported tokens. They are not a bill.</p>${field("Currency (ISO code)", "currency", r?.pricing?.currency || "")}${field("Price per million input tokens", "inputPerMillion", r?.pricing?.inputPerMillion ?? "")}${field("Price per million output tokens", "outputPerMillion", r?.pricing?.outputPerMillion ?? "")}</fieldset>`,
     async (values) => {
+      delete values.preset;
       values.tools = values.tools === "true";
       if (!values.apiKey) delete values.apiKey;
       if (!values.apiKeyEnv) delete values.apiKeyEnv;
@@ -2457,7 +2495,7 @@ function renderAgent() {
   );
   if (!conversation) conversationId = null;
   $("agent-panel").innerHTML =
-    `<div class="agent-header"><span class="agent-symbol icon" aria-hidden="true">${icon("spark")}</span><div><h2 class="agent-title">${esc(conversation?.title || "A thinking partner")}</h2><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="off" tabindex="0"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><div id="chat-attachments" class="chat-attachments" role="group" aria-label="Selected attachments"></div><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button type="button" class="text-button" data-action="attach-chat">${icon("plus")}Attach</button><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
+    `<div class="agent-header"><span class="agent-symbol icon" aria-hidden="true">${icon("spark")}</span><div><h2 class="agent-title">${esc(conversation?.title || "A thinking partner")}</h2><small>WITH YOUR WORKSPACE</small></div><button class="icon-button" data-action="new-chat" aria-label="New conversation">${icon("plus")}</button><button class="icon-button" data-action="close-agent" aria-label="Close agent panel">${icon("close")}</button></div><div class="agent-model"><select id="chat-model" aria-label="Choose model">${models.map((m) => `<option value="${esc(m.id)}" ${m.id === modelId ? "selected" : ""}>${esc(m.name)} · ${esc(m.model)} · ${m.capabilities?.images ? "images" : "text"}${m.capabilities?.tools ? " · tools" : ""}${m.capabilities?.contextWindow ? " · " + esc(m.capabilities.contextWindow) + " tokens" : ""}</option>`).join("")}</select><small id="model-destination"></small></div><div id="chat-messages" class="chat-messages" role="log" aria-label="Conversation messages" aria-live="off" tabindex="0"></div><form id="chat-form" class="chat-composer"><textarea id="chat-input" aria-label="Message your model" placeholder="What would you like to work on?" required></textarea><div id="chat-attachments" class="chat-attachments" role="group" aria-label="Selected attachments"></div><label class="chat-tool-choice"><input id="allow-app-tools" type="checkbox">Let Ask Weft propose app actions (approval required)</label><label class="chat-tool-choice"><input id="allow-read-tools" type="checkbox">Allow reading current tab & workspace search</label><div class="composer-footer"><label><input id="include-context" type="checkbox">Project context (${records("context").length})</label><button type="button" class="text-button" data-action="attach-chat">${icon("plus")}Attach</button><button class="primary" id="chat-send" type="submit">${icon("arrow")}Send</button></div></form>`;
   updateDestination();
   renderAttachments();
   renderMessages();
@@ -2471,7 +2509,7 @@ function updateDestination() {
   const m = models.find((m) => m.id === modelId);
   const caps = m?.capabilities || {};
   $("model-destination").textContent = m
-    ? `${m.endpoint} · ${m.locality || "endpoint"} · ${caps.images ? "Text and images" : caps.visionFallback?.available ? `Text only · images via ${caps.visionFallback.name} (asks first)` : "Text only"}${caps.contextWindow ? ` · ${Math.round(caps.contextWindow / 1024)}k context${caps.sources?.contextWindow === "assumed default" ? " (assumed)" : ""}` : ""} · ${caps.tools ? "Read-only tools available (opt-in below)" : "No automatic page access"}`
+    ? `${m.endpoint} · ${m.locality || "endpoint"} · ${caps.images ? "Text and images" : caps.visionFallback?.available ? `Text only · images via ${caps.visionFallback.name} (asks first)` : "Text only"}${caps.contextWindow ? ` · ${Math.round(caps.contextWindow / 1024)}k context${caps.sources?.contextWindow === "assumed default" ? " (assumed)" : ""}` : ""} · ${caps.tools ? "Tools and proposals available (opt-in below)" : "No automatic page access"}`
     : "Add a model connection in Settings to start.";
   if ($("allow-read-tools")) {
     $("allow-read-tools").disabled = !m?.capabilities?.tools;
@@ -2491,6 +2529,8 @@ function turnUsage(manifest) {
 }
 function messageAuthor(m) {
   if (m.role === "user") return "YOU";
+  if (m.role === "tool" && /"tool":"propose_action"/.test(m.content)) return "ACTION PROPOSAL";
+  if (m.role === "tool" && /"tool":"action_receipt"/.test(m.content)) return "ACTION RESULT";
   if (m.role === "tool") return /"tool":"vision_fallback"/.test(m.content) ? `VISION FALLBACK · ${m.model || "model"}` : /"tool":"propose_task"/.test(m.content) ? "TASK PROPOSAL" : "READ-ONLY TOOL";
   return m.model || "MODEL";
 }
@@ -2621,6 +2661,7 @@ async function sendChat(e) {
       conversationId, modelId, text, context,
       ...(chatAttachments.length ? { attachments: chatAttachments.map((a) => a.attachment) } : {}),
       allowReadTools: $("allow-read-tools").checked,
+      allowAppTools: $("allow-app-tools").checked,
       ...($("allow-read-tools").checked && active() && active().url !== "about:blank" ? { tabId: active().id } : {}),
     };
     if (catalog["chat.preview"]) {
@@ -3513,6 +3554,39 @@ async function act(button) {
     case "task-parameters":
       parametersDialog(id, (button.dataset.names || "").split(",").filter(Boolean));
       break;
+    case "import-email": {
+      formDialog("Add a forwarded email", '<label>Email file<input id="email-file" type="file" accept=".eml,message/rfc822,text/plain"></label>' + area("Or paste the forwarded email (including Subject and From headers)", "raw"), async values => {
+        const file = $("email-file").files[0];
+        if (file && file.size > 450000) throw new Error("Choose an email smaller than 450 KB");
+        const raw = file ? await file.text() : values.raw;
+        await execute("materials.create", emailMaterial(raw, { workspaceId: ws().id }));
+      }, { save: "Add to mailbox", wide: true });
+      break;
+    }
+    case "read-email": {
+      const mail = records("materials").find(m => m.id === id && m.tags?.includes("mailbox"));
+      if (!mail) throw new Error("Message not found");
+      openDialog(mail.title, `<p>${esc(mail.note)}</p><pre class="tool-result">${esc(mail.content)}</pre>`, "", true);
+      if (mail.tags.includes("unread")) await execute("materials.update", { id, expectedRevision: mail.revision, changes: { tags: mail.tags.filter(t => t !== "unread") } }, true);
+      break;
+    }
+    case "review-action": {
+      const conversation = records("conversations").find(c => c.id === conversationId);
+      const message = conversation?.messages.find(m => m.id === id);
+      if (!message) throw new Error("Proposal no longer exists");
+      if (conversation.messages.some(m => m.role === "tool" && m.content.includes(`"proposalId":"${id}"`))) throw new Error("This proposal was already decided. Ask for a new proposal if needed.");
+      const data = JSON.parse(message.content), p = data.proposal;
+      if (data.tool !== "propose_action" || data.workspaceId !== ws().id) throw new Error("Proposal belongs to another workspace");
+      const targetWorkspace = ws().id, targetConversation = conversation.id;
+      formDialog("Review Ask Weft action", `<p>${esc(p.title)}</p><p><strong>${esc(p.command)}</strong></p><pre class="tool-result">${esc(JSON.stringify(p.args, null, 2))}</pre><p>Approve only if these exact arguments match what you want. This runs once with your authority.</p>`, async () => {
+        if (ws().id !== targetWorkspace) throw new Error("Workspace changed; review again");
+        const outcome = await window.weft.executeOutcome(p.command, p.args);
+        await execute("conversations.message", { id: targetConversation, role: "tool", content: JSON.stringify({ tool: "action_receipt", proposalId: id, command: p.command, status: outcome.status, ...(outcome.error ? { error: outcome.error.message } : { completed: true }) }) }, true);
+        if (outcome.error) throw new Error(outcome.error.message);
+        await refresh(true); if (agentOpen) renderMessages();
+      }, { save: "Approve and run once", wide: true, trusted: "Your approval applies only to this exact action." });
+      break;
+    }
     case "review-proposal": {
       const conversation = records("conversations").find((c) => c.messages?.some((m) => m.id === id));
       const message = conversation?.messages.find((m) => m.id === id);
@@ -3638,6 +3712,27 @@ async function act(button) {
       $("chat-input").value = "Continue exactly where your previous reply stopped.";
       $("chat-form").requestSubmit();
       break;
+    case "discover-models": {
+      const form = $("edit-form"), generation = dialogGeneration;
+      const v = Object.fromEntries(new FormData(form));
+      const args = id && !v.apiKey && v.endpoint === models.find(m => m.id === id)?.endpoint && v.provider === models.find(m => m.id === id)?.provider && v.apiKeyEnv === (models.find(m => m.id === id)?.apiKeyEnv || "")
+        ? { modelId: id } : { provider: v.provider, endpoint: v.endpoint, ...(v.apiKey ? { apiKey: v.apiKey } : {}), ...(v.apiKeyEnv ? { apiKeyEnv: v.apiKeyEnv } : {}) };
+      const target = $("model-catalog"); target.textContent = "Fetching models…";
+      try {
+        const result = await execute("models.discover", args, true);
+        if (generation !== dialogGeneration) break;
+        target.innerHTML = choice("Available models", "discoveredModel", [["", "Choose a model"], ...result.models.map(m => [m.id, `${m.name} · ${m.capabilities.images === undefined ? "image capability unknown" : m.capabilities.images ? "images" : "text"}${m.capabilities.tools ? " · tools" : ""}${m.capabilities.contextWindow ? " · " + m.capabilities.contextWindow + " tokens" : ""}`])], "");
+        target.querySelector('select').onchange = e => {
+          const m = result.models.find(m => m.id === e.target.value); if (!m) return;
+          form.elements.model.value = m.id;
+          if (m.capabilities.images !== undefined) form.elements.imageInput.value = String(m.capabilities.images);
+          if (m.capabilities.contextWindow) form.elements.contextWindow.value = m.capabilities.contextWindow;
+          if (m.capabilities.tools !== undefined) form.elements.tools.value = String(m.capabilities.tools);
+        };
+        target.querySelector('select').removeAttribute('name');
+      } catch (e) { if (generation === dialogGeneration) target.textContent = errorMessage(e); }
+      break;
+    }
     case "probe-model": {
       const probe = await execute("models.probe", { modelId: id }, true);
       toast(probe.probed ? `Endpoint reported: ${probe.reported.join(", ")}. Your explicit settings still take priority.` : probe.reason);
@@ -3805,6 +3900,13 @@ document.addEventListener("click", (event) => {
   if (button) void act(button).catch((e) => toast(errorMessage(e)));
 });
 document.addEventListener("change", (event) => {
+  if (event.target.name === "preset") {
+    const p = PROVIDER_PRESETS.find(p => p.id === event.target.value), form = $("edit-form");
+    if (p && form) { form.elements.name.value = p.name; form.elements.endpoint.value = p.endpoint; form.elements.provider.value = p.provider; form.elements.model.value = ""; form.elements.apiKey.value = ""; form.elements.apiKeyEnv.value = ""; $("model-catalog").replaceChildren(); }
+  }
+  if (event.target.name === "apiKey" && event.target.value && $("edit-form")?.elements.endpoint.value) {
+    const button = $("edit-form").querySelector('[data-action="discover-models"]'); if (button) void act(button).catch(e => toast(errorMessage(e)));
+  }
   if (["activity-type", "activity-outcome"].includes(event.target.id)) {
     activityState[event.target.id === "activity-type" ? "types" : "outcome"] = event.target.value;
     activityState.loaded = 50;

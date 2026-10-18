@@ -37,7 +37,7 @@ const LEGACY_FILE = 'workspace-state.json';
 const TRANSFERS_DIR = 'transfers';
 const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const REPLAYED = Symbol.for('weft.replayed');
-const WORKFLOW_EXECUTABLE = ['steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
+const WORKFLOW_EXECUTABLE = ['watch', 'steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
 const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
@@ -651,6 +651,7 @@ export class WorkspaceService {
   authorize(name, args, context) {
     const actor = context.actor || 'human';
     const admin = actor === 'human' || actor === 'admin';
+    if (!admin && ['workspaces.create', 'workspaces.update'].includes(name) && ['instructions', 'contextLocalOnly'].some(field => Object.hasOwn(args.changes || args, field))) throw new Error('PERMISSION_REQUIRED: workspace instructions require human review');
     if (!admin && (/^siteRules\.(create|update|delete|review)$/.test(name) || HUMAN_ADMIN.has(name))) throw new Error('PERMISSION_REQUIRED: this action requires human administration');
     const workspaceId = args.workspaceId || context.workspaceId || this.activeWorkspaceId;
     if (context.workspaceId && args.workspaceId && context.workspaceId !== args.workspaceId) throw new Error('PERMISSION_REQUIRED: workspace is outside the authorized scope');
@@ -895,7 +896,7 @@ export class WorkspaceService {
     }
     if (collection === 'workspaces') return this.mutateWorkspace(action, args, actor, effects);
     if (name === 'settings.update') {
-      this.data.settings = { ...this.data.settings, ...args, model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }),
+      this.data.settings = { ...this.data.settings, ...args, ...(args.appearance && { appearance: { ...this.data.settings.appearance, ...args.appearance } }), model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }),
         ...(args.resources && { resources: { ...this.data.settings.resources, ...args.resources } }) };
       this.log(name, workspaceId, workspaceId, actor);
       return this.data.settings;
@@ -1028,6 +1029,7 @@ export class WorkspaceService {
         if (collection === 'context' && citationArgs?.length) updated.citations = [...(record.citations ?? []), ...buildCitations(this.data, record.workspaceId, citationArgs, context.citationTexts)].slice(-200);
         if (collection === 'siteRules') { this.validateRule(updated); updated.workspaceId = updated.scope === 'global' ? null : (record.workspaceId || workspaceId); this.recordRuleRevision(record, updated, actor, 'Updated'); }
         if (collection === 'materials') this.validateMaterial(updated);
+        if (collection === 'workflows' && WORKFLOW_EXECUTABLE.some(key => Object.hasOwn(changes, key))) { delete updated.watchState; delete record.watchState; }
         Object.assign(record, updated); this.touch(record);
         if (record.history && changes.content !== undefined) record.history.push({ revision: record.revision, content: record.content, actor, createdAt: now(), ...(revisionOrigin && { origin: revisionOrigin }) });
         if (revisionOrigin) record.lastOrigin = revisionOrigin;
@@ -1501,7 +1503,7 @@ export class WorkspaceService {
     const lossy = new Map();
     const loss = (collection, field, reason, count = 1) => { const key = `${collection}\u0000${field}\u0000${reason}`; const item = lossy.get(key) || { collection, field, reason, count: 0 }; item.count += count; lossy.set(key, item); };
     const nested = (collection, field, schema, items) => { for (const entry of Array.isArray(items) ? items : []) if (entry && typeof entry === 'object') for (const key of Object.keys(entry)) if (!Object.hasOwn(schema.shape, key)) loss(collection, `${field}.${key}`, 'nested field not supported by import; dropped'); };
-    const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon });
+    const workspaceFields = workspaceSchemas['workspaces.create'].parse({ name: raw.workspace.name, description: raw.workspace.description, color: raw.workspace.color, icon: raw.workspace.icon, memory: [raw.workspace.memory, raw.workspace.instructions ? `Imported instructions (review before use):\n${raw.workspace.instructions}` : ''].filter(Boolean).join('\n\n').slice(0, 50000), workspaceType: raw.workspace.workspaceType, dueDate: raw.workspace.dueDate, contextLocalOnly: raw.workspace.contextLocalOnly });
     const workspace = { ...createWorkspace(), ...workspaceFields, importedFrom: { exportedAt: typeof raw.exportedAt === 'string' ? raw.exportedAt.slice(0, 100) : null, createdAt: timestamp.safeParse(raw.workspace.createdAt).success ? raw.workspace.createdAt ?? null : null, formatVersion } };
     const mapping = new Map([[raw.workspace.id, workspace.id]]);
     const knownKeys = new Set(['format', 'schemaVersion', 'formatVersion', 'exportedAt', 'workspace', 'limitations', 'excluded', 'residueScan', 'handoffs', 'sharedCollections', 'conflicts', 'linkedContentOmitted',

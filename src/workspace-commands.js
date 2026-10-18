@@ -8,6 +8,7 @@ import { resourceSettingsShape } from './resources.js';
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
 const title = z.string().trim().min(1).max(240);
+export const workspaceDetails = { instructions: z.string().max(20000).optional(), memory: z.string().max(50000).optional(), contextLocalOnly: z.boolean().optional(), workspaceType: z.enum(['general', 'project']).optional(), dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional() };
 const optionalWorkspace = { workspaceId: id.optional() };
 const httpUrl = z.string().max(16384).refine(value => {
   try { const u = new URL(value); return ['https:', 'http:'].includes(u.protocol) && !u.username && !u.password; } catch { return false; }
@@ -30,7 +31,7 @@ export const recordShapes = {
   tasks: { title, objective: text.default(''), status: z.enum(PHASES).default('queued'), assignee: z.string().max(200).default('human'), progress: z.number().min(0).max(100).default(0), blocker: text.default(''), checkpoint: text.default(''), nextStep: text.default(''), evidence: references.default([]), materialIds: references.default([]), tabIds: z.array(z.number().int().positive()).max(100).default([]), outputs: references.default([]),
     plan: taskPlan.default([]).describe('Executable steps; run with tasks.start. Creating or saving a plan never runs it.'), modelId: id.nullable().optional().describe('Default model connection for model steps.') },
   conversations: { title: title.default('New conversation') },
-  workflows: { title, enabled: z.boolean().default(true), description: text.default(''), parameters: z.array(workflowParameter).max(100).default([]), steps: z.array(workflowStep).max(100).default([]), credentialRefs: z.array(credentialRef).max(50).default([]).describe('Opaque credential broker references; never secret values.'), allowedSites: z.array(z.string().max(255)).max(100).default([]), materialIds: references.default([]), expectedOutputs: text.default('') },
+  workflows: { title, watch: z.strictObject({ url: httpUrl, intervalMinutes: z.number().int().min(1).max(10080).default(5), cooldownMinutes: z.number().int().min(1).max(10080).default(5), contains: z.string().max(1000).optional() }).nullable().optional(), enabled: z.boolean().default(true), description: text.default(''), parameters: z.array(workflowParameter).max(100).default([]), steps: z.array(workflowStep).max(100).default([]), credentialRefs: z.array(credentialRef).max(50).default([]).describe('Opaque credential broker references; never secret values.'), allowedSites: z.array(z.string().max(255)).max(100).default([]), materialIds: references.default([]), expectedOutputs: text.default('') },
   siteRules: { enabled: z.boolean().default(true), hostname: z.string().trim().min(1).max(253), includeSubdomains: z.boolean().default(true), path: z.string().max(2048).default('/'), behavior: z.enum(['block', 'warn']).default('block'), mode: z.enum(['navigation', 'connection']).default('navigation'), reason: z.string().max(240).default('Personal preference'), note: text.default(''), scope: z.enum(['workspace', 'global']).default('workspace'), evidence: z.array(httpUrl).max(20).default([]), reviewBy: reviewDate.nullable().optional() },
 };
 export const modelShape = { provider: z.string().max(100).optional(), endpoint: httpUrl.optional(), model: z.string().max(200).optional() };
@@ -43,8 +44,8 @@ export const commandDefinitions = {
   'workspace.snapshot': ['Get persistent workspace state', optionalWorkspace],
   'workspaces.list': ['List workspaces', {}],
   'workspaces.get': ['Get one workspace', { id }],
-  'workspaces.create': ['Create an empty workspace', { name: title, description: text.optional(), color: z.string().max(30).optional(), icon: z.string().max(50).optional() }],
-  'workspaces.update': ['Update workspace details', { id, changes: z.strictObject({ name: title.optional(), description: text.optional(), color: z.string().max(30).optional(), icon: z.string().max(50).optional() }), expectedRevision: z.number().int().optional() }],
+  'workspaces.create': ['Create an empty workspace', { ...workspaceDetails, name: title, description: text.optional(), color: z.string().max(30).optional(), icon: z.string().max(50).optional() }],
+  'workspaces.update': ['Update workspace details', { id, changes: z.strictObject({ ...workspaceDetails, name: title.optional(), description: text.optional(), color: z.string().max(30).optional(), icon: z.string().max(50).optional() }), expectedRevision: z.number().int().optional() }],
   'workspaces.switch': ['Switch active workspace', { id }],
   'workspaces.archive': ['Archive a workspace without deleting its contents', { id }],
   'workspaces.restore': ['Restore an archived workspace', { id }],
@@ -55,7 +56,7 @@ export const commandDefinitions = {
     reviewMetadata: z.boolean().optional().describe('Add a review of URL query/path metadata and detection-assistance matches in exported fields.') }],
   'workspaces.import': ['Import a versioned project export as a new workspace', { data: z.unknown() }],
   'settings.get': ['Get non-secret application preferences', {}],
-  'settings.update': ['Update application preferences; credentials are not accepted', { theme: z.enum(['system', 'light', 'dark']).optional(), model: z.strictObject(modelShape).optional(), sidebarCollapsed: z.boolean().optional(), agentPanelOpen: z.boolean().optional(),
+  'settings.update': ['Update application preferences; credentials are not accepted', { theme: z.enum(['system', 'light', 'dark']).optional(), appearance: z.strictObject({ accent: z.enum(['plum', 'ocean', 'forest', 'rose']).optional(), density: z.enum(['comfortable', 'compact']).optional(), textScale: z.number().min(0.85).max(1.3).optional() }).optional(), model: z.strictObject(modelShape).optional(), sidebarCollapsed: z.boolean().optional(), agentPanelOpen: z.boolean().optional(),
     automation: z.strictObject({ inputConcurrency: z.enum(['shared', 'exclusive']).optional().describe('shared lets agents act on available tabs; exclusive requires a lease.'),
       queueLimit: z.number().int().min(0).max(20).optional().describe('Agent input requests that may wait per tab; 0 rejects busy tabs immediately.'),
       queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.'),
