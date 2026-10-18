@@ -151,3 +151,12 @@ test('release packages upload as one flat folder so publish finds the manifests 
   assert.match(workflow, /pattern: weft-\*\n\s+path: release\n\s+merge-multiple: true/);
   assert.match(workflow, /node scripts\/release\/verify-assets\.js release "\$VERSION"/);
 });
+
+test('publish reuses a release made on the releases page instead of creating a second one', () => {
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  const step = workflow.slice(workflow.indexOf('- name: Upload to a draft release'), workflow.indexOf('- name: Confirm every asset'));
+  assert.match(step, /select\(\.tag_name == env\.TAG\)/);
+  assert.match(step, /-F draft=true/, 'an existing release goes back to draft before assets are uploaded');
+  assert.match(step, /Several releases exist/);
+  assert.ok(step.indexOf('gh release create') < step.indexOf('gh release upload'));
+});

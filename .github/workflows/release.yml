@@ -255,8 +255,18 @@ jobs:
           rm release/signing-*.txt
       - name: Upload to a draft release
         shell: bash
+        # A release made on the GitHub releases page creates the tag too, so it can already exist
+        # (published, with no assets). Take it back to a draft with these notes instead of creating
+        # a second release for the same tag; nothing is public until the publish step below.
         run: |
-          gh release create "$TAG" --draft --verify-tag --title "Weft $VERSION" --notes-file notes.md
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.tag_name == env.TAG) | .id')
+          count=$(printf '%s' "$ids" | grep -c . || true)
+          case $count in
+            0) gh release create "$TAG" --draft --verify-tag --title "Weft $VERSION" --notes-file notes.md ;;
+            1) echo "Reusing existing release $ids for $TAG as a draft"
+               gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/$ids" -F draft=true -f name="Weft $VERSION" -F body=@notes.md > /dev/null ;;
+            *) echo "::error::Several releases exist for $TAG ($(echo $ids)); delete the extras and re-run"; exit 1 ;;
+          esac
           gh release upload "$TAG" release/* --clobber
       - name: Confirm every asset is attached before publishing
         shell: bash

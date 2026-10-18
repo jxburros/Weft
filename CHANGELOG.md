@@ -3,6 +3,19 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## Unreleased
+
+### Fixed
+
+- Release workflow: when the tag's release already exists (a release created on
+  the GitHub releases page creates the tag and starts the workflow), the publish
+  job now takes that release back to a draft, applies the "Weft X.Y.Z" title and
+  generated notes, and publishes only after its assets are verified. v1.1.3 hit
+  this: the workflow made a second draft beside the already-public release, and
+  the public one kept GitHub's generated notes while its assets were uploaded.
+  Several releases for one tag now stop the job. Exercised with a stubbed `gh`,
+  not yet by a tagged run.
+
 ## v1.1.3 — 2026-10-18
 
 Patch release that publishes the v1.1.2 changes; the v1.1.2 tag built, signed

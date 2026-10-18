@@ -80,6 +80,9 @@ A release tag is blocked unless all of these hold:
    (`scripts/release/windows-install-check.ps1`). The unsigned installer is kept as
    the `weft-windows-installer-unsigned-<sha>` workflow artifact for 14 days.
 4. Tag the merge commit: `git tag -s vX.Y.Z -m "Weft X.Y.Z" && git push origin vX.Y.Z`.
+   Creating the release on GitHub's releases page instead also creates the tag; the
+   workflow then takes that release back to a draft with its own title and notes until
+   every asset is verified.
 5. `.github/workflows/release.yml` runs the gate and full suite, builds Windows,
    macOS and Linux packages, signs where credentials exist, verifies signatures,
    smoke-tests each package (Windows also runs the install/reinstall/uninstall
