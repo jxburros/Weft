@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Release packaging now removes empty certificate links supplied by missing
+  GitHub Actions secrets. The v1.1.1 macOS build treated an empty `CSC_LINK` as
+  the repository directory and failed while importing a signing certificate.
+  Configured certificates and empty certificate passwords are preserved.
+- Manual release dry runs now honor `dry_run` on tags. Platform builds finish
+  independently and verify their update manifests before uploading artifacts.
+- CI now packages both macOS architectures and launches the native app, using
+  the same packaging entry point as releases to catch unsigned-build failures.
+
+Signed/notarized builds and real cross-version upgrades remain unverified.
+
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
