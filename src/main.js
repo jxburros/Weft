@@ -14,6 +14,7 @@ import { createKeyProtector } from './encryption.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
 import { CommunityLists } from './community-lists.js';
+import { Standby } from './standby.js';
 import { createDispatcher } from './dispatch.js';
 import { Authority } from './authority.js';
 import { ActivityLog } from './activity-log.js';
@@ -40,6 +41,7 @@ let providers;
 let server;
 let window;
 let dispatch;
+let standby;
 let lists;
 let listTimer;
 let freshnessTimer;
@@ -206,11 +208,13 @@ if (primary) app.whenReady().then(async () => {
   // A locked encrypted profile sweeps after each unlock instead; nothing is scheduled while locked (ADR 014, ADR 016).
   // A payment click that was in flight becomes uncertain on its payment record; sealed payment records of a locked profile are swept at unlock.
   payments.init();
-  const startTasks = async () => { if (workspace.locked) return; await dispatch.tasks.init(); dispatch.tasks.start(); };
+  standby = new Standby({ workspace, dispatch, admission });
+  standby.start();
+  const startTasks = async () => { if (workspace.locked) return; standby.start(); await dispatch.tasks.init(); dispatch.tasks.start(); };
   await startTasks();
   workspace.encryptionHooks = {
     // Lock: stop model turns, plugin processes and upload sessions, then close tabs so no workspace page stays loaded.
-    beforeLock: async ({ persist = true } = {}) => { await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
+    beforeLock: async ({ persist = true } = {}) => { standby.close(); await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
     afterUnlock: async () => {
       if (!extensionsRestored) { await extensions.restore(); extensionsRestored = true; }
       await browser.resume();
@@ -289,6 +293,7 @@ app.on('before-quit', event => {
   retrieval?.close();
   relay.close();
   plugins?.close();
+  standby?.close();
   dispatch?.tasks?.close();
   const cleanup = browser?.close();
   browser = null;

@@ -136,7 +136,7 @@ if (process.argv.includes("--a11y-child")) {
     const requested = await api("materials.create", { workspaceId: home, title: "Agent proposed note" });
     assert.equal(requested.error?.code, "approval_required");
 
-    const mainViews = ["overview", "materials", "context", "tasks", "conversations", "workflows", "artifacts", "activity", "approvals", "shared", "settings", "updates", "privacy", "lists", "downloads", "history", "bookmarks", "tabs"];
+    const mainViews = ["overview", "materials", "context", "tasks", "conversations", "workflows", "mailbox", "artifacts", "activity", "approvals", "shared", "settings", "updates", "privacy", "lists", "downloads", "history", "bookmarks", "tabs"];
     const dialogs = [
       ["palette", () => run('document.getElementById("search-button").click()'), "Find anything"],
       ["command desk", () => run('document.getElementById("command-button").click()'), "Command desk"],

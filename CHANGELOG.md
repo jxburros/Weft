@@ -3,6 +3,16 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## v1.2.0 — 2026-10-18
+
+- Add workspace instructions, persistent memory, and ongoing/project workspace types with optional due dates; keep the editor stable during refreshes and overlapping dialog saves.
+- Discover available models from API keys with pagination, endpoint capability labels, and presets for OpenAI-compatible services, Anthropic, Gemini, DeepSeek, Moonshot, Meta Muse, Ollama and JX Runtime.
+- Add permissioned Ask Weft app-command proposals, outcome receipts, native Anthropic/Ollama tools, and appearance preferences for theme, accent, density and text scale.
+- Replace sidebar navigation with an accessible animated icon grid that honors reduced motion.
+- Add local workflow web watches with change detection, cooldowns, durable status, overlap prevention and normal task permission checks.
+- Add a workspace mailbox for forwarded email imports and a local forwarding adapter requiring no email-account credentials. A forwarding relay is required for automatic email delivery; no hosted mailbox address is provisioned.
+- Provider accounts and forwarding services remain unverified with live credentials. Web watches run only while Weft is running and unlocked.
+
 ## v1.1.3 — 2026-10-18
 
 Patch release that publishes the v1.1.2 changes; the v1.1.2 tag built, signed

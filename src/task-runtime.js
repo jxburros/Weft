@@ -1,3 +1,4 @@
+export const WATCH_EXECUTOR = Symbol('human-configured-web-watch');
 import { createHash, randomUUID } from 'node:crypto';
 import { commands, validateCommand, CommandError } from './commands.js';
 import { taskCommandDefinitions, taskPlan, taskSchemas, executorSchema, workflowParameter } from './task-commands.js';
@@ -204,6 +205,7 @@ export class TaskRuntime {
   }
   /** Humans bind any identity; agents (an existing grant) bind only themselves. */
   resolveExecutor(requested, context, workspaceId) {
+    if (context[WATCH_EXECUTOR] && context.actor === 'web-watch' && !requested) return { type: 'runner', autonomy: 'scoped' };
     if (isHumanContext(context)) {
       const executor = executorSchema.parse(requested ?? { type: 'runner', autonomy: 'scoped' });
       if (executor.type === 'client') {

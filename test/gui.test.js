@@ -102,6 +102,18 @@ if (process.argv.includes("--gui-workflows")) {
       await run('document.querySelector(".workspace-dot").textContent'),
       "W",
     );
+    // Workspace editing stays open across background polls and persists the new fields.
+    await click('[data-action="workspace-menu"]');
+    await until('document.querySelector(\'[data-action="edit-workspace"]\') !== null');
+    await click('[data-action="edit-workspace"]');
+    await fill('memory', 'Remember this across polls');
+    await fill('instructions', 'Use concise prose');
+    await new Promise(resolve => setTimeout(resolve, 3400));
+    assert.equal(await run('document.getElementById("dialog").open'), true);
+    assert.equal(await run('document.querySelector(\'[name="memory"]\').value'), 'Remember this across polls');
+    await submit();
+    await until('!document.getElementById("dialog").open');
+    assert.equal(await run('(async()=> (await window.weft.execute("workspaces.list", {}))[0].memory)()'), 'Remember this across polls');
     // Startup marked the interrupted external click uncertain; a person records what happened before anything resumes.
     await until('document.getElementById("safety-notices").textContent.includes("unknown outcome")');
     assert.equal((await run(`window.weft.execute("tasks.get", {id: ${JSON.stringify(seeded.id)}})`)).status, "uncertain");
@@ -353,6 +365,28 @@ if (process.argv.includes("--gui-workflows")) {
     assert.match(attached, /Keep this useful source/);
     assert.match(attached, /Evidence saved for the project/);
     assert.doesNotMatch(attached, /image_url/);
+    // App proposals require a visible exact approval; accepting changes appearance and records a receipt.
+    const currentConversation = (await run('window.weft.execute("conversations.list", {})')).at(-1);
+    const currentWorkspace = (await run('window.weft.execute("workspace.snapshot", {})')).activeWorkspaceId;
+    await run(`window.weft.execute("conversations.message", {id: ${JSON.stringify(currentConversation.id)}, role: "tool", content: ${JSON.stringify(JSON.stringify({tool: 'propose_action', workspaceId: currentWorkspace, proposal: {title: 'Use dark mode', command: 'settings.update', args: {theme: 'dark'}}}))}})`);
+    await until('document.querySelector(\'[data-action="review-action"]\') !== null');
+    assert.equal(await run('document.documentElement.dataset.theme'), 'light');
+    await click('[data-action="review-action"]');
+    await until('document.getElementById("dialog-title").textContent === "Review Ask Weft action"');
+    await submit();
+    await until('!document.getElementById("dialog").open && document.documentElement.dataset.theme === "dark"');
+    assert.ok((await run(`window.weft.execute("conversations.get", {id: ${JSON.stringify(currentConversation.id)}})`)).messages.some(m => m.content.includes('action_receipt')));
+    await click('[data-action="close-agent"]');
+    await click('[data-section="mailbox"]');
+    await click('[data-action="import-email"]');
+    await fill('raw', 'Subject: Forwarded fixture\nFrom: sender@example.com\n\n<script>window.__mailRan = true</script>');
+    await submit();
+    await until('document.getElementById("content").textContent.includes("Forwarded fixture")');
+    await click('[data-action="read-email"]');
+    await until('document.getElementById("dialog").open');
+    assert.equal(await run('window.__mailRan'), undefined);
+    assert.match(await run('document.getElementById("dialog-content").textContent'), /<script>/);
+    await click('[data-action="close-dialog"]');
     await click("#add-workspace");
     await fill("name", "Second workspace");
     await submit();

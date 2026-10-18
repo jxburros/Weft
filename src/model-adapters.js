@@ -8,8 +8,8 @@ import { formatProviderStreamError } from './provider-safety.js';
  */
 export const ADAPTERS = Object.freeze({
   openai: { label: 'OpenAI-compatible', path: 'chat/completions', streaming: true, images: true, tools: true },
-  anthropic: { label: 'Anthropic Messages', path: 'messages', streaming: true, images: true, tools: false },
-  ollama: { label: 'Ollama native', path: 'api/chat', streaming: true, images: true, tools: false },
+  anthropic: { label: 'Anthropic Messages', path: 'messages', streaming: true, images: true, tools: true },
+  ollama: { label: 'Ollama native', path: 'api/chat', streaming: true, images: true, tools: true },
 });
 
 const MAX_STREAM_BYTES = 8 * 1024 * 1024;
@@ -159,6 +159,16 @@ export async function readAnthropicStream(body, { onDelta, onFrame, onBytes, sig
     const type = frame?.type || event;
     if (type === 'error' || frame?.error) throw streamError(frame);
     if (type === 'message_start') mergeUsage(result, usageFrom(frame.message?.usage, 'anthropic'));
+    else if (type === 'content_block_start' && frame.content_block?.type === 'tool_use') {
+      if (!Number.isSafeInteger(frame.index) || frame.index < 0 || frame.index > 15) throw new StreamError('Too many tool calls');
+      result.toolCalls[frame.index] = { id: frame.content_block.id, type: 'function', function: { name: frame.content_block.name, arguments: '' } };
+    }
+    else if (type === 'content_block_delta' && frame.delta?.type === 'input_json_delta') {
+      const call = result.toolCalls[frame.index];
+      if (!call) throw new StreamError('Tool argument delta without a tool call');
+      call.function.arguments += frame.delta.partial_json || '';
+      if (call.function.arguments.length > MAX_TOOL_ARGUMENT_BYTES) throw new StreamError('Tool arguments exceeded the limit');
+    }
     else if (type === 'content_block_delta' && frame.delta?.type === 'text_delta') appendText(result, frame.delta.text, onDelta);
     else if (type === 'message_delta') {
       if (frame.delta?.stop_reason) {
@@ -169,7 +179,8 @@ export async function readAnthropicStream(body, { onDelta, onFrame, onBytes, sig
       if (output) mergeUsage(result, { inputTokens: output.inputTokens, outputTokens: output.outputTokens });
     } else if (type === 'message_stop') { result.complete = true; break; }
   }
-  if (result.complete && !result.finishReason) result.finishReason = 'stop';
+  result.toolCalls = result.toolCalls.filter(Boolean);
+  if (result.complete && !result.finishReason) result.finishReason = result.toolCalls.length ? 'tool_calls' : 'stop';
   return result;
 }
 
@@ -182,9 +193,10 @@ export async function readOllamaStream(body, { onDelta, onFrame, onBytes, signal
     // Ollama reports failures as in-band {error} frames after HTTP 200.
     if (frame?.error) throw streamError(frame);
     appendText(result, frame?.message?.content, onDelta);
+    for (const c of frame?.message?.tool_calls || []) result.toolCalls.push({ id: `ollama_${result.toolCalls.length}`, type: 'function', function: { name: c.function.name, arguments: JSON.stringify(c.function.arguments) } });
     if (frame?.done) {
       result.rawFinishReason = String(frame.done_reason || 'stop').slice(0, 64);
-      result.finishReason = normalizeFinishReason(frame.done_reason || 'stop');
+      result.finishReason = result.toolCalls.length ? 'tool_calls' : normalizeFinishReason(frame.done_reason || 'stop');
       mergeUsage(result, usageFrom(frame, 'ollama'));
       result.complete = true;
       break;
@@ -200,14 +212,16 @@ export function parseJsonReply(provider, json, { onDelta } = {}) {
   if (json.error) throw streamError(json);
   result.complete = true;
   if (provider === 'anthropic') {
+    result.toolCalls = (json.content || []).filter(c => c.type === 'tool_use').map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.input) } }));
     appendText(result, Array.isArray(json.content) ? json.content.filter(block => block?.type === 'text').map(block => block.text).join('\n') : '', onDelta);
     result.rawFinishReason = json.stop_reason ?? null;
     result.finishReason = normalizeFinishReason(json.stop_reason) || 'stop';
     result.usage = usageFrom(json.usage, 'anthropic');
   } else if (provider === 'ollama') {
+    result.toolCalls = (json.message?.tool_calls || []).map((c, i) => ({ id: `ollama_${i}`, type: 'function', function: { name: c.function.name, arguments: JSON.stringify(c.function.arguments) } }));
     appendText(result, json.message?.content, onDelta);
     result.rawFinishReason = json.done_reason ?? null;
-    result.finishReason = normalizeFinishReason(json.done_reason) || 'stop';
+    result.finishReason = result.toolCalls.length ? 'tool_calls' : normalizeFinishReason(json.done_reason) || 'stop';
     result.usage = usageFrom(json, 'ollama');
   } else {
     const choice = json.choices?.[0];
@@ -237,10 +251,16 @@ export function buildRequest(profile, { system, messages, imageIndex = -1, image
   const provider = profile.provider;
   const adapter = ADAPTERS[provider];
   if (!adapter) throw new Error(`Unsupported model API format: ${provider}`);
-  const outbound = messages.map((message, index) => index === imageIndex ? withImages(provider, message, images) : message);
+  let outbound = messages.map((message, index) => index === imageIndex ? withImages(provider, message, images) : message);
+  if (provider === 'anthropic') outbound = outbound.map(m => {
+    if (m.role === 'tool') return { role: 'user', content: [{ type: 'tool_result', tool_use_id: m.tool_call_id, content: m.content }] };
+    if (m.tool_calls?.length) return { role: 'assistant', content: [...(m.content ? [{ type: 'text', text: m.content }] : []), ...m.tool_calls.map(c => ({ type: 'tool_use', id: c.id, name: c.function.name, input: JSON.parse(c.function.arguments) }))] };
+    return m;
+  });
+  if (provider === 'ollama') outbound = outbound.map(m => m.tool_calls ? { ...m, tool_calls: m.tool_calls.map(c => ({ function: { name: c.function.name, arguments: JSON.parse(c.function.arguments) } })) } : m);
   let body;
-  if (provider === 'anthropic') body = { model: profile.model, max_tokens: maxTokens, system, messages: outbound, ...(stream ? { stream: true } : {}) };
-  else if (provider === 'ollama') body = { model: profile.model, messages: [{ role: 'system', content: system }, ...outbound], stream,
+  if (provider === 'anthropic') body = { model: profile.model, max_tokens: maxTokens, system, messages: outbound, ...(tools.length ? { tools: tools.map(t => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters })) } : {}), ...(stream ? { stream: true } : {}) };
+  else if (provider === 'ollama') body = { model: profile.model, messages: [{ role: 'system', content: system }, ...outbound], stream, ...(tools.length ? { tools } : {}),
     options: { num_predict: maxTokens, ...(contextWindow ? { num_ctx: contextWindow } : {}) } };
   else body = { model: profile.model, max_tokens: maxTokens, messages: [{ role: 'system', content: system }, ...outbound], stream,
     ...(stream ? { stream_options: { include_usage: true } } : {}),

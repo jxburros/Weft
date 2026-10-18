@@ -32,6 +32,7 @@ export const attachmentSchema = z.discriminatedUnion('kind', [
     parts: z.array(z.enum(['text', 'image'])).min(1).max(2).optional().describe('Version components to attach; default both when present.') }),
 ]);
 export const providerCommandDefinitions = {
+  'models.discover': ['List every model visible to a connection key; sends no workspace data', { modelId: id.optional(), provider: z.enum(['openai', 'anthropic', 'ollama']).optional(), endpoint: modelEndpoint.optional(), apiKey: z.string().max(16384).optional(), apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100).optional() }],
   'models.list': ['List model connections, destinations and capability records (never returns keys)', {}],
   'models.save': ['Save a model connection; keys require OS secure storage', {
     id: id.optional(), name: z.string().trim().min(1).max(100),
@@ -47,7 +48,7 @@ export const providerCommandDefinitions = {
   'chat.send': ['Send text, selected attachments and context to the selected model, streaming when supported, with optional scoped read-only tools', {
     conversationId: id, modelId: id, text: z.string().trim().min(1).max(100000),
     disclosureAck: z.boolean().optional(),
-    allowReadTools: z.boolean().optional(), tabId: z.number().int().positive().optional(),
+    allowReadTools: z.boolean().optional(), allowAppTools: z.boolean().optional().describe("Allow command discovery and proposals; every proposed action requires human review."), tabId: z.number().int().positive().optional(),
     context: z.array(z.strictObject({
       title: z.string().max(300), content: z.string().max(100000),
       id: id.optional(), recordType: z.enum(['context', 'materials']).optional(), source: z.string().max(2048).optional(), localOnly: z.boolean().optional(),

@@ -8,7 +8,7 @@ import { z } from 'zod';
  * records; tabs reference a group by id. Neither is exported: both describe this profile's tabs.
  */
 export const RESUME_SECTIONS = Object.freeze(['overview', 'tabs', 'materials', 'context', 'tasks', 'conversations', 'artifacts', 'activity', 'approvals', 'workflows',
-  'settings', 'updates', 'privacy', 'downloads', 'history', 'bookmarks', 'browse']);
+  'mailbox', 'settings', 'updates', 'privacy', 'downloads', 'history', 'bookmarks', 'browse']);
 export const GROUP_COLORS = Object.freeze({ plum: 'Plum', sage: 'Sage', clay: 'Clay', sky: 'Sky', sand: 'Sand', rose: 'Rose', slate: 'Slate' });
 const PIN_TYPES = Object.freeze({ material: 'materials', task: 'tasks', context: 'context', artifact: 'artifacts', conversation: 'conversations', workflow: 'workflows', handoff: 'handoffs' });
 export const RESTORE_NOTICES = Object.freeze([

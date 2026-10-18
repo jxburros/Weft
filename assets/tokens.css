@@ -69,6 +69,9 @@
   --trusted-surface: #f1ebf2;
   --trusted-border: #70516f;
   --trusted-ink: #4f3a4e;
+  --accent-ocean: #28657c;
+  --accent-forest: #436743;
+  --accent-rose: #93526b;
   color-scheme: light;
 }
 :root[data-theme="dark"] {
@@ -104,6 +107,9 @@
   --trusted-surface: #3a3140;
   --trusted-border: #cda9cb;
   --trusted-ink: #e7cfe5;
+  --accent-ocean: #83b9cd;
+  --accent-forest: #a0c49a;
+  --accent-rose: #d6a0b4;
   color-scheme: dark;
 }
 @media (prefers-reduced-motion: reduce) {

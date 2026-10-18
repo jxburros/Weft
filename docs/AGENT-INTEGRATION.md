@@ -768,3 +768,7 @@ anything; `sources.refresh` records the current version.
 ```sh
 weft sources.read '{"id":"mate_example","path":"notes/brief.txt","maxBytes":65536}'
 ```
+
+## Workspace context, web watches and mailbox
+
+See [Workspace agents](WORKSPACE-AGENTS.md) for workspace instructions/memory, project lifecycle fields, model discovery, exact-action proposals, appearance settings, workflow web watches and local email ingestion. These additions use the existing command catalog and permission boundary.
