@@ -514,6 +514,12 @@ test('integration: a submit past its deadline never clicks, checkout tabs with o
   // Payment events carry identifiers and status words only.
   const paymentEvents = f.events.filter(event => event.type === 'payment');
   assert.ok(paymentEvents.some(event => event.paymentId === proposed.id && event.status === 'proposed'), JSON.stringify(paymentEvents));
-  assert.equal(JSON.stringify(paymentEvents).includes('shop.example.com'), false);
-  assert.equal(JSON.stringify(paymentEvents).includes('49.99'), false);
+  for (const event of paymentEvents) {
+    assert.deepEqual(Object.keys(event).sort(), ['actor', 'command', 'createdAt', 'paymentId', 'status', 'tabId', 'type', 'workspaceId'].sort());
+    assert.ok(Number.isFinite(Date.parse(event.createdAt)));
+    // A valid timestamp can contain the amount by coincidence (e.g. seconds 49.990).
+    const { createdAt, ...payload } = event;
+    assert.equal(JSON.stringify(payload).includes('shop.example.com'), false);
+    assert.equal(JSON.stringify(payload).includes('49.99'), false);
+  }
 });
