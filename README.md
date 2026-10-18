@@ -1,19 +1,70 @@
 # Weft
 
-A local-first workspace browser for people and their chosen agents. Weft brings
-Chromium tabs, materials, project context, tasks, conversations, and saved page
-captures into persistent workspaces. The GUI, CLI, authenticated REST API, and
-MCP bridge use one validated command catalog.
+**Everything needed to continue a project is here, for you or the agent you choose.**
 
-The interface follows the supplied [visual style guide](Weft-Visual-Style-Guide.md)
-and uses the supplied logo assets, locally bundled Source Sans 3, warm ivory
-surfaces, plum controls, and deliberate light/dark themes.
+Weft is a desktop browser built around persistent project workspaces. Each
+workspace keeps its tabs, notes, files, decisions, tasks, conversations and saved
+page captures together, so you can close the window on Friday and pick the work
+up on Monday, or hand it to an agent, without re-explaining anything.
 
 ![Weft workspace overview](artifacts/weft-overview.png)
 
-## Run
+## What it looks like in practice
 
-Requires **Node.js 22.13+** (for the built-in `node:sqlite` module), npm, and a desktop session. Electron supplies Chromium.
+You are releasing an album. One workspace holds the radio-station submission
+pages, your artist site, the approved bio, press photos, a tracker of who you have
+contacted, and your submission instructions. You review candidate stations in one
+tab while an agent researches alternatives in another. When it wants to fill in a
+form or run a script, the request waits for you to approve it. When you want a
+tab back, you take it, and the agent's control ends. A week later, you or a
+different agent can open the workspace and see what is done, what is waiting and
+what comes next. The pages you cited are still there as saved captures, even if
+the sites have changed.
+
+## How control works
+
+You are always the one in charge, and you can see what is happening.
+
+- **Every tab has a visible owner.** You drive, you and an agent share, or the
+  agent drives. Only you can change that, and taking a tab back invalidates the
+  agent's control.
+- **Agents ask before acting outside your project.** Reading and local note-taking
+  run freely. Clicks, form fills, scripts and sending content to a model wait in
+  an approval queue until you allow them once, for a period, or by standing
+  grant.
+- **Each agent gets its own limits.** Tokens are scoped by workspace, sites,
+  data and lifetime, and revoking one takes effect on the next command.
+- **Everything is recorded.** The activity log shows what ran, what was asked and
+  what was decided. A stop control halts agent activity at once.
+- **Pages are data, not orders.** Text from a page, a capture or an import never
+  gains the authority to instruct an agent.
+
+The same rules apply whether an agent works through the built-in chat, the CLI,
+MCP or REST. Details: [connecting clients](docs/CONNECTING.md) and
+[ADR-005](docs/decisions/005-agent-authority-and-audit.md).
+
+## What you can do
+
+- **Browse** with native Chromium pages, separate sign-in state per workspace,
+  split view, bookmarks, history, downloads and find.
+- **Organize** notes, website references, copied files, and what you have
+  confirmed, found, asked and decided, per workspace.
+- **Continue work** with tasks that record objectives, blockers, checkpoints and
+  next steps, and reusable workflows that pause for your approval. Work whose
+  outcome is unknown is marked `uncertain` instead of being retried blindly.
+- **Keep evidence** by saving readable page text and screenshots as versions you
+  can open offline and cite later.
+- **Choose your model** among OpenAI-compatible endpoints, Anthropic or local
+  Ollama. You see where each message goes and exactly what it includes before it
+  is sent. Weft never silently switches to a cloud provider.
+- **Set boundaries** with personal site rules, blocked redirects and background requests,
+  per-site storage controls and optional signed community lists.
+- **Automate** from outside the app. The GUI, CLI, MCP and REST all use the same
+  validated commands.
+
+## Install and run
+
+Requires **Node.js 22.13+**, npm, and a desktop session.
 
 ```sh
 npm ci
@@ -21,313 +72,69 @@ node node_modules/electron/install.js
 npm start
 ```
 
-The API binds only to `127.0.0.1:9222`. Without `WEFT_TOKEN`, the browser generates
-a random token and prints it to the local terminal. For automation, choose a
-strong token and use it in both processes:
+The control API listens only on `127.0.0.1:9222`. Weft prints a random access
+token to the terminal at startup, or you can set your own with `WEFT_TOKEN`. Use
+`npm start -- --user-data-dir=/absolute/path` for a separate profile, and see
+[Using Weft](docs/USING-WEFT.md) for headless mode, installers, updates,
+keyboard shortcuts and model setup.
 
-```sh
-export WEFT_TOKEN="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"
-npm start
-```
+Open **Ask Weft** (top right) for conversations and the command icon for the full
+command desk. Everything in the sidebar works without configuring a model.
 
-Set `WEFT_PORT` to change the port. In PowerShell, use `$env:WEFT_TOKEN = ...`.
-A desktop display is required. On headless Linux, `xvfb-run -a npm start` provides
-a virtual display. Normal startup keeps Chromium's sandbox enabled.
+## Connect an agent
 
-To run without a visible window (same profile, policies and agent API; pages
-render offscreen), start with `npm start -- --headless` or `WEFT_HEADLESS=1`.
-Launch Weft again or run `weft attach` to show the window of that running
-session; agent requests that need your decision wait until you do. Linux still
-needs a display server for this (a desktop session or `xvfb-run`). See
-[ADR-015](docs/decisions/015-headless-resume-and-resource-scheduling.md).
-
-### Installers and updates
-
-Stable releases are packaged for Windows x64 (branded per-user NSIS installer),
-macOS arm64/x64 (dmg/zip) and Linux x64 (AppImage/deb) from GitHub Releases of
-`jxburros/Weft`. Settings > Updates shows the installed version, the stable
-channel and any verified staged update. Weft contacts GitHub only when you choose
-Check now or turn on daily checks; downloads are size- and SHA-512-verified and
-installed only when you choose. `WEFT_DISABLE_UPDATES=1` turns all update traffic
-off. Upgrades and uninstalls keep your workspaces unless you explicitly remove
-them. Release, signing and support details: [docs/RELEASING.md](docs/RELEASING.md).
-Code signing and notarization depend on credentials that are not yet configured,
-so current builds are labelled unsigned. On Windows, SmartScreen may warn about
-the unsigned `Weft-Setup-X.Y.Z-x64.exe`: check it against the release's
-`SHA256SUMS.txt`, then choose **More info** > **Run anyway**. It installs for your
-account only and needs no administrator rights.
-
-## What you can do
-
-- **Browse:** address/search bar, native Chromium pages, separate workspace
-  sessions, back/forward, reload/stop, pinned/duplicated/moved tabs, split view,
-  find, zoom, browsing history, bookmarks, downloads, and PDF output.
-- **Organize:** create, rename, duplicate, archive, restore, and export workspaces;
-  keep editable notes, website references, and copied files; track confirmed
-  information, findings, questions, instructions, and decisions.
-- **Continue work:** save task objectives, owners, states, blockers, checkpoints,
-  and next steps. Plan multi-step tasks and run parameterized workflows through a durable task
-  runtime that pauses for approvals and marks work with an unknown outcome
-  `uncertain` instead of retrying it blindly.
-- **Keep evidence:** save readable page text and PNG screenshots as immutable
-  capture versions. Open them offline without executing source HTML or contacting
-  the original site. Capture limitations and source metadata remain visible.
-- **Choose a model:** use OpenAI-compatible cloud/local endpoints or Anthropic;
-  retain conversations across model changes; explicitly include project context.
-  Optional read-only tools can read a selected tab and search its workspace.
-- **Set boundaries:** create personal site rules, block redirects and covered
-  background requests, inspect browser-owned stop pages, allow an exact visit,
-  clear site data, take control of an agent-held tab, and stop agent activity.
-- **Automate externally:** discover the same typed commands through CLI, MCP,
-  or authenticated REST. Tab versions reject stale input after handoff.
-
-The app starts with one empty workspace. Screenshots in this repository show the
-real interface; tests use clearly separate fixture profiles and local websites.
-
-## Keyboard controls
-
-| Shortcut | Action |
-| --- | --- |
-| Ctrl/Cmd K | Search project records and actions |
-| Ctrl/Cmd L | Focus the address bar |
-| Ctrl/Cmd T | New tab |
-| Ctrl/Cmd W | Close the current tab |
-| Ctrl/Cmd F | Find in page |
-| Ctrl/Cmd J | Downloads |
-| Escape | Close the current dialog |
-
-Use the top-right **Ask Weft** button for conversations and the command icon for
-the complete command desk. Sidebar controls remain usable without configuring
-any model.
-
-## Model connections
-
-Open **Settings → Model connections**. Configure the exact endpoint and model ID
-supported by your provider. The included entries are editable starting points,
-not a claim that an account, endpoint, or model is available.
-
-OpenAI-compatible API bases normally end in `/v1`; a local Ollama example is
-`http://127.0.0.1:11434/v1`. The Anthropic adapter uses its messages API. An API key
-may be supplied through a named environment variable (`OPENAI_API_KEY` and
-`ANTHROPIC_API_KEY` are initial defaults), or saved using OS-backed Electron
-`safeStorage`. Plaintext key-storage fallbacks are refused. Model keys live in a
-separate file and are excluded from project exports.
-
-The panel shows the destination before sending. Inference happens at that
-endpoint; local connection failures never silently select a cloud provider.
-Text, explicit project context, and enabled read-only tool results may be sent.
-Read-only tools require both an enabled model profile and the message's explicit
-opt-in. They are limited to the selected tab and conversation workspace, allow
-at most five calls, and cannot click, fill forms, change policies, or execute
-arbitrary code. Tool results retain their source and are expandable in chat.
-
-Replies stream as they are written. **Attach** adds a tab snapshot, materials,
-context, tasks, exact capture versions or a pasted passage; before sending, the
-review lists what the selected model receives item by item, lets you exclude
-items, and shows when older history is omitted to fit the model's context window
-(your saved conversation is never rewritten). Images go only to connections you
-mark or discover (`models.probe`) as image-capable, or to a vision fallback you
-configure, after acknowledgement. Each reply shows endpoint locality,
-provider-reported tokens and, if you set prices, a labeled cost estimate. The
-Ollama native API (`http://127.0.0.1:11434`) is also supported.
-
-Errors, cancellation, and
-unsupported responses are shown as such; a stopped reply is kept and marked
-interrupted, and the application does not manufacture an assistant reply.
-
-## CLI and MCP
-
-Keep the browser running and give the CLI the same token:
+With Weft running and the same token in your client's environment:
 
 ```sh
 node bin/weft.js commands
 node bin/weft.js workspaces.list
 node bin/weft.js tabs.new '{"url":"https://example.com"}'
 node bin/weft.js page.readable
-node bin/weft.js materials.create '{"title":"Research note","content":"Questions to explore","kind":"note"}'
 node bin/weft.js tasks.create '{"title":"Review the source","objective":"Check the evidence"}'
-node bin/weft.js artifacts.capture '{"kind":"bundle","title":"Source reference"}'
 ```
 
-`npm run cli -- <command> '<JSON arguments>'` is equivalent. `npm link` optionally
-installs the `weft` command. Command outcomes, including command failures, are
-JSON on stdout; process/protocol diagnostics use stderr. See
-[the command contract](docs/COMMANDS.md) for stable error and exit codes. Screenshots require a visible tab. Hidden-tab bundles retain readable text
-and report an unavailable image rather than inventing one.
+For MCP clients, point them at `bin/weft.js mcp`. The setup, REST endpoints, scoped
+tokens and error codes are in [docs/CONNECTING.md](docs/CONNECTING.md), and guidance for
+integration authors is in [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md).
 
-For MCP, configure your client:
+## Status and limits
 
-```json
-{
-  "mcpServers": {
-    "weft": {
-      "command": "node",
-      "args": ["/absolute/path/to/Weft/bin/weft.js", "mcp"],
-      "env": {
-        "WEFT_TOKEN": "<same token as the running browser>",
-        "WEFT_API_URL": "http://127.0.0.1:9222"
-      }
-    }
-  }
-}
-```
+This is version 1.1.0: a working browser that implements a large part, but not all,
+of the [product specification](AI-Workspace-Browser-Product-Specification.md).
+[Implementation coverage](docs/IMPLEMENTATION.md) assesses it section by section.
 
-MCP advertises nine grouped tools, including `weft_reference` for command
-discovery. Execution tools accept a canonical command as `action` and its `args`;
-legacy underscore names such as `page_readable` remain accepted but unadvertised.
-Schemas and structured outcomes are shared. Screenshots retain MCP image content.
-The bridge writes only protocol messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
-do not follow redirects.
+Please know before relying on it:
 
-## REST and authority
+- **It is a local, single-user application.** Sync and collaboration are
+  deliberately deferred ([ADR-002](docs/decisions/002-sync-collaboration-remote.md)).
+- **Installers are unsigned** until signing credentials are configured. Windows may show a SmartScreen warning; see [Using Weft](docs/USING-WEFT.md#installers-and-updates).
+- **Not yet independently verified:** the credential broker, payment
+  authorization with real merchants and card issuers, screen-reader behavior, and
+  the OS key stores used by optional workspace encryption.
+- **Your data is not encrypted** unless you turn on workspace encryption, and
+  backups on the same disk do not protect against losing the disk.
+- **Weft does not protect secrets from an agent that controls your computer.** A
+  page an agent can read or script is as powerful as the account signed in to it.
+- **Extensions** are limited to audited, unpacked Manifest V3 packages
+  ([ADR-007](docs/decisions/007-extension-compatibility.md)).
 
-Requests require `Authorization: Bearer <token>`:
+More on protections and their limits: [Using Weft](docs/USING-WEFT.md#what-weft-does-and-does-not-protect).
 
-- `GET /v1/commands` returns descriptions and input schemas.
-- `GET /v1/openapi.json` returns the generated OpenAPI 3.1 contract.
-- `GET /v1/events` streams authenticated command metadata through SSE, without
-  arguments, page content, model messages, credentials, or results. Reconnect
-  with `Last-Event-ID` to replay recently retained events.
-- `GET /v1/turns/{turnId}/events` follows or resumes one model turn; send
-  `Accept: text/event-stream` to `POST /v1/execute` to stream a turn you start.
-  See [agent integration](docs/AGENT-INTEGRATION.md).
-- `POST /v1/execute` accepts `{ "command": "...", "args": {} }` (optionally a
-  `deadlineMs` field or `Weft-Deadline-Ms` header) and returns a versioned outcome
-  with `schemaVersion`, `command`, `status`, `execution`, `validation`, `review`,
-  `workspaceId`, `tabId`, `normalized`, `request`, `result` and `error`.
-  See [the command contract](docs/COMMANDS.md) for status and error meanings.
-- `GET /v1/capabilities` reports the API version, catalog hash, outcome table,
-  limits and features; `GET /v1/download` streams stored bytes.
+## Documentation
 
-Discovery is the authoritative list of available commands and arguments. Unknown
-fields are rejected. API request bodies are capped at 1 MiB, so large projects
-move as package folders (`workspaces.exportPackage`/`workspaces.importPackage`,
-human-only) or through the GUI, and single large files move through verified
-chunked uploads (`transfers.begin`, `transfers.append`, `transfers.commit`). Large
-collections accept `page: {limit, cursor}`. REST rejects browser-origin requests and does not enable CORS.
+See the [documentation index](docs/README.md). It separates guides for using
+Weft from material for people changing it.
 
-Mutating record commands accept an optional `requestId`: retrying the same command
-and arguments returns the original result (`idempotency.replayed: true`) instead of
-applying twice. `batch.execute` applies up to 100 record commands all-or-nothing, and
-destructive record commands, imports and batches accept `dryRun` to preview the exact
-changes. See [ADR 011](docs/decisions/011-transactional-storage-search-and-recovery.md).
-
-Human-only policy, configuration, storage-administration, override, and takeover
-commands appear in discovery but reject automation callers. Every other agent
-command passes one authority gate (ADR-005): reads run, local work runs at the
-default level, and external actions such as clicks, form fills, scripts and model
-sends wait in the Agent requests queue until you approve them once or for a
-period, unless you granted standing autonomy. The bootstrap token defaults to
-standing autonomy; lower it in Settings → Agent connections. There, issue a
-separate token for each client with a purpose, workspace restrictions (several
-workspaces need an explicit cross-workspace grant), read/record-write/tab-control
-scopes, allowed sites, readable data classes, an autonomy level, an optional
-command limit and a finite lifetime. Changes and revocation take effect on every
-subsequent command and event; idle event streams close at their next heartbeat.
-Tokens are displayed once and never stored in the project. Scoped clients cannot
-execute page scripts or send to models unless granted, configure providers,
-change site policy, approve requests, or mint other tokens. Activity records
-decisions, approvals and outcomes with hash-chain tamper evidence and
-configurable retention; it is not proof that an external action succeeded. This remains a
-local single-user application, not a remote multi-user service. Takeovers revoke leases and state versions, but cannot undo
-an external action or arbitrary page script that already executed.
-
-## Persistence and portability
-
-Electron uses its OS application-data directory by default. Use a separate
-profile with:
-
-```sh
-npm start -- --user-data-dir=/absolute/path/to/profile
-```
-
-Project records are stored under `workspace-data/`; Chromium storage uses a
-persistent partition per workspace. Tabs reopen their URLs after restart, without
-restoring arbitrary JavaScript state or unsent form input. Moving a tab opens it
-in the destination workspace's storage container and may change its login state.
-The original foundation's shared `persist:weft` session is not merged into new
-workspace containers.
-
-Exports (format 2) include project records with revisions and revision history,
-conversations, exact capture versions with their hashes, annotations, copied
-material bytes and task/workflow/evidence links. They exclude browser sessions,
-cookies, configured model keys, global policies, activity and browsing history.
-Imports create new IDs, rewrite citations of exported IDs, verify capture hashes,
-report every lossy mapping and leave imported rules/workflows inactive for review;
-the GUI shows a preview first. Copies use this same behavior. Linked files, folders and
-service references export as metadata only; their content, local paths and
-credentials are omitted and listed in the import report.
-
-Project metadata is a transactional SQLite database (`workspace.sqlite`, WAL
-mode, owned by one Weft process through a profile lock); captures and stored
-files are verified content-addressed files under `components/`, so editing
-metadata never rewrites them. Search uses a local FTS5 index. Weft keeps
-verified automatic backups (daily, latest five) and manual backups under
-`backups/`; restoring preserves the replaced data under `recovery/`. With Weft
-closed, `weft store backups|verify|restore <workspace-data directory>` recovers
-a profile whose database cannot be opened. Unless you turn on opt-in workspace
-encryption (Settings > Encryption; [ADR-014](docs/decisions/014-workspace-encryption-and-key-management.md)),
-none of this is **encrypted**, and backups on the same disk do not protect against losing that disk. Stored
-materials are limited to 10 MiB, PNGs to 20 MiB and JSON imports to 100 MiB.
-Free-form content, files, and captures can contain private data; export does not
-perform comprehensive secret or personal-information redaction.
-
-## Implementation coverage
-
-This is a working browser build, **not every requirement in the full product
-specification**. The exact section-by-section and acceptance-criteria assessment
-is in [implementation coverage](docs/IMPLEMENTATION.md).
-
-The largest remaining capabilities are independent review of the credential
-broker, validation of payment authorization with real merchants and card issuers
-([ADR-019](docs/decisions/019-payment-authorization.md)), screen-reader and
-cross-platform accessibility evidence, exercising the OS key stores used by workspace
-encryption, any hosted moderation service for community lists, synchronization and
-collaboration (deferred in [ADR-002](docs/decisions/002-sync-collaboration-remote.md)),
-and signed (rather than labelled-unsigned) installers and updates verified on real machines. Browser extension support is limited to unpacked
-Manifest V3 extensions installed per workspace with audited permissions
-([ADR-007](docs/decisions/007-extension-compatibility.md)); Weft plugins are
-described in [docs/PLUGINS.md](docs/PLUGINS.md). Provider key storage is not a credential
-broker. The application does not make strong secret-isolation claims against
-agents that can control the host computer.
-
-Remote pages are sandboxed and have no Node integration or privileged preload.
-Unsupported protocols and native launches are blocked; permission requests are
-denied. Site rules cover documented Chromium request paths, not an external
-agent's independent network tools. Unsolicited downloads are cancelled and can be approved from Downloads. Downloads are never executed automatically
-and are not claimed to have been scanned for malware unless you configure a local scanner (ADR-009). Keep Electron current for
-Chromium security fixes.
-
-## Development and validation
+To contribute, read [AGENTS.md](AGENTS.md), then run:
 
 ```sh
 npm test
 npm run test:docs
 npm run evals
-npm run test:perf
-# Include actual Chromium and GUI tests on headless Linux:
+# Include real Chromium and GUI tests on headless Linux:
 xvfb-run -a npm test
-# Package locally (outputs in dist/, see docs/RELEASING.md):
-npm run dist -- --linux AppImage
 ```
 
-No bundler or compilation step is needed. Tests cover command validation,
-authentication, REST/CLI/MCP, model HTTP fixtures and tool boundaries, persistence,
-imports/exports, native Chromium isolation and control, and complete GUI workflows
-including a real offline capture. Display tests explicitly skip when no display
-is available. Test subprocesses use `--no-sandbox` only for CI environments without
-a configured sandbox helper; normal application startup does not.
-
-Agent contributors should read [AGENTS.md](AGENTS.md). The packaged
-[Weft skill and MCP plugin](docs/AGENT-INTEGRATION.md) use a shared guidance
-registry. [Offline task evals](evals/README.md) measure reference success and tool
-calls; [performance budgets](perf/README.md) cover large-store writes, capture
-search and catalog generation. [Architecture decisions](docs/decisions/) record
-the product scope, deferred sync and collaboration, the plugin/extension boundaries, workspace encryption and the other design decisions.
-
-The font's license is included in `assets/fonts/LICENSE.md`. Logo provenance and
-variants are documented in [assets/logo/README.md](assets/logo/README.md).
-
-Command and tool changes are checked by the [offline evals](evals/README.md),
-[generated reference](docs/COMMANDS.md), and [validation pipeline](docs/VALIDATION.md).
-The [issue disposition](docs/ISSUE-STATUS.md) records completed work and remaining gaps.
+No bundler or compilation step is needed. Fonts and logos carry their own
+licenses and provenance: `assets/fonts/LICENSE.md` and
+[assets/logo/README.md](assets/logo/README.md). Weft is MIT licensed.
