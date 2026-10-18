@@ -112,6 +112,15 @@ test('storage policy strips cookies, sandboxes blocked documents, blocks cross-s
   const subframe = { url: 'https://tracker.test/frame', parent: staleTop, top: { url: 'https://news.example/' } };
   assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://tracker.test/x'), resourceType: 'xhr', webContentsId: 8, frame: subframe, initiatorOrigin: 'https://tracker.test' }, workspaceId).requestHeaders, { Accept: '*/*' }, 'an embedded frame is judged by its top document, not its own initiator');
   assert.equal(policy.activityFor(8).crossSiteCookiesBlocked, 2);
+  // Electron omits frame and webContents when it cannot resolve the requesting frame; the initiator still decides.
+  const unresolved = { resourceType: 'image', webContentsId: 9, initiatorOrigin: 'https://news.example' };
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://tracker.test/pixel'), ...unresolved }, workspaceId).requestHeaders, { Accept: '*/*' }, 'an unresolved frame does not fail open');
+  assert.equal(policy.headersReceived({ url: 'https://tracker.test/pixel', ...unresolved, responseHeaders: { 'set-cookie': ['t=1'] } }, workspaceId).responseHeaders['set-cookie'], undefined);
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://news.example/a'), ...unresolved }, workspaceId), {}, 'a same-site initiator keeps cookies');
+  const trackerFrame = { url: 'https://tracker.test/frame', parent: {}, top: { url: 'https://news.example/' } };
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://news.example/a'), resourceType: 'xhr', webContentsId: 9, frame: trackerFrame, initiatorOrigin: 'https://tracker.test' }, workspaceId).requestHeaders, { Accept: '*/*' }, 'a cross-site frame does not receive the top site\'s cookies');
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://tracker.test/a'), resourceType: 'mainFrame', webContentsId: 9, initiatorOrigin: 'https://news.example' }, workspaceId), {}, 'a top-level navigation is first-party whoever initiated it');
+  assert.equal(policy.activityFor(9).crossSiteCookiesBlocked, 3);
   assert.equal(approximateSite('a.b.example.co.uk'), 'example.co.uk');
   assert.equal(policy.activityFor(7).crossSiteCookiesBlocked, 2);
 

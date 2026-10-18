@@ -192,14 +192,20 @@ async function securitySmoke() {
     assert.equal(browser.describe(browser.tab(tab)).protection.storageMode.mode, 'block');
     await browser.execute('cookies.set', { url: url('blocked-storage.localhost'), name: 'late', value: '1' });
     await until(async () => (await browser.execute('cookies.list', { url: url('blocked-storage.localhost') })).length === 0, 'cookies created by other paths are deleted');
-    // Cross-site cookies are removed from requests and responses by default.
+    // Cross-site cookies are removed from requests and responses by default. Each round leaves a first-party
+    // tracker page for a site embedding it: the new page's requests can reach the main process before its
+    // commit while the frame still reports the tracker page (ADR 008), so several fresh sites are tried.
     await navigate(url('tracker.localhost', '/set-first'));
-    await navigate(url('tracker.localhost', '/echo'));
-    assert.equal(hits.filter(item => item.host === 'tracker.localhost' && item.path === '/echo').at(-1).cookie, 'firstparty=1', 'first-party cookies are sent');
-    await navigate(url('127.0.0.1', '/embed-tracker'));
-    await until(() => hits.some(item => item.host === 'tracker.localhost' && item.path.startsWith('/echo-image')) && hits.some(item => item.host === 'tracker.localhost' && item.path.startsWith('/set-cookie')));
-    const imageHits = hits.filter(item => item.host === 'tracker.localhost' && item.path.startsWith('/echo-image'));
-    assert.equal(imageHits.at(-1).cookie, null, `cross-site cookie header removed; image hits ${JSON.stringify(imageHits)}; protection ${JSON.stringify(browser.describe(browser.tab(tab)).protection.storageActivity)}`);
+    const trackerHits = path => hits.filter(item => item.host === 'tracker.localhost' && item.path.startsWith(path));
+    for (const top of ['127.0.0.1', 'embed-a.localhost', 'embed-b.localhost']) {
+      await navigate(url('tracker.localhost', '/echo'));
+      assert.equal(trackerHits('/echo').filter(item => item.path === '/echo').at(-1).cookie, 'firstparty=1', 'first-party cookies are sent');
+      const before = { image: trackerHits('/echo-image').length, set: trackerHits('/set-cookie').length };
+      await navigate(url(top, '/embed-tracker'));
+      await until(() => trackerHits('/echo-image').length > before.image && trackerHits('/set-cookie').length > before.set);
+      const imageHits = trackerHits('/echo-image').slice(before.image);
+      assert.ok(imageHits.every(item => item.cookie === null), `cross-site cookie header removed under ${top}; image hits ${JSON.stringify(imageHits)}; protection ${JSON.stringify(browser.describe(browser.tab(tab)).protection.storageActivity)}`);
+    }
     assert.equal((await browser.execute('cookies.list', { url: url('tracker.localhost') })).some(cookie => cookie.name === 'tracker'), false, 'cross-site Set-Cookie removed');
     assert.ok(browser.describe(browser.tab(tab)).protection.storageActivity.crossSiteCookiesBlocked >= 2);
     await browser.execute('storage.setSiteMode', { hostname: 'tracker.localhost', mode: 'remember' }, human);
