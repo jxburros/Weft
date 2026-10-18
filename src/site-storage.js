@@ -29,7 +29,7 @@ export const STORAGE_COVERAGE = Object.freeze([
   { path: 'Service worker registration and its storage', block: 'Prevented: registration fails in the sandbox and service-worker script fetches for the host are cancelled.', session: 'Allowed; registrations erased with the session.', remember: 'Allowed.' },
   { path: 'HTTP cache', block: 'Blocked documents are served with Cache-Control: no-store; entries already cached are erased when the site is blocked.', session: 'Erased per origin with the session.', remember: 'Kept.' },
   { path: 'Site embedded in another page (frame)', block: 'Frame documents from the site are sandboxed the same way; cookie headers are removed.', session: 'As the top-level case.', remember: 'As the top-level case.' },
-  { path: 'Cross-site (third-party) cookies', block: 'Covered by the site mode.', session: 'An explicit session or remember exception for the embedded site allows its cross-site cookies.', remember: 'Default policy removes cookie headers on requests whose approximate registrable domain differs from the top page. Script cookie access inside cross-site frames is not blocked by this policy.' },
+  { path: 'Cross-site (third-party) cookies', block: 'Covered by the site mode.', session: 'An explicit session or remember exception for the embedded site allows its cross-site cookies.', remember: 'Default policy removes cookie headers on requests whose approximate registrable domain differs from the top page or from the requesting document. Requests from shared and service workers have no top page and are judged by their initiator only. Script cookie access inside cross-site frames is not blocked by this policy.' },
   { path: 'Unsupported / not covered', block: 'Not covered: data already held by pages that stay open (reload them), back/forward-cache pages, HSTS, DNS and socket pools, shared dictionaries, permissions, client hints, Private State Tokens, favicons, fingerprinting and anything retained by the server.', session: 'Same. A crash can leave data on disk until the next Weft startup; another program can copy it before then.', remember: 'Same.' },
 ]);
 
@@ -99,9 +99,19 @@ export class SiteStoragePolicy {
     try { const top = frame?.top?.url; if (top) return parse(top)?.hostname ?? null; } catch { /* Disposed frame. */ }
     try { return parse(details.webContents?.getURL?.())?.hostname || null; } catch { return null; }
   }
+  /**
+   * Cross-site when the requesting document's site or the top site differs.
+   * The initiator is fixed per request, so this does not depend on frame state:
+   * Electron omits frame and webContents when the frame cannot be resolved,
+   * and then the initiator alone decides instead of failing open.
+   */
   crossSite(details, hostname) {
+    if (details.resourceType === 'mainFrame') return false;
+    const site = approximateSite(hostname);
+    const initiator = parse(details.initiatorOrigin);
+    if (['http:', 'https:'].includes(initiator?.protocol) && approximateSite(initiator.hostname) !== site) return true;
     const top = this.topHostname(details);
-    return Boolean(top) && approximateSite(top) !== approximateSite(hostname);
+    return Boolean(top) && approximateSite(top) !== site;
   }
   crossSiteBlocked(hostname, workspaceId) {
     const record = this.siteRecord(hostname, workspaceId);

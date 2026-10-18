@@ -1,7 +1,7 @@
 # ADR 008: browser-owned site storage modes and temporary sessions
 
 Status: implemented and tested with real Chromium fixtures (Electron 44).
-Last reviewed: 2026-10-17. Issue: #18.
+Last reviewed: 2026-10-18. Issue: #18.
 
 ## Decision
 
@@ -37,7 +37,12 @@ cookie headers on cross-site requests for cookies marked `SameSite=None` (the
 cookies third-party trackers use) by default. "Cross-site" compares an
 approximate registrable domain (last two labels, or three for common
 `co.uk`-style suffixes); Weft does not bundle the Public Suffix List, so hosting
-platforms such as `github.io` are treated as one site (under-blocking). An
+platforms such as `github.io` are treated as one site (under-blocking). A
+subresource or frame request is cross-site when its requesting document
+(`initiatorOrigin`) or its top page is on another site, as in Chromium's own
+SameSite rules; top-level navigations are first-party. For a top-frame request
+the requesting document's origin is used as the top page, because the frame can
+still report the previous page (see engine limitations). An
 explicit session or remember exception for the embedded site allows its
 cross-site cookies. Script cookie access inside cross-site frames is not blocked
 by this default, and nothing here prevents fingerprinting, link decoration or
@@ -47,6 +52,33 @@ server-side tracking. Weft makes no necessary-versus-tracker classification.
 
 - Electron exposes no per-site cookie content setting; enforcement uses
   `webRequest` header hooks, the CSP sandbox and the cookie-change event.
+  Chromium's own third-party cookie blocking does work in Electron 44, but only
+  process-wide through test switches (`--test-third-party-cookie-phaseout`,
+  feature `ForceThirdPartyCookieBlockingEnabled`), with no per-session or
+  per-site exceptions, so it cannot express workspace defaults, the `allow`
+  policy or site exceptions and is not used. Rewriting `SameSite=None` cookies
+  to `Lax` was also rejected: it would also withhold cookies from cross-site
+  top-level POSTs (SAML and OIDC `form_post` sign-in), which this policy treats
+  as first-party, and the original attribute could not be restored when an
+  exception is granted.
+- Commit race (measured 2026-10-18): a new top document's first subresource
+  requests can reach the main process before its commit. Their `frame.url`,
+  `frame.top.url` and `webContents.getURL()` then all still name the previous
+  page (3 of 160 fresh-process navigations in a probe). Judging by those
+  values sent a tracker its first-party cookie when the person went from the
+  tracker to a site embedding it. Weft judges by the requesting document's origin instead.
+  When Electron cannot resolve the requesting frame it omits both `frame` and
+  `webContents`; the initiator rule then still applies rather than failing open.
+- Cookie header visibility: Electron passes the `Cookie` header to
+  `onBeforeSendHeaders` only on its "extra headers" path. It uses that path for
+  requests with a nonzero network-service request ID while listeners exist.
+  Renderer and navigation requests qualify (no renderer subresource request
+  lacked the header in 240 fresh-process probes). Main-process `net` requests
+  have ID 0, so their cookies are attached after the hook; Weft's own
+  main-process requests do not use session cookies.
+- Shared and service workers have no frame, so their requests are judged by
+  their initiator only; a third-party service worker's requests to its own site
+  are not detected as cross-site.
 - Data held by pages that remain open, back/forward-cache pages, HSTS, socket
   pools, DNS cache, shared dictionaries, permissions, client hints, Private State
   Tokens and favicons are outside the modes.
@@ -60,8 +92,10 @@ server-side tracking. Weft makes no necessary-versus-tracker classification.
 ## Evidence
 
 `test/browser-security.test.js` loads fixture pages in real Chromium and checks
-each storage API in block mode, header removal, cross-site cookie removal and
-exceptions, clean-exit erasure, and erasure after a `SIGKILL` crash while
+each storage API in block mode, header removal, cross-site cookie removal
+(including the transition from a first-party tracker visit to several fresh
+embedding sites, where the commit race occurs) and exceptions, clean-exit erasure, and erasure after a `SIGKILL` crash while
 remembered data (cookies, localStorage, IndexedDB, Cache Storage, service
-worker) survives. `test/site-security.test.js` covers header logic, write-ahead
-journaling and revocation without Electron.
+worker) survives. `test/site-security.test.js` covers header logic (including
+stale and unresolved frames, deterministically), write-ahead journaling and
+revocation without Electron.

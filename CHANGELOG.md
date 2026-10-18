@@ -25,6 +25,24 @@ releases (the reinstall uses the same version), and the interactive installer
 and uninstaller pages, which a silent run does not show; installers remain
 unsigned.
 
+## 2026-10-18 — Agent
+
+### Fixed
+
+- Cross-site cookie blocking no longer fails open when Electron cannot resolve
+  the requesting frame (it then omits both `frame` and `webContents`, which
+  made the request look same-site). A request is now cross-site when its
+  requesting document (`initiatorOrigin`) or its top page is on another site,
+  so a cross-site frame also no longer receives the top site's cookies; top-level
+  navigations stay first-party. The intermittent `cross-site cookie header
+  removed` failure was the commit race fixed in 1.1.0, not a test artifact: with
+  the earlier logic the real-Chromium test reproduced the leak
+  (`cookie: 'firstparty=1'`), and the Cookie header was visible to the hook in
+  every probe. The real-Chromium test now repeats the tracker-to-embedding-site
+  transition on several fresh sites. `test/site-security.test.js` covers stale
+  and unresolved frames without timing. Engine findings, including why Chromium's
+  process-wide third-party cookie switch is not used, are in ADR-008.
+
 ## v1.1.0 — 2026-10-18
 
 Minor release. Version strings (`package.json`, `package-lock.json`,
