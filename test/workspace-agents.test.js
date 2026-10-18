@@ -89,8 +89,10 @@ test('web watches baseline, wake real runtime tasks once, avoid overlap, honor s
   assert.equal(f.workspace.data.tasks.length, 1, JSON.stringify(f.workspace.record('workflows', w.id).watchState));
   const task = f.workspace.data.tasks[0]; await f.settle(task.id); assert.equal(task.status, 'waiting_on_human');
   now += 61000; body = 'third'; await standby.tick(); assert.equal(f.workspace.data.tasks.length, 1); assert.equal(fetched, 2);
+  await f.run('workflows.update', { id: w.id, changes: { watch: { url: 'https://example.com/other', intervalMinutes: 1, cooldownMinutes: 1 } } }, human);
+  await standby.tick(); assert.equal(fetched, 2, 'reconfiguring a watch cannot stack over an existing run');
   f.admission.stop(); now += 61000; await standby.tick(); assert.equal(fetched, 2);
-  const saved = f.workspace.record('workflows', w.id).watchState; assert.equal(saved.taskId, task.id);
+  assert.equal(f.workspace.data.tasks[0].workflowRun.workflowId, w.id);
 });
 test('email imports preserve hostile HTML as inert evidence and enforce bounds', () => {
   const mail = emailMaterial('From: sender@example.com\nSubject: Example\n\n<script>steal()</script>', { workspaceId: 'ws-test' });

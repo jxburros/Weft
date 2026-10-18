@@ -32,7 +32,7 @@ export class Standby {
       if (!this.allowed(w) || this.active.has(w.id)) continue;
       const s = w.watchState;
       if (s?.phase === 'dispatching' || s?.nextCheckAt > this.clock()) continue;
-      if (watchRunBlocked(this.workspace.data.tasks.find(t => t.id === s?.taskId))) continue;
+      if (this.workspace.data.tasks.some(t => (t.id === s?.taskId || t.workflowRun?.workflowId === w.id) && watchRunBlocked(t))) continue;
       await this.check(w).catch(() => {});
     }
   }
