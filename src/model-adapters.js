@@ -41,14 +41,24 @@ const parseFrame = data => {
 };
 
 /** Split a response body into lines with total and per-line bounds. */
-export async function* readLines(body, { onBytes, maxBytes = MAX_STREAM_BYTES } = {}) {
+export async function* readLines(body, { onBytes, signal, maxBytes = MAX_STREAM_BYTES } = {}) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let total = 0;
+  // A deadline or stop must end the read even if the fetch implementation does not reject a read already in
+  // flight when its request is aborted (seen with Node 22's fetch): race every read against the signal.
+  let stopped = null;
+  if (signal) {
+    stopped = new Promise((_, reject) => {
+      const abort = () => reject(signal.reason ?? Object.assign(new Error('The model stream was aborted'), { name: 'AbortError' }));
+      if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+    });
+    stopped.catch(() => {});
+  }
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await (stopped ? Promise.race([reader.read(), stopped]) : reader.read());
       if (done) break;
       total += value.byteLength;
       onBytes?.(value.byteLength);
@@ -64,7 +74,10 @@ export async function* readLines(body, { onBytes, maxBytes = MAX_STREAM_BYTES } 
     }
     buffer += decoder.decode();
     if (buffer) yield buffer.endsWith('\r') ? buffer.slice(0, -1) : buffer;
-  } finally { await reader.cancel().catch(() => {}); }
+  } finally {
+    // Not awaited: cancelling can stall in the same state as the read; the request itself is already aborted or done.
+    reader.cancel().catch(() => {});
+  }
 }
 
 /** Minimal WHATWG server-sent-event parser (event/data fields; comments ignored). */
@@ -100,11 +113,11 @@ function mergeUsage(result, usage) {
   for (const field of ['inputTokens', 'outputTokens']) if (usage[field] !== null) result.usage[field] = usage[field];
 }
 
-export async function readOpenAIStream(body, { onDelta, onFrame, onBytes } = {}) {
+export async function readOpenAIStream(body, { onDelta, onFrame, onBytes, signal } = {}) {
   const result = emptyResult();
   const calls = [];
   let argumentBytes = 0;
-  for await (const { data } of readSse(body, { onBytes })) {
+  for await (const { data } of readSse(body, { onBytes, signal })) {
     onFrame?.();
     if (data.trim() === '[DONE]') { result.complete = true; break; }
     const frame = parseFrame(data);
@@ -138,9 +151,9 @@ export async function readOpenAIStream(body, { onDelta, onFrame, onBytes } = {})
   return result;
 }
 
-export async function readAnthropicStream(body, { onDelta, onFrame, onBytes } = {}) {
+export async function readAnthropicStream(body, { onDelta, onFrame, onBytes, signal } = {}) {
   const result = emptyResult();
-  for await (const { event, data } of readSse(body, { onBytes })) {
+  for await (const { event, data } of readSse(body, { onBytes, signal })) {
     onFrame?.();
     const frame = parseFrame(data);
     const type = frame?.type || event;
@@ -160,9 +173,9 @@ export async function readAnthropicStream(body, { onDelta, onFrame, onBytes } = 
   return result;
 }
 
-export async function readOllamaStream(body, { onDelta, onFrame, onBytes } = {}) {
+export async function readOllamaStream(body, { onDelta, onFrame, onBytes, signal } = {}) {
   const result = emptyResult();
-  for await (const line of readLines(body, { onBytes })) {
+  for await (const line of readLines(body, { onBytes, signal })) {
     if (!line.trim()) continue;
     onFrame?.();
     const frame = parseFrame(line);

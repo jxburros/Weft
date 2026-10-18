@@ -634,7 +634,7 @@ export class Providers {
         throw new Error('Unable to reach the selected model endpoint. Check its address and availability. No fallback was used.');
       }
       if (!response.ok) await this.responseJSON(response);
-      const streamed = await readStreamedReply(profile.provider, response, { onDelta, onFrame: frame, onBytes: touch });
+      const streamed = await readStreamedReply(profile.provider, response, { onDelta, onFrame: frame, onBytes: touch, signal });
       if (streamed) return streamed;
       const json = await this.responseJSON(response);
       frame();

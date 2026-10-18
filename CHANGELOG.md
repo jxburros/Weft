@@ -611,6 +611,11 @@ alone is not a shipped capability.
   restrict, purge or delete afterwards, then check the database and WAL bytes
   (`test/index-reset-privacy.test.js`); the prior `secure_delete` value is
   restored on every path.
+- Model-stream deadlines and stops now always end the turn: every body read
+  races the turn's abort signal, and cancellation is not awaited. Previously a
+  read already in flight could stay pending after the request was aborted (seen
+  intermittently with Node 22's fetch), so an idle or total deadline never
+  returned and the turn hung. Regression: `test/model-stream-abort.test.js`.
 - Test hang guards scale with `WEFT_TEST_TIME_SCALE` (`test/time-budget.js`; the
   unit runner's per-file cap too). CI sets 4 on Windows, where synced writes are
   several times slower, instead of loosening the guards everywhere. Model

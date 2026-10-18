@@ -138,6 +138,9 @@ if (harness) {
       // Workload: repeated suspend/restore cycles release every renderer they create.
       const baseline = renderers();
       for (let i = 0; i < 20; i++) {
+        // A restore (activation or the previous read) finishes its bookkeeping after the page is back; suspension
+        // is rightly refused as "restoring" until then.
+        await until(() => !browser.tab(tasked.id).resuming && !browser.tab(tasked.id).converting, `restore finished before cycle ${i}`);
         const cycle = (await dispatch('tabs.suspend', { tabId: tasked.id }, human)).result;
         assert.equal(cycle.suspended, true, `suspend/restore cycle ${i} refused: ${JSON.stringify(cycle.blockedBy)}`);
         await dispatch('page.readable', { tabId: tasked.id }, agent);
