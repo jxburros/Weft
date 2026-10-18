@@ -3,6 +3,24 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## Unreleased
+
+Documentation only; no behavior changed.
+
+- Rewrote the README around the project promise, a concrete scenario, how human
+  control works, and a single "Status and limits" section. Moved the detailed
+  CLI/MCP/REST, authority, keyboard, model, persistence and protection material
+  into [docs/CONNECTING.md](docs/CONNECTING.md) and
+  [docs/USING-WEFT.md](docs/USING-WEFT.md).
+- Added a [documentation index](docs/README.md) that separates guides from
+  contributor records, and moved the issue disposition to
+  `docs/maintainers/ISSUE-STATUS.md`.
+- Restructured `docs/IMPLEMENTATION.md` into an at-a-glance summary, a short
+  status table and per-section detail. Verification dates remain only on documents
+  that make verification claims.
+- Verified: `npm run test:docs` passes and every relative Markdown link resolves.
+  Not verified: the full test suite, which this change does not touch.
+
 ## v1.1.0 — 2026-10-18
 
 Minor release. Version strings (`package.json`, `package-lock.json`,
@@ -682,7 +700,7 @@ remain unverified on real machines (`docs/RELEASING.md`).
 
 ### Not completed
 
-- See [all 67 issue dispositions](docs/ISSUE-STATUS.md): 58 completed scopes
+- See [all 67 issue dispositions](docs/maintainers/ISSUE-STATUS.md): 58 completed scopes
   (26 in the first pass, PR #71, and 32 in the second pass on this branch) and 9
   items left open (#4 tracker, #6, #20, #26, #31, #33, #36, #54, #60). Each stays
   open for validation that code cannot supply: independent security review,

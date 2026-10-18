@@ -1,7 +1,5 @@
 # Weft plugins
 
-Last verified against code: 2026-10-18.
-
 Weft plugins add optional formats, extractors, reports and small read-only
 commands without widening core authority. They are distinct from Chromium
 browser extensions ([ADR-007](decisions/007-extension-compatibility.md)) and

@@ -1,7 +1,5 @@
 # Agent integration
 
-Last verified against code: 2026-10-18.
-
 The repository packages `skills/weft/SKILL.md`, `.claude-plugin/plugin.json` and
 `.mcp.json`. Install dependencies with `npm ci`, start Weft, then launch your
 plugin-aware Claude client with this checkout as its plugin directory (for
