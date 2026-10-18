@@ -1,6 +1,6 @@
 # Production design system and validation
 
-Last verified against code: 2026-10-17.
+Last verified against code: 2026-10-18.
 
 `assets/tokens.json` is the canonical source for light/dark colors, type, spacing,
 radius, elevation and motion. `node scripts/generate-tokens.js` writes

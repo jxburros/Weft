@@ -1,6 +1,6 @@
 # Releasing Weft
 
-Last verified against code: 2026-10-17. Policy and rationale: [ADR 010](decisions/010-distribution-and-updates.md).
+Last verified against code: 2026-10-18. Policy and rationale: [ADR 010](decisions/010-distribution-and-updates.md).
 
 This document is the release procedure, the signing/hosting setup, the trust roots
 for installers and updates, and the support and security-maintenance commitments.

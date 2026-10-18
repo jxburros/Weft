@@ -3,6 +3,29 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## v1.1.0 — 2026-10-18
+
+Minor release. Version strings (`package.json`, `package-lock.json`,
+`.claude-plugin/plugin.json`) are aligned at 1.1.0 and `npm run release:check`
+passes. The user-visible changes since 1.0.0 are the entries below, including
+bounded background search indexing, OS memory-pressure tab suspension, sealed
+payment records and embedding vectors, the GUI accessibility audit, the finished
+design system, the community-lists and agent-input screens, and the CI/Windows
+test-stability fixes. Electron 44.9.0. Documentation was re-verified against the
+code on this date (`npm run test:docs` and guidance generation are clean).
+Installing, upgrading across real versions and rollback on each operating system
+remain unverified on real machines (`docs/RELEASING.md`).
+
+### Fixed
+
+- Cross-site cookie blocking no longer races page commits: a new top
+  document's subresource requests can reach the main process before its commit,
+  while the frame still reports the previous page's URL, so a tracker the person
+  had just visited could receive its first-party cookie when embedded by the next
+  site. Top-frame requests are now judged by their initiating document's origin
+  (embedded frames still by their top document); regression covered in
+  `test/site-security.test.js`.
+
 ## 2026-10-17 — Agent
 
 ### Changed

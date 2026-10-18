@@ -1,6 +1,6 @@
 # Accessibility audit and manual test script
 
-Last verified against code: 2026-10-17.
+Last verified against code: 2026-10-18.
 
 This is the record for issue #31 (keyboard, screen reader, scaling and theme
 accessibility). It separates what is **checked automatically in real Electron**

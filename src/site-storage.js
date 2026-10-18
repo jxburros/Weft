@@ -86,7 +86,17 @@ export class SiteStoragePolicy {
 
   topHostname(details) {
     if (details.resourceType === 'mainFrame') return null;
-    try { const top = details.frame?.top?.url; if (top) return parse(top)?.hostname ?? null; } catch { /* Disposed frame. */ }
+    // A top document's requests can reach the main process before its commit
+    // does, while the frame still reports the previous page's URL. The
+    // initiator is the requesting document itself, so for top-frame requests
+    // it names the current top site.
+    let frame;
+    try { frame = details.frame; } catch { frame = null; }
+    let isTop = false;
+    try { isTop = Boolean(frame) && !frame.parent; } catch { /* Disposed frame. */ }
+    const initiator = parse(details.initiatorOrigin);
+    if (isTop && ['http:', 'https:'].includes(initiator?.protocol)) return initiator.hostname;
+    try { const top = frame?.top?.url; if (top) return parse(top)?.hostname ?? null; } catch { /* Disposed frame. */ }
     try { return parse(details.webContents?.getURL?.())?.hostname || null; } catch { return null; }
   }
   crossSite(details, hostname) {

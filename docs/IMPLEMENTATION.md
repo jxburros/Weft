@@ -1,6 +1,6 @@
 # Implementation coverage
 
-Last verified against code: 2026-10-17.
+Last verified against code: 2026-10-18.
 
 This document compares the repository with **AI Workspace Browser Product Specification v1.0**. The specification is broader than the current application. This build is a working Electron workspace browser with local persistence, shared automation commands, reference captures, and text model connections. It is **not a completed implementation of every product requirement** or a hosted, unattended agent service: the durable task runtime runs plans only at a person-chosen autonomy level through the same authority gate. It includes a credential broker with protected login operations ([ADR-017](decisions/017-credential-broker-and-protected-login.md)) that has been adversarially tested but **not independently security-reviewed**, so credential isolation is not asserted, and payment authorization bound to checkout terms ([ADR-019](decisions/019-payment-authorization.md)) that has **not been validated with real merchants, processors or card-issuer accounts**.
 
