@@ -17,6 +17,10 @@ update manifest and created no release.
   `release/dist/` and `verify-assets.js release` stopped with "No latest*.yml
   update manifest found". A regression test checks the upload path, and the
   staging step fails the platform job if no manifest was produced.
+- Accessibility audit: contrast is measured after entrance animations are
+  jumped to their end state. The fixed 250 ms pause raced the 1.1.2 view
+  fade-in on slow runners (a `.tag` contrast failure in CI); stretching the
+  animation to 1.5 s reproduced it, and the audit now passes under that stretch.
 - Verification limit: the fix is exercised only by the next tagged release run;
   the workflow is not executed locally.
 
