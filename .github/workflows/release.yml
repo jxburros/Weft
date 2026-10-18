@@ -168,6 +168,12 @@ jobs:
           else
             node scripts/release/smoke-packaged.js "${{ matrix.smoke }}" ${{ matrix.kind }}
           fi
+      - name: Install, launch, reinstall and uninstall the Windows installer
+        if: matrix.name == 'windows-x64'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/release/windows-install-check.ps1 "dist/Weft-Setup-${{ needs.verify.outputs.version }}-x64.exe" "${{ needs.verify.outputs.version }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: weft-${{ matrix.name }}
@@ -233,6 +239,9 @@ jobs:
             echo "## Integrity and signing"
             echo
             sed 's/^/- /' release/signing-*.txt
+            if grep -q '^windows-x64: UNSIGNED' release/signing-*.txt; then
+              echo "- The Windows installer is not code-signed, so Microsoft Defender SmartScreen may show \"Windows protected your PC\". Check \`Weft-Setup-$VERSION-x64.exe\` against SHA256SUMS.txt (\`Get-FileHash -Algorithm SHA256\`), then choose **More info** > **Run anyway**."
+            fi
             echo "- Every asset is listed in SHA256SUMS.txt$( [[ -f release/SHA256SUMS.txt.asc ]] && echo ' (GPG-signed: SHA256SUMS.txt.asc)')."
             echo "- In-app updates verify size and SHA-512 from latest*.yml and only accept stable releases from this repository."
           } > notes.md
