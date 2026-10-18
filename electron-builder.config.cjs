@@ -13,7 +13,7 @@ module.exports = {
   directories: { output: 'dist', buildResources: 'packaging' },
   // Only runtime code and brand assets ship; tests, docs, fixtures and sources stay out.
   files: [
-    'package.json', 'LICENSE', 'docs/THIRD-PARTY.md', 'docs/licenses/**/*', 'src/**/*',
+    'package.json', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'licenses/**/*', 'src/**/*',
     'assets/tokens.css', 'assets/fonts/**/*',
     'assets/logo/svg/mark-full-color.svg', 'assets/logo/svg/horizontal-full-color.svg',
     'assets/logo/icons/favicon.ico', 'assets/logo/icons/app-icon-plum-512.png',

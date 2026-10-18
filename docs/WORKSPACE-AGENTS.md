@@ -63,7 +63,7 @@ workflow parameters must have defaults. A cooldown limits repeated wakes.
 Check status and errors are visible when editing the workflow. Interrupted
 launches stay `dispatching` for human inspection; review the task list before
 editing/re-saving the watch to re-arm it. Weft does not promise monitoring while
-closed or across a machine sleep. See [reuse notes](THIRD-PARTY.md).
+closed or across a machine sleep. See [reuse notes](../THIRD-PARTY-NOTICES.md).
 
 ## Mailbox without email credentials
 
