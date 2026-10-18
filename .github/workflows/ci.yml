@@ -85,3 +85,38 @@ jobs:
         run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
       - name: Launch the packaged AppImage
         run: xvfb-run -a node scripts/release/smoke-packaged.js "dist/Weft-$(node -p 'require("./package.json").version')-x86_64.AppImage" appimage
+  windows-installer:
+    name: Build, install and uninstall the Windows installer (unsigned)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      WEFT_DISABLE_UPDATES: '1'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: node scripts/release/metadata.js
+      - name: Build the NSIS installer
+        run: npx electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never
+      - name: Verify the update manifest and checksums
+        shell: bash
+        run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
+      - name: Install, launch, reinstall and uninstall
+        shell: pwsh
+        run: |
+          $version = node -p 'require("./package.json").version'
+          pwsh -NoProfile -File scripts/release/windows-install-check.ps1 "dist/Weft-Setup-$version-x64.exe" $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weft-windows-installer-unsigned-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist/Weft-Setup-*.exe
+            dist/latest.yml
+            dist/SHA256SUMS.txt

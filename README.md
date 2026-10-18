@@ -52,7 +52,10 @@ installed only when you choose. `WEFT_DISABLE_UPDATES=1` turns all update traffi
 off. Upgrades and uninstalls keep your workspaces unless you explicitly remove
 them. Release, signing and support details: [docs/RELEASING.md](docs/RELEASING.md).
 Code signing and notarization depend on credentials that are not yet configured,
-so current builds are labelled unsigned.
+so current builds are labelled unsigned. On Windows, SmartScreen may warn about
+the unsigned `Weft-Setup-X.Y.Z-x64.exe`: check it against the release's
+`SHA256SUMS.txt`, then choose **More info** > **Run anyway**. It installs for your
+account only and needs no administrator rights.
 
 ## What you can do
 

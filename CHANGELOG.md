@@ -3,6 +3,28 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## 2026-10-18 — Windows installer in CI and releases
+
+### Added
+
+- CI builds the unsigned Windows NSIS installer on `windows-latest` for every PR
+  and push to `main`, verifies its `latest.yml`, and runs
+  `scripts/release/windows-install-check.ps1`: silent per-user install, the
+  uninstall registry entry, Start menu and desktop shortcuts, a packaged smoke
+  test of the installed app, a reinstall over the existing copy (the upgrade
+  path) and a silent uninstall. Workspace data in `%APPDATA%\weft` must survive
+  both the reinstall and the uninstall, and the update cache must be removed by
+  the uninstall. The installer is kept as a 14-day workflow artifact.
+- The release workflow runs the same check before publishing, and unsigned
+  Windows release notes explain how to verify the installer against
+  `SHA256SUMS.txt` and get past SmartScreen.
+
+Verified on GitHub's `windows-latest` runner (Weft 1.1.0, Electron 44.9.0).
+Not verified: a desktop Windows 10/11 machine, an upgrade between two real
+releases (the reinstall uses the same version), and the interactive installer
+and uninstaller pages, which a silent run does not show; installers remain
+unsigned.
+
 ## v1.1.0 — 2026-10-18
 
 Minor release. Version strings (`package.json`, `package-lock.json`,
