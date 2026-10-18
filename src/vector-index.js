@@ -89,6 +89,10 @@ export class VectorIndex {
     if (!current) setInfo('vectorIndexVersion', String(VECTOR_INDEX_VERSION));
     this.keys = keys;
     this.loadConfigs();
+    if (getInfo('workspaceMemoryVectors') !== '1') {
+      for (const [workspaceId, config] of this.configs) if (config.enabled === 1) this.requeueWorkspace(workspaceId, now);
+      setInfo('workspaceMemoryVectors', '1');
+    }
     if (keys && getInfo('vectorsSealed') !== '1') {
       for (const [workspaceId, config] of this.configs) if (config.enabled === 1) this.requeueWorkspace(workspaceId, now);
       setInfo('vectorsSealed', '1');
@@ -107,17 +111,18 @@ export class VectorIndex {
   enabled(workspaceId) { return this.configs.get(workspaceId)?.enabled === 1; }
   /** Called inside the record commit transaction. */
   enqueue(collection, record, now) {
-    if (!this.enabled(record.workspaceId)) return;
+    const workspaceId = collection === 'workspaces' ? record.id : record.workspaceId;
+    if (!this.enabled(workspaceId)) return;
     this.db.prepare('INSERT INTO vector_queue(collection, record_id, workspace_id, enqueued_at) VALUES (?, ?, ?, ?) ON CONFLICT(collection, record_id) DO UPDATE SET workspace_id = excluded.workspace_id, enqueued_at = excluded.enqueued_at, attempts = 0, last_error = NULL')
-      .run(collection, record.id, record.workspaceId, now);
+      .run(collection, record.id, workspaceId, now);
   }
   /** Called inside the commit transaction for a deleted record. */
-  remove(collection, id) {
+  remove(collection, id, { keepConfig = false } = {}) {
     const rows = this.db.prepare('SELECT DISTINCT workspace_id FROM vector_chunks WHERE collection = ? AND record_id = ?').all(collection, id);
     this.db.prepare('DELETE FROM vector_chunks WHERE collection = ? AND record_id = ?').run(collection, id);
     this.db.prepare('DELETE FROM vector_queue WHERE collection = ? AND record_id = ?').run(collection, id);
     for (const row of rows) this.cache.delete(row.workspace_id);
-    if (collection === 'workspaces') { this.db.prepare('DELETE FROM vector_config WHERE workspace_id = ?').run(id); this.configs.delete(id); }
+    if (collection === 'workspaces' && !keepConfig) { this.db.prepare('DELETE FROM vector_config WHERE workspace_id = ?').run(id); this.configs.delete(id); }
   }
   /**
    * Called inside the commit transaction: drop vectors of capture versions that are restricted,
@@ -156,7 +161,7 @@ export class VectorIndex {
   requeueWorkspace(workspaceId, now) {
     // From the record table, not the search index: an encrypted profile builds its in-memory index in the background. Records that
     // have nothing to embed are dropped from the queue when processed.
-    this.db.prepare(`INSERT INTO vector_queue(collection, record_id, workspace_id, enqueued_at) SELECT collection, id, workspace_id, ? FROM main.records WHERE workspace_id = ? AND collection <> 'workspaces'
+    this.db.prepare(`INSERT INTO vector_queue(collection, record_id, workspace_id, enqueued_at) SELECT collection, id, workspace_id, ? FROM main.records WHERE workspace_id = ?
       ON CONFLICT(collection, record_id) DO UPDATE SET enqueued_at = excluded.enqueued_at, attempts = 0, last_error = NULL`).run(now, workspaceId);
     this.cache.delete(workspaceId);
   }

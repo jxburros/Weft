@@ -479,7 +479,7 @@ export class Providers {
           try {
             const page = await this.searchWorkspace({ workspaceId, query: item.query, limit: item.limit ?? 10 });
             const results = (Array.isArray(page) ? page : page?.items ?? []).map(result => ({ type: result.type, id: result.id, ...(result.versionId ? { versionId: result.versionId } : {}), revision: result.revision,
-              title: result.title, excerpt: result.content, citation: result.citation, localOnly: Boolean(result.localOnly) }));
+              title: result.title, excerpt: result.content, updatedAt: result.updatedAt, passage: result.passage, citation: result.citation, localOnly: Boolean(result.localOnly) }));
             entries.push({ ...base, source: `workspace search "${String(item.query).slice(0, 200)}"`, results, absence: page?.absence ?? null, localOnly: results.some(result => result.localOnly),
               provenance: { query: String(item.query).slice(0, 1000), results: results.length, mode: page?.mode ?? 'lexical' } });
           } catch (error) { failure(base, error); }
@@ -529,6 +529,9 @@ export class Providers {
     const workspace = this.workspace.workspace?.(conversation.workspaceId);
     for (const [field, title] of [['description', 'Workspace description'], ['instructions', 'Workspace instructions'], ['memory', 'Workspace memory']]) {
       if (workspace?.[field]) entries.unshift({ key: `workspace:${field}`, kind: 'workspace', title, text: workspace[field], localOnly: Boolean(workspace.contextLocalOnly), trustedInstructions: field === 'instructions' });
+    }
+    for (const memory of (this.workspace.data?.memories || []).filter(m => m.workspaceId === conversation.workspaceId || m.scope === 'global').slice(-8)) {
+      entries.push({ key: `memory:${memory.id}`, kind: 'memory', title: `${memory.scope === 'global' ? 'Shared' : 'Workspace'} learned memory: ${memory.title}`, text: `${memory.content}\nSources: ${memory.sources.join(', ')}`, source: `memories ${memory.id} revision ${memory.revision}`, localOnly: memory.localOnly, provenance: { recordId: memory.id, revision: memory.revision, sources: memory.sources } });
     }
     // Attached search results share one retrieval cap; lower-ranked results are omitted, never cut off.
     let retrievalTokens = 0;

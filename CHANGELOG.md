@@ -3,6 +3,15 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## 1.3.0 — 2026-10-18
+
+- Capture visible Gmail/Outlook messages or selected page text into a workspace inbox through a reviewed Send to Weft flow; no domain, mail account connection or relay required.
+- Add inbox summarize, sort, remember and task drafts with explicit model/action review, source metadata, on-device defaults and archive controls.
+- Extend hybrid retrieval to workspace and learned memory, with longer cited passages and an opt-in relevant-context chat control.
+- Add opt-in background learning from saved workspace content, editable workspace/shared memory, source/model provenance, cloud consent, erasure and pause controls.
+- Prevent stale embedding results from being committed after source changes, deletion, lock or configuration changes; preserve older-profile migration.
+- Gmail/Outlook adapters and provider learning are fixture-tested; live signed-in accounts are not verified. Learning is bounded and runs only while Weft is open and unlocked. See docs/CAPTURE-AND-LEARNING.md for limits and deletion semantics.
+
 ## v1.2.0 — 2026-10-18
 
 - Add workspace instructions, persistent memory, and ongoing/project workspace types with optional due dates; keep the editor stable during refreshes and overlapping dialog saves.

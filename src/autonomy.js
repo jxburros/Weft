@@ -30,8 +30,10 @@ export function classify(actionClass, names) {
   for (const name of (Array.isArray(names) ? names : names.split(/\s+/)).filter(Boolean)) classifications.set(name, actionClass);
 }
 const add = classify;
+add('administration', 'learning.configure learning.erase memories.create memories.update memories.delete');
+add('local_read', 'learning.status memories.list memories.get');
 add('local_read', `guide.get browser.info tabs.list page.inspect storage.info downloads.list history.list bookmarks.list workspace.snapshot workspaces.list workspaces.get settings.get activity.list activity.verify search.query artifacts.list artifacts.get models.list chat.preview approvals.list autonomy.get`);
-add('external_read', `page.readable page.snapshot page.title page.content page.screenshot page.pdf`);
+add('external_read', `page.message page.readable page.snapshot page.title page.content page.screenshot page.pdf`);
 add('local_write', `tabs.activate tabs.close tabs.pin tabs.claim tabs.release page.find page.zoom page.stop downloads.cancel bookmarks.create bookmarks.delete workspaces.create workspaces.update workspaces.archive workspaces.restore workspaces.duplicate conversations.message tasks.transition artifacts.capture artifacts.create artifacts.annotate artifacts.delete chat.cancel browser.close`);
 add('external_write', `tabs.new tabs.duplicate tabs.move page.navigate page.back page.forward page.reload page.click page.fill page.clickAt page.press`);
 // Observation, raw input, control modes and handoffs (#9, #15, #41).
@@ -151,7 +153,7 @@ export function resourceForCommand(name) {
 /** Data classes a command can disclose. Metadata-only commands return []. Unknown reads default to workspace records. */
 const dataOverrides = {
   'guide.get': [], 'browser.info': [], 'plugins.list': [], 'page.extract': ['page_content'], 'activity.report': ['activity', 'workspace_records'], 'storage.info': [], 'models.list': [], 'tabs.list': [], 'autonomy.get': [], 'settings.get': [],
-  'page.readable': ['page_content'], 'page.title': ['page_content'], 'page.content': ['page_content'], 'page.inspect': ['page_content'], 'page.find': ['page_content'],
+  'page.message': ['page_content'], 'page.readable': ['page_content'], 'page.title': ['page_content'], 'page.content': ['page_content'], 'page.inspect': ['page_content'], 'page.find': ['page_content'],
   'page.screenshot': ['page_capture'], 'page.pdf': ['page_capture'], 'artifacts.capture': ['page_capture'],
   'history.list': ['browsing_history'], 'downloads.list': ['browsing_history'],
   'activity.list': ['activity'], 'activity.verify': ['activity'], 'approvals.list': ['activity'],

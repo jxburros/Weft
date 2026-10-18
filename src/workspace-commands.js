@@ -25,6 +25,7 @@ const redactionRegion = z.strictObject({ x: z.number().min(0).max(100000), y: z.
 export const capturePolicy = z.enum(['exclude-restricted', 'derivatives-only', 'all']).describe('exclude-restricted (default) leaves restricted originals out; derivatives-only exports only sanitized derivative versions; all includes restricted originals.');
 export const finishReason = z.enum(['stop', 'length', 'content_filter', 'other', 'cancelled', 'timeout', 'emergency_stop', 'disconnected']);
 export const recordShapes = {
+  memories: { title, content: z.string().max(4000), localOnly: z.boolean().default(true), scope: z.enum(['workspace', 'global']).default('workspace'), sources: z.array(z.string().max(1000)).max(20).default([]), origin: originInput.optional() },
   materials: { title, localOnly: z.boolean().default(false), kind: z.enum(['note', 'website', 'file', 'linked-file', 'linked-folder', 'service']).default('note'), content: text.default(''), url: httpUrl.nullable().optional(), filename: z.string().max(255).optional(), mimeType: z.string().max(128).optional(), fileBase64: z.string().max(14000000).optional(), note: text.optional(), tags: tags.default([]), pinned: z.boolean().default(false), origin: originInput.optional() },
   context: { title, localOnly: z.boolean().default(false), content: text.default(''), category: z.enum(['confirmed', 'findings', 'questions', 'instructions', 'decisions']).default('findings'), sources: z.array(z.string().max(16384)).max(100).default([]), tags: tags.default([]),
     citations: z.array(citationInput).max(50).default([]).describe('Exact citations (capture versions with quote selectors, record revisions or linked source versions); on update they are appended.'), origin: originInput.optional() },
@@ -36,6 +37,9 @@ export const recordShapes = {
 };
 export const modelShape = { provider: z.string().max(100).optional(), endpoint: httpUrl.optional(), model: z.string().max(200).optional() };
 export const commandDefinitions = {
+  'learning.status': ['Human reviews background learning configuration, progress and learned memory', optionalWorkspace],
+  'learning.configure': ['Human opts into bounded background learning from saved materials, context, tasks and conversations; shared memory applies across workspaces', { ...optionalWorkspace, enabled: z.boolean(), modelId: id.optional(), global: z.boolean().default(false), acknowledgeEgress: z.boolean().optional() }],
+  'learning.erase': ['Erase learned memory and pause learning; existing source fingerprints remain suppressed', { ...optionalWorkspace, scope: z.enum(['workspace', 'global', 'all']) }],
   'history.list': ['List recent workspace visits', { ...optionalWorkspace, limit: z.number().int().min(1).max(500).optional() }],
   'history.clear': ['Clear workspace browsing history (human only)', optionalWorkspace],
   'bookmarks.list': ['List pinned website materials', optionalWorkspace],
@@ -62,6 +66,7 @@ export const commandDefinitions = {
       queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.'),
     resources: resourceSettingsShape.optional() }],
   'search.query': ['Search project records and saved text locally (BM25, fused with opt-in local embeddings when enabled); page mode adds coverage and verified absence', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional(),
+    passageChars: z.number().int().min(300).max(6000).optional().describe('Return a cited passage of this many characters instead of a short snippet.'),
     mode: z.enum(['auto', 'lexical', 'hybrid']).optional().describe('auto (default) fuses lexical and vector results when this workspace has embeddings enabled; lexical uses BM25 only; hybrid requires embeddings.') }],
   'search.status': ['Report lexical and optional embedding index coverage for a workspace, including background index rebuild progress', optionalWorkspace],
   'search.indexing': ['Human pauses or resumes the background full-text index rebuild; searches stay partial while it is paused', { ...optionalWorkspace,

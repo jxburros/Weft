@@ -546,6 +546,7 @@ export class MetadataStore {
           this.indexRecord(row.collection, row.record);
           if (row.collection === 'artifacts') this.vectors?.pruneWithheld(row.collection, row.record);
           if (indexable(row.collection, row.record)) this.vectors?.enqueue(row.collection, row.record, this.clock());
+          else this.vectors?.remove(row.collection, row.record.id, { keepConfig: true });
         }
         for (const row of plan.reseq) db.prepare('UPDATE records SET seq = ? WHERE collection = ? AND id = ?').run(row.seq, row.collection, row.record.id);
         for (const item of plan.deletes) {
@@ -854,7 +855,7 @@ export class MetadataStore {
     if (keep.size) this.db.prepare('UPDATE search_docs SET workspace_id = ?, local_only = ?, revision = ? WHERE collection = ? AND record_id = ?').run(record.workspaceId, record.localOnly === true ? 1 : 0, Number.isSafeInteger(record.revision) ? record.revision : null, collection, record.id);
     for (const document of documents) {
       const row = this.db.prepare('INSERT INTO search_docs(collection, record_id, version_id, workspace_id, revision, version_number, local_only, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(collection, record.id, document.versionId, record.workspaceId, document.revision, document.versionNumber, document.localOnly ? 1 : 0, document.updatedAt);
+        .run(collection, record.id, document.versionId, collection === 'workspaces' ? record.id : record.workspaceId, document.revision, document.versionNumber, document.localOnly ? 1 : 0, document.updatedAt);
       this.db.prepare('INSERT INTO search_fts(rowid, title, body) VALUES (?, ?, ?)').run(row.lastInsertRowid, document.title, document.body);
     }
   }
@@ -868,9 +869,9 @@ export class MetadataStore {
   }
   /** BM25-ranked full-text search, scoped to one workspace inside the SQL query. */
   /** Title, excerpt and citation fields of one indexed document (vector-only results). */
-  document({ collection, recordId, versionId = '', start = 0 }) {
-    const row = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, f.title AS title, substr(f.body, ?, 300) AS excerpt
-      FROM search_docs d JOIN search_fts f ON f.rowid = d.rowid WHERE d.collection = ? AND d.record_id = ? AND d.version_id = ?`).get(Math.max(1, start + 1), collection, recordId, versionId);
+  document({ collection, recordId, versionId = '', start = 0, length = 300 }) {
+    const row = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, f.title AS title, substr(f.body, ?, ?) AS excerpt
+      FROM search_docs d JOIN search_fts f ON f.rowid = d.rowid WHERE d.collection = ? AND d.record_id = ? AND d.version_id = ?`).get(Math.max(1, start + 1), length, collection, recordId, versionId);
     return row ? { ...row, excerpt: `${start ? '…' : ''}${String(row.excerpt || '').replace(/\s+/g, ' ').trim()}` } : null;
   }
   /** Number of documents a query matches in a workspace (all or any terms). */
@@ -895,7 +896,7 @@ export class MetadataStore {
     const excerpt = (matched, rowid) => {
       const { title, body } = text.get(rowid);
       const at = Math.max(0, (body.search(pattern) || 0) - 80);
-      return { title, excerpt: `${at ? '…' : ''}${body.slice(at, at + 300).replace(/\s+/g, ' ').trim()}` };
+      return { title, start: at, excerpt: `${at ? '…' : ''}${body.slice(at, at + 300).replace(/\s+/g, ' ').trim()}` };
     };
     const rows = statement.all(compiled.all, workspaceId, limit).map(row => ({ ...row, match: 'all', query: compiled.all }));
     if (rows.length < limit && compiled.any) {

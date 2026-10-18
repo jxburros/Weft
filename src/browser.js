@@ -1,4 +1,5 @@
 import electron from 'electron';
+import { messageCaptureScript } from './message-capture.js';
 import { AutomationAdmission } from './admission.js';
 import { OBSERVATION_WORLD, MASK_CSS, SENSITIVE_FOCUS_SCRIPT, credentialScript, observationScript, paymentScript, pageString, pngSize } from './page-observation.js';
 
@@ -1831,6 +1832,15 @@ export class Browser {
         return this.describe(tab);
       case 'page.reload': contents.reload(); return { success: true };
       case 'page.stop': contents.stop(); return { success: true };
+      case 'page.message': {
+        if (!human) throw failure('human_required', 'Message capture requires the trusted browser interface');
+        if (!/^https?:/.test(contents.getURL())) throw new Error('Open a web page first');
+        const version = tab.version;
+        if (args.expectedVersion !== undefined && args.expectedVersion !== version) throw stale('page_changed', 'The page changed; capture again');
+        const result = await bounded(this.observe(contents, null, {}, messageCaptureScript(args.mode || 'detect')), 5000);
+        if (tab.version !== version) throw stale('page_changed', 'The page changed during message capture');
+        return { ...result, tabId: tab.id, workspaceId: tab.workspaceId, navigationVersion: version, capturedAt: new Date().toISOString() };
+      }
       case 'page.inspect': return this.describe(tab);
       case 'page.snapshot': {
         await this.assertObservable(tab, name, context);

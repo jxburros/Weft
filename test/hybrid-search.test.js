@@ -294,3 +294,28 @@ test('restricted and purged capture versions are never embedded, and restricting
   assert.equal(vectorsOf(derivative), 0);
   assert.equal(f.server.requests.slice(before).some(request => JSON.stringify(request.body).includes('new tires')), false, 'purged and restricted text is not sent for embedding');
 });
+
+test('workspace memory is embedded, private to its workspace, and clearing it removes derived vectors', async t => {
+  const f = await fixture(t);
+  await f.workspace.execute('workspaces.update', { id: f.workspaceId, changes: { memory: 'The sedan needs new tires.', contextLocalOnly: true } }, human);
+  await f.enable(); await f.retrieval.drain();
+  const hits = await f.run('search.query', { query: 'automobile', mode: 'hybrid', passageChars: 1000 });
+  assert.equal(hits[0].type, 'workspaces'); assert.equal(hits[0].localOnly, true);
+  assert.match(hits[0].content, /sedan/);
+  await f.workspace.execute('workspaces.update', { id: f.workspaceId, changes: { memory: '' } }, human);
+  assert.equal(f.workspace.storage.vectors.chunks('workspaces', f.workspaceId).length, 0);
+  assert.deepEqual(await f.run('search.query', { query: 'automobile', mode: 'hybrid' }), []);
+});
+test('late embedding results cannot resurrect deleted records or disabled vectors', async t => {
+  const f = await fixture(t);
+  await f.enable(); await f.retrieval.drain();
+  const material = await f.run('materials.create', { title: 'Car', content: 'Sedan tires' });
+  let release; const gate = new Promise(r => { release = r; });
+  const original = f.retrieval.embed.bind(f.retrieval);
+  f.retrieval.embed = async (...args) => { await gate; return original(...args); };
+  const pending = f.retrieval.drain();
+  await f.run('materials.delete', { id: material.id });
+  release(); await pending;
+  assert.equal(f.workspace.storage.vectors.chunks('materials', material.id).length, 0);
+  assert.deepEqual(await f.run('search.query', { query: 'automobile', mode: 'hybrid' }), []);
+});

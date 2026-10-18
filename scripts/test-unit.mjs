@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 // Browser smoke tests are mandatory in the separate Linux Chromium job.
-const browserTests = new Set(['browser.test.js', 'browser-workspace.test.js', 'browser-security.test.js', 'extensions-browser.test.js', 'gui.test.js', 'visual.test.js', 'update-transport.test.js',
+const browserTests = new Set(['message-capture.test.js', 'browser.test.js', 'browser-workspace.test.js', 'browser-security.test.js', 'extensions-browser.test.js', 'gui.test.js', 'visual.test.js', 'update-transport.test.js',
   // Headless lifecycle, tab suspension and responsiveness budgets run real Electron in the Linux job.
   'headless.test.js', 'suspension.test.js', 'responsiveness.test.js',
   // The accessibility audit and the community-list/agent-input screens drive the real GUI.

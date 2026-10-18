@@ -40,7 +40,7 @@ const REPLAYED = Symbol.for('weft.replayed');
 const WORKFLOW_EXECUTABLE = ['watch', 'steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
-const HUMAN_ADMIN = new Set(['search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+const HUMAN_ADMIN = new Set(['memories.create', 'memories.update', 'memories.delete', 'search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview']);
 // activity.list is served by the durable activity log (src/activity-log.js) through the dispatcher.
 const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'workspaces.list', 'workspaces.get', 'workspaces.export', 'artifacts.versions', 'conversations.messages',
@@ -95,6 +95,7 @@ function normalizeHostname(value) {
   return hostname;
 }
 function validateStoredState(data) {
+  data.memories ??= []; // Additive collection for pre-1.3 profiles and legacy JSON migrations.
   if (!Array.isArray(data.workspaces) || !data.workspaces.length || !collections.every(name => Array.isArray(data[name])) || !Array.isArray(data.activity) || !Array.isArray(data.history) || !data.settings || !Array.isArray(data.browserSession?.tabs)) throw new Error('Unsupported or invalid workspace schema; existing state has been preserved');
   const workspaceIds = new Set(data.workspaces.map(item => item.id));
   if (!data.workspaces.some(item => item.id === data.activeWorkspaceId && !item.archived)) throw new Error('Workspace state has no active workspace; existing state has been preserved');
@@ -464,7 +465,8 @@ export class WorkspaceService {
     try { this.save({ only: ['browserSession'] }); } catch (error) { this.data.browserSession = before; throw error; }
   }
   snapshot({ agent = false } = {}) {
-    return { ...clone(this.data), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(item => artifactSummary(item, { agent })), materials: this.data.materials.map(withoutFile) };
+    const { learning, ...visible } = this.data;
+    return { ...clone(visible), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(item => artifactSummary(item, { agent })), materials: this.data.materials.map(withoutFile) };
   }
   workspace(id = this.activeWorkspaceId) {
     const record = this.data.workspaces.find(item => item.id === id);
@@ -607,6 +609,10 @@ export class WorkspaceService {
   }
   execute(name, args = {}, context = {}) {
     // Search reads and embedding administration wait on local model endpoints; they never hold the write queue.
+    if (name.startsWith('learning.')) {
+      if (!this.learning) throw new Error('Background learning is unavailable');
+      return this.learning.execute(name, workspaceSchemas[name].parse(args), context);
+    }
     if (name.startsWith('search.')) return this.searchCommand(name, args, context);
     const run = this.queue.then(() => this.run(name, args, context));
     this.queue = run.catch(() => {});
@@ -832,16 +838,18 @@ export class WorkspaceService {
       const key = documentKey(match.collection, match.recordId, match.versionId);
       const entry = rows.get(key) ?? { row: this.storage.document({ collection: match.collection, recordId: match.recordId, versionId: match.versionId, start: match.start }) };
       if (!entry.row) return;
-      rows.set(key, { ...entry, vectorRank: index + 1, similarity: match.similarity });
+      rows.set(key, { ...entry, passageStart: match.start, vectorRank: index + 1, similarity: match.similarity });
     });
     const ordered = vector.used
       ? reciprocalRankFusion([lexical.map(row => documentKey(row.collection, row.record_id, row.version_id)), vector.matches.map(match => documentKey(match.collection, match.recordId, match.versionId))])
         .map(({ key, score }) => ({ ...rows.get(key), fused: score })).filter(entry => entry.row)
       : [...rows.values()];
-    const results = ordered.slice(offset, offset + limit).map(({ row, lexicalRank, vectorRank, similarity, fused }) => {
+    const results = ordered.slice(offset, offset + limit).map(({ row, lexicalRank, vectorRank, similarity, fused, passageStart }) => {
+      const start = passageStart ?? row.start ?? 0;
+      const passage = args.passageChars ? this.storage.document({ collection: row.collection, recordId: row.record_id, versionId: row.version_id, start, length: args.passageChars }) : null;
       const citation = { recordType: row.collection, recordId: row.record_id, revision: row.revision, versionId: row.version_id || null, versionNumber: row.version_number };
       return { type: row.collection, id: row.record_id, ...(row.version_id ? { versionId: row.version_id, versionNumber: row.version_number } : {}), revision: row.revision,
-        localOnly: row.local_only === 1, title: row.title, content: String(row.excerpt || '').slice(0, 300), updatedAt: row.updated_at,
+        localOnly: row.local_only === 1, title: row.title, content: String(passage?.excerpt || row.excerpt || '').slice(0, args.passageChars || 300), ...(passage ? { passage: { start, maxChars: args.passageChars } } : {}), updatedAt: row.updated_at,
         score: Number((fused ?? -row.score).toFixed(6)), match: lexicalRank ? row.match : 'semantic', citation,
         ...(row.shared && { shared: row.shared }), ...(vector.used && { ranking: { method: 'rrf', k: RRF_K, lexicalRank: lexicalRank ?? null, vectorRank: vectorRank ?? null, similarity: similarity === undefined ? null : Number(similarity.toFixed(6)) } }) };
     });
@@ -867,7 +875,7 @@ export class WorkspaceService {
   }
   /** Lexical rows of records shared into a workspace (active collection membership only), tagged with their collection. */
   sharedSearchRows(workspaceId, query, limit) {
-    const shared = sharedInto(this.data, workspaceId);
+    const shared = [...sharedInto(this.data, workspaceId), ...(this.data.memories || []).filter(m => m.scope === 'global' && m.workspaceId !== workspaceId).map(m => ({ type: 'memories', id: m.id, ownerWorkspaceId: m.workspaceId, collectionId: 'global-memory', role: 'reader' }))];
     if (!shared.length) return [];
     const allowed = new Map(shared.map(item => [`${item.type}:${item.id}`, item]));
     const rows = [];
@@ -1565,6 +1573,7 @@ export class WorkspaceService {
           if (collection === 'tasks' && picked.status === 'waiting') picked.status = 'waiting_on_human';
           fields = z.strictObject(shape).parse(picked);
           if (collection === 'tasks') this.importTaskState(item, fields, actor, loss);
+          if (collection === 'memories') fields.scope = 'workspace';
           if (collection === 'siteRules') {
             if (fields.enabled || fields.scope !== 'workspace') loss(collection, 'enabled/scope', 'imported site rules are workspace-scoped and disabled until reviewed');
             fields.scope = 'workspace'; fields.enabled = false; this.validateRule(fields);

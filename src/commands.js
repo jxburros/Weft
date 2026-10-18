@@ -76,6 +76,7 @@ const definitions = {
     agent: z.string().min(1).max(200).optional().describe('Actor identity to assist or drive; omit to let any agent claim.'),
     allowRawInput: z.boolean().optional().describe('agent-drives only: permit coordinate and keyboard input.'), expectedVersion }],
   'page.inspect': ['Inspect tab state and navigation version', page],
+  'page.message': ['Detect or preview an open webmail message or selected text for human capture; never stores or sends it', { ...page, mode: z.enum(['detect', 'message', 'thread', 'selection']).optional() }],
   'page.readable': ['Read text and links from the current page', page],
   'page.snapshot': ['Read a semantic/accessibility snapshot with frame-scoped element refs and coverage report', { ...page,
     maxNodes: z.number().int().min(1).max(3000).optional().describe('Maximum nodes to return (default 400); the result reports truncation.'),
@@ -157,7 +158,7 @@ for (const name of PAGEABLE) if (definitions[name] && !definitions[name][1].page
 
 for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith('tabs.')) shape.workspaceId = workspaceId;
 
-const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'tabs.setControlMode', 'page.allowOnce',
+const humanOnly = new Set(['learning.status', 'learning.configure', 'learning.erase', 'memories.create', 'memories.update', 'memories.delete', 'page.message', 'browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'tabs.setControlMode', 'page.allowOnce',
   'cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear', 'history.clear', 'settings.update',
   'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete', 'models.probe', 'models.discover',
   'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.update', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback',
@@ -173,7 +174,7 @@ const humanOnly = new Set(['browser.resumeAutomation', 'browser.emergencyStop', 
   ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status'),
   'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop',
   'display.hide', ...Object.keys(browsingCommandDefinitions)]);
-const readOnly = new Set(['browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
+const readOnly = new Set(['learning.status', 'page.message', 'browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'collections.read', 'sources.read', 'services.read',
   'artifacts.compare', 'artifacts.verify', 'artifacts.review', 'artifacts.readOriginal',
