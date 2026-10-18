@@ -90,7 +90,14 @@ A release tag is blocked unless all of these hold:
    upgrade from the previous release using the in-app Update Center.
 
 A dry run (`workflow_dispatch`, default) builds and smoke-tests without creating a
-release. Local packaging: `npm run dist -- --linux AppImage` (or `--win nsis`,
+release, including when dispatched on a tag. Each platform verifies its update
+manifests before uploading artifacts, and all platform jobs finish even if one
+fails. CI also builds both macOS architectures and smoke-tests the native app.
+The shared `scripts/release/build-packages.js` entry point removes empty
+`CSC_LINK`/`WIN_CSC_LINK` values supplied by missing Actions secrets; configured
+certificates and empty certificate passwords are preserved.
+
+Local packaging: `npm run dist -- --linux AppImage` (or `--win nsis`,
 `--mac dmg zip`); outputs go to `dist/` (ignored by git).
 
 ### Revoking a bad release
