@@ -19,10 +19,11 @@ alone is not a shipped capability.
   Windows release notes explain how to verify the installer against
   `SHA256SUMS.txt` and get past SmartScreen.
 
-Not yet verified: the check's first run on a Windows runner is pending (it was
-written and parse-checked with PowerShell 7.4 on Linux only); the interactive
-installer and uninstaller pages are not exercised by a silent run; installers
-remain unsigned.
+Verified on GitHub's `windows-latest` runner (Weft 1.1.0, Electron 44.9.0).
+Not verified: a desktop Windows 10/11 machine, an upgrade between two real
+releases (the reinstall uses the same version), and the interactive installer
+and uninstaller pages, which a silent run does not show; installers remain
+unsigned.
 
 ## v1.1.0 — 2026-10-18
 
