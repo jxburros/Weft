@@ -142,3 +142,12 @@ test('the profile folder the uninstaller may remove is the one packaged Weft use
   const check = readFileSync(join(root, 'scripts/release/windows-install-check.ps1'), 'utf8');
   assert.match(check, new RegExp(`\\$profileDir = Join-Path \\$env:APPDATA '${name}'`));
 });
+
+test('release packages upload as one flat folder so publish finds the manifests at release/', () => {
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  const upload = workflow.match(/name: weft-\$\{\{ matrix\.name \}\}[\s\S]*?path: (.*)/);
+  assert.ok(upload, 'platform upload step not found');
+  assert.equal(upload[1].trim(), 'release-assets/');
+  assert.match(workflow, /pattern: weft-\*\n\s+path: release\n\s+merge-multiple: true/);
+  assert.match(workflow, /node scripts\/release\/verify-assets\.js release "\$VERSION"/);
+});

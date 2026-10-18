@@ -3,6 +3,23 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
+## v1.1.3 — 2026-10-18
+
+Patch release that publishes the v1.1.2 changes; the v1.1.2 tag built, signed
+where configured and smoke-tested every platform, but its publish job found no
+update manifest and created no release.
+
+### Fixed
+
+- Release workflow: each platform now stages its packages, `latest*.yml`
+  manifests and signing note in one flat folder before upload. Previously the
+  upload's common ancestor was the repository root, so the files arrived under
+  `release/dist/` and `verify-assets.js release` stopped with "No latest*.yml
+  update manifest found". A regression test checks the upload path, and the
+  staging step fails the platform job if no manifest was produced.
+- Verification limit: the fix is exercised only by the next tagged release run;
+  the workflow is not executed locally.
+
 ## v1.1.2 — 2026-10-18
 
 Patch release with the release-pipeline fix for the failed v1.1.1 macOS build,
