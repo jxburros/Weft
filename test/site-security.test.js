@@ -103,6 +103,15 @@ test('storage policy strips cookies, sandboxes blocked documents, blocks cross-s
   assert.equal(policy.headersReceived({ url: 'https://tracker.test/pixel', ...embedded, responseHeaders: { 'set-cookie': ['t=1'] } }, workspaceId).responseHeaders['set-cookie'], undefined);
   assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://cdn.news.example/a'), ...embedded }, workspaceId), {}, 'same-site subdomains keep cookies');
   assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://keep.test/a'), ...embedded }, workspaceId), {}, 'an explicit exception allows cross-site cookies');
+  // A new top document's request can arrive before its commit, while the frame still reports the previous (tracker) page.
+  const staleTop = { url: 'https://tracker.test/echo', parent: null };
+  staleTop.top = staleTop;
+  const racing = { resourceType: 'image', webContentsId: 8, frame: staleTop, initiatorOrigin: 'https://news.example', webContents: { getURL: () => 'https://tracker.test/echo' } };
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://tracker.test/pixel'), ...racing }, workspaceId).requestHeaders, { Accept: '*/*' }, 'the requesting top document, not the stale committed URL, decides cross-site');
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://news.example/logo'), ...racing }, workspaceId), {}, 'the new page keeps its own first-party cookies during the race');
+  const subframe = { url: 'https://tracker.test/frame', parent: staleTop, top: { url: 'https://news.example/' } };
+  assert.deepEqual(policy.beforeSendHeaders({ ...cookieRequest('https://tracker.test/x'), resourceType: 'xhr', webContentsId: 8, frame: subframe, initiatorOrigin: 'https://tracker.test' }, workspaceId).requestHeaders, { Accept: '*/*' }, 'an embedded frame is judged by its top document, not its own initiator');
+  assert.equal(policy.activityFor(8).crossSiteCookiesBlocked, 2);
   assert.equal(approximateSite('a.b.example.co.uk'), 'example.co.uk');
   assert.equal(policy.activityFor(7).crossSiteCookiesBlocked, 2);
 

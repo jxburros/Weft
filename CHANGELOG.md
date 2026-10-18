@@ -16,6 +16,16 @@ code on this date (`npm run test:docs` and guidance generation are clean).
 Installing, upgrading across real versions and rollback on each operating system
 remain unverified on real machines (`docs/RELEASING.md`).
 
+### Fixed
+
+- Cross-site cookie blocking no longer races page commits: a new top
+  document's subresource requests can reach the main process before its commit,
+  while the frame still reports the previous page's URL, so a tracker the person
+  had just visited could receive its first-party cookie when embedded by the next
+  site. Top-frame requests are now judged by their initiating document's origin
+  (embedded frames still by their top document); regression covered in
+  `test/site-security.test.js`.
+
 ## 2026-10-17 — Agent
 
 ### Changed
