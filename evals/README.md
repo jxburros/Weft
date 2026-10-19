@@ -22,8 +22,9 @@ Deltas compare round trips/errors/retries with the committed baseline. Failure
 or increased counts makes the runner exit nonzero. Error text changes can
 legitimately break expected-refusal matching and require review.
 
-Tasks cover capture → finding → release, stale-version recovery and refused
-human-only site/trust operations. These prove reference solvability and detect
+Tasks cover capture → finding → release, stale-version recovery, refused
+human-only site/trust operations, and a cited proposal whose promotion to
+confirmed context is refused. These prove reference solvability and detect
 contract drift; they do not measure a model's independent reasoning quality,
 Chromium rendering, network policy completeness or prompt-injection resistance.
 A live-model adapter and real-browser eval mode are not implemented. Passing a

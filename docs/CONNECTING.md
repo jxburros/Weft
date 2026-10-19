@@ -43,8 +43,10 @@ For MCP, configure your client:
 }
 ```
 
-MCP advertises ten grouped tools, including `weft_reference` for command
-discovery. Execution tools accept a canonical command as `action` and its `args`;
+MCP advertises ten tools: `weft_tabs`, `weft_page`, `weft_workspace`,
+`weft_memory`, `weft_records`, `weft_knowledge`, `weft_artifacts`,
+`weft_browser`, `weft_models` and `weft_reference` for command discovery.
+Execution tools accept a canonical command as `action` and its `args`;
 legacy underscore names such as `page_readable` remain accepted but unadvertised.
 Schemas and structured outcomes are shared. Screenshots retain MCP image content.
 The bridge writes only protocol messages to stdout. `WEFT_API_URL` accepts loopback HTTP origins only and clients
@@ -83,8 +85,8 @@ applying twice. `batch.execute` applies up to 100 record commands all-or-nothing
 destructive record commands, imports and batches accept `dryRun` to preview the exact
 changes. See [ADR 011](decisions/011-transactional-storage-search-and-recovery.md).
 
-Human-only policy, configuration, storage-administration, override, and takeover
-commands appear in discovery but reject automation callers. Every other agent
+Human-only policy, configuration, storage-administration, memory-editing,
+override, and takeover commands appear in discovery but reject automation callers. Every other agent
 command passes one authority gate (ADR-005): reads run, local work runs at the
 default level, and external actions such as clicks, form fills, scripts and model
 sends wait in the Agent requests queue until you approve them once or for a
