@@ -1238,6 +1238,8 @@ function navigateSection(next, remember = true) {
   else focusView($("content"));
 }
 function openDialog(title, body, footer = "", wide = false, trusted = "") {
+  // Opening a dialog is a user choice too: a pending saved-view restore must not steal its focus.
+  navigationSerial++;
   dialogGeneration++;
   openTaskDetail = null;
   const desk = $("command-desk");

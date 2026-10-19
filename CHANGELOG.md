@@ -10,6 +10,7 @@ alone is not a shipped capability.
 - Extend hybrid retrieval to workspace and learned memory, with longer cited passages and an opt-in relevant-context chat control.
 - Add opt-in background learning from saved workspace content, editable workspace/shared memory, source/model provenance, cloud consent, erasure and pause controls.
 - Prevent stale embedding results from being committed after source changes, deletion, lock or configuration changes; preserve older-profile migration.
+- Keep dialog focus when a saved workspace view finishes restoring during startup.
 - Gmail/Outlook adapters and provider learning are fixture-tested; live signed-in accounts are not verified. Learning is bounded and runs only while Weft is open and unlocked. See docs/CAPTURE-AND-LEARNING.md for limits and deletion semantics.
 
 ## v1.2.0 — 2026-10-18

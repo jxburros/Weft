@@ -117,6 +117,7 @@ if (process.argv.includes("--visual-child")) {
     await run('document.getElementById("search-button").focus()');
     await click('#search-button');
     await until('document.activeElement?.id === "palette-query"');
+    await until('document.getElementById("status").textContent === "Ready"');
     assert.equal(await run('document.getElementById("dialog").getAttribute("aria-labelledby")'),"dialog-title");
     for(let i=0;i<8;i++) {
       window.webContents.sendInputEvent({type:"keyDown",keyCode:"Tab"});
