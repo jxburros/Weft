@@ -318,3 +318,28 @@ test('plugin commands, plugins.invoke and nested hook reads pass the shared auth
   assert.equal(stopped, 'emergency_stop');
   assert.equal(f.plugins.sandboxes.size, 0);
 });
+
+test('the plugin process gets an OS network layer where the platform provides one, and reports which (#107)', async t => {
+  const { pluginNetworkIsolation, sandboxLaunch } = await import('../src/plugins/sandbox.js');
+  const { createServer } = await import('node:net');
+  const { spawn } = await import('node:child_process');
+  const isolation = pluginNetworkIsolation({ refresh: true });
+  assert.ok(['network-namespace', 'vm-only'].includes(isolation.mode));
+  if (process.platform !== 'linux') assert.equal(isolation.mode, 'vm-only', 'only Linux namespaces are used');
+  assert.deepEqual(sandboxLaunch('/node', ['child.cjs'], { mode: 'vm-only' }), { command: '/node', args: ['child.cjs'] });
+  assert.deepEqual(sandboxLaunch('/node', ['child.cjs'], { mode: 'network-namespace', unshare: '/usr/bin/unshare' }), { command: '/usr/bin/unshare', args: ['--user', '--net', '/node', 'child.cjs'] });
+  if (isolation.mode !== 'network-namespace') { t.diagnostic('Unprivileged network namespaces are unavailable here; the vm context is the only network boundary (documented in docs/PLUGINS.md).'); return; }
+  // Code running in the plugin process outside the vm (as after an escape) cannot reach a host listener.
+  let connections = 0;
+  const server = createServer(socket => { connections++; socket.destroy(); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const code = `require('net').connect(${server.address().port}, '127.0.0.1').on('connect', () => { console.log('connected'); process.exit(0); }).on('error', error => { console.log(error.code); process.exit(0); })`;
+  const launch = sandboxLaunch(process.execPath, ['-e', code], isolation);
+  const child = spawn(launch.command, launch.args, { env: {}, stdio: ['ignore', 'pipe', 'ignore'] });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  await new Promise(resolve => child.once('exit', resolve));
+  assert.notEqual(output.trim(), 'connected');
+  assert.equal(connections, 0, 'the host listener never received a connection');
+});

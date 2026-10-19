@@ -6,7 +6,7 @@ import { evaluateAutonomy, registerPluginActionClass } from '../autonomy.js';
 import { fileStamp, writeVerifiedJson } from '../storage-safety.js';
 import { BUILTIN } from './builtin/index.js';
 import { HOOK_POINTS, HOOK_NAMES, describeScope, effectiveActionClass, pluginDataClasses, validateManifest, zodFromJsonInput } from './manifest.js';
-import { PluginSandbox } from './sandbox.js';
+import { PluginSandbox, pluginNetworkIsolation } from './sandbox.js';
 
 export { HOOK_POINTS, HOOK_NAMES };
 const failure = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
@@ -151,7 +151,8 @@ export class PluginRegistry {
       commands: manifest ? Object.entries(manifest.commands).map(([op, spec]) => ({ command: entry.builtin ? `plugin.${name}.${op}` : 'plugins.invoke', operation: op, description: spec.description,
         actionClass: effectiveActionClass(manifest, op), ...(entry.builtin ? {} : { input: spec.input, reads: spec.reads }) })) : [],
       ...(entry.builtin ? {} : { manifestSha256: entry.manifestSha256 ?? null, codeSha256: entry.codeSha256 ?? null, allowAutomation: grant?.allowAutomation ?? false,
-        grantedAt: grant?.grantedAt ?? null, problems: entry.problems ?? [], runtime: 'Separate sandboxed process: no filesystem, network, process, Electron or credential access; 2 s per call; 64 MiB heap' }) });
+        grantedAt: grant?.grantedAt ?? null, problems: entry.problems ?? [], runtime: 'Separate sandboxed process: no filesystem, network, process, Electron or credential access; 2 s per call; 64 MiB heap',
+        networkIsolation: pluginNetworkIsolation().mode }) });
   }
   list() { return this.entries().map(entry => this.summary(entry)); }
 

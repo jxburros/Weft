@@ -62,7 +62,7 @@ export function bootstrapToken(env = process.env, { generate = () => randomBytes
   const supplied = env.WEFT_TOKEN;
   if (supplied) {
     if (supplied.trim() !== supplied || supplied.length < MIN_BOOTSTRAP_TOKEN_LENGTH) {
-      throw new Error(`WEFT_TOKEN must be at least ${MIN_BOOTSTRAP_TOKEN_LENGTH} characters without surrounding spaces; generate one with: node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`);
+      throw new Error(`WEFT_TOKEN must be at least ${MIN_BOOTSTRAP_TOKEN_LENGTH} characters without surrounding spaces; use 32 random bytes as hex (for example from openssl rand -hex 32)`);
     }
     return { token: supplied, generated: false, file: null };
   }
