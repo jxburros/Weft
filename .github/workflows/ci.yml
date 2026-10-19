@@ -81,6 +81,8 @@ jobs:
       - run: npm ci
       - run: node scripts/release/metadata.js
       - run: node scripts/release/build-packages.js --linux AppImage --x64
+      - name: Verify Electron fuses
+        run: node scripts/release/check-fuses.js dist/linux-unpacked/weft
       - name: Verify the update manifest and checksums
         run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
       - name: Launch the packaged AppImage
@@ -105,6 +107,10 @@ jobs:
       - run: node scripts/release/metadata.js
       - name: Build both macOS architectures
         run: node scripts/release/build-packages.js --mac dmg zip --arm64 --x64
+      - name: Verify Electron fuses
+        run: |
+          node scripts/release/check-fuses.js dist/mac/Weft.app/Contents/MacOS/Weft
+          node scripts/release/check-fuses.js dist/mac-arm64/Weft.app/Contents/MacOS/Weft
       - name: Verify update manifests and checksums
         run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"
       - name: Launch the native packaged app
@@ -130,6 +136,8 @@ jobs:
       - run: node scripts/release/metadata.js
       - name: Build the NSIS installer
         run: node scripts/release/build-packages.js --win nsis --x64
+      - name: Verify Electron fuses
+        run: node scripts/release/check-fuses.js dist/win-unpacked/Weft.exe
       - name: Verify the update manifest and checksums
         shell: bash
         run: node scripts/release/verify-assets.js dist "$(node -p 'require("./package.json").version')"

@@ -70,16 +70,19 @@ jobs:
             os: windows-latest
             builder: --win nsis --x64
             smoke: dist/win-unpacked/Weft.exe
+            fuses: dist/win-unpacked/Weft.exe
             kind: nsis
           - name: macos
             os: macos-latest
             builder: --mac dmg zip --arm64 --x64
             smoke: dist/mac-arm64/Weft.app/Contents/MacOS/Weft
+            fuses: dist/mac-arm64/Weft.app/Contents/MacOS/Weft dist/mac/Weft.app/Contents/MacOS/Weft
             kind: dmg
           - name: linux-x64
             os: ubuntu-latest
             builder: --linux AppImage deb --x64
             smoke: dist/Weft-${{ needs.verify.outputs.version }}-x86_64.AppImage
+            fuses: dist/linux-unpacked/weft
             kind: appimage
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -145,6 +148,9 @@ jobs:
       - name: Verify update manifests and checksums
         shell: bash
         run: node scripts/release/verify-assets.js dist "${{ needs.verify.outputs.version }}"
+      - name: Verify Electron fuses
+        shell: bash
+        run: for executable in ${{ matrix.fuses }}; do node scripts/release/check-fuses.js "$executable"; done
       - name: Verify Windows Authenticode signatures
         if: matrix.name == 'windows-x64' && steps.signing.outputs.signed == 'true'
         shell: pwsh

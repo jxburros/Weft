@@ -126,6 +126,10 @@ test('packaging policy: per-user assisted installer, data kept, stable GitHub ch
   assert.equal(config.win.signtoolOptions, undefined);
   assert.equal(config.mac.notarize, false);
   assert.ok(!config.files.some(pattern => /^(test|docs|evals|perf|scripts)\b/.test(pattern)), 'tests and docs are not shipped');
+  // Electron fuses (#117): no NODE_OPTIONS or inspector flags, app code only from a verified asar.
+  assert.deepEqual(config.electronFuses, { ...require('../scripts/release/fuses.cjs'), resetAdHocDarwinSignature: true });
+  assert.deepEqual([config.electronFuses.enableNodeOptionsEnvironmentVariable, config.electronFuses.enableNodeCliInspectArguments, config.electronFuses.onlyLoadAppFromAsar, config.electronFuses.enableEmbeddedAsarIntegrityValidation], [false, false, true, true]);
+  assert.equal(config.electronFuses.runAsNode, true, 'the plugin sandbox and credential broker still run the binary as Node (docs/RELEASING.md)');
   const signed = load({ AZURE_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net', AZURE_SIGNING_ACCOUNT: 'weft', AZURE_SIGNING_PROFILE: 'release', WEFT_WINDOWS_PUBLISHER: 'Weft Contributors', APPLE_API_KEY: '/k.p8', APPLE_API_KEY_ID: 'id', APPLE_API_ISSUER: 'issuer' });
   assert.equal(signed.win.azureSignOptions.publisherName, 'Weft Contributors');
   assert.equal(signed.mac.notarize, true);

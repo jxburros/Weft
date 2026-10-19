@@ -55,9 +55,11 @@ A release tag is blocked unless all of these hold:
    changelog when accepted.
 3. The full suite passes with real Chromium (`xvfb-run -a npm test`), plus
    `npm run test:docs` and `npm run evals`.
-4. Every platform builds, and the packaged app passes `scripts/release/smoke-packaged.js`
-   (authenticated loopback API, version, kill switch honored, automation refused
-   update checks, clean exit).
+4. Every platform builds, its packaged executable has the Electron fuses in
+   `scripts/release/fuses.cjs` (`scripts/release/check-fuses.js`), and the packaged
+   app passes `scripts/release/smoke-packaged.js` (authenticated loopback API,
+   version, kill switch honored, automation refused update checks, no inspector
+   opened for `--inspect` or `NODE_OPTIONS`, clean exit).
 5. `scripts/release/verify-assets.js` re-verifies each `latest*.yml` with the same
    strict parser the app uses and every listed file's size and SHA-512, then writes
    `SHA256SUMS.txt`.
@@ -65,6 +67,28 @@ A release tag is blocked unless all of these hold:
    changes and security notes, `webPreferences`/sandbox defaults, new permission or
    `session` behavior, `test/browser*.test.js` results, and the browser safety audit
    (`docs/BROWSER-SAFETY-AUDIT.md`). Record the review in the release notes.
+
+### Electron fuses
+
+Packaged builds flip these fuses (`electronFuses` in `electron-builder.config.cjs`,
+values in `scripts/release/fuses.cjs`, checked after every build):
+
+| Fuse | State | Effect |
+| --- | --- | --- |
+| `EnableNodeOptionsEnvironmentVariable` | off | `NODE_OPTIONS` is ignored by every Weft process |
+| `EnableNodeCliInspectArguments` | off | `--inspect`, `--inspect-brk` and similar flags cannot attach a debugger |
+| `EnableEmbeddedAsarIntegrityValidation` | on | macOS and Windows refuse to start with a modified `app.asar` (Linux has no such validation) |
+| `OnlyLoadAppFromAsar` | on | the app is loaded only from `app.asar`, never from a loose `app/` folder |
+| `RunAsNode` | **on** | `ELECTRON_RUN_AS_NODE` still works; see below |
+
+`RunAsNode` stays enabled because the plugin sandbox (`src/plugins/sandbox.js`) and the
+credential broker (`src/credentials.js`) are child processes of the Electron binary
+started with `ELECTRON_RUN_AS_NODE` and Node's permission-model flags, with an
+explicit minimal environment. A same-user process can therefore still run the Weft
+binary as plain Node. Turning the fuse off requires moving both children to
+`utilityProcess` and re-establishing their stdin protocol and `--permission`
+restrictions there; that is tracked as a follow-up rather than done silently. Cookie
+encryption is not changed by this build.
 
 ## Release procedure
 
@@ -183,5 +207,6 @@ manifest. Code signing (Windows/macOS) is what defends against that.
 | Windows installer (silent per-user install, uninstall registry entry, Start menu and desktop shortcuts, launch of the installed app, reinstall over an existing copy, silent uninstall keeping workspace data and removing the update cache) | Checked on every PR and release by `scripts/release/windows-install-check.ps1` on GitHub's `windows-latest` runner (Windows Server, build 26100); first passed 2026-10-18 for 1.1.0. Same-version reinstall only: an upgrade across two real releases is not yet exercised. The interactive pages (welcome, install folder, uninstall data choice and its confirmation) are not exercised by a silent run |
 | macOS dmg/zip packaging | dmg and zip for arm64 and x64 built on `macos-latest` on every PR and release, manifests verified and the native arm64 app launched by `scripts/release/smoke-packaged.js`; the x64 app has not been launched on Intel hardware |
 | macOS signing, notarization, Gatekeeper | **Not yet verified** (requires Apple credentials) |
+| Electron fuses | Checked by `scripts/release/check-fuses.js` on the Linux unpacked build (locally, 2026-10-19) and in CI and releases on every platform's executable; the smoke test confirms `--inspect=0` and `NODE_OPTIONS=--inspect=0` open no inspector. Asar integrity refusal of a tampered `app.asar` has not been exercised on macOS or Windows |
 | Tag-triggered release workflow | Ran successfully on GitHub for v1.1.3, v1.2.0 and v1.3.0; v1.2.0 and v1.3.0 were published by the workflow with every platform labelled unsigned. Earlier tags (v1.1.0–v1.1.2) failed in the workflow; see `CHANGELOG.md` |
 | Install, upgrade across real versions, uninstall data preservation, real rollback on each OS | **Not yet verified** on real machines |

@@ -4,6 +4,7 @@
 const env = process.env;
 const azure = env.AZURE_SIGNING_ENDPOINT && env.AZURE_SIGNING_ACCOUNT && env.AZURE_SIGNING_PROFILE && env.WEFT_WINDOWS_PUBLISHER;
 const icon = 'assets/logo/icons/app-icon-plum-1024.png';
+const fuses = require('./scripts/release/fuses.cjs');
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
@@ -21,6 +22,9 @@ module.exports = {
     'assets/graphics/motion/**/*',
   ],
   asar: true,
+  // No NODE_OPTIONS, no --inspect, app code only from a verified app.asar (#117). Checked by
+  // scripts/release/check-fuses.js; the ad-hoc signature is redone for unsigned macOS builds.
+  electronFuses: { ...fuses, resetAdHocDarwinSignature: true },
   // Stable channel only. The updater ignores this provider's URLs and uses the fixed
   // repository in src/updater.js; this entry only makes electron-builder emit latest*.yml.
   publish: [{ provider: 'github', owner: 'jxburros', repo: 'Weft', releaseType: 'draft', channel: 'latest' }],
