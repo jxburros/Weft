@@ -16,9 +16,10 @@ function service(t) {
   return { directory, workspace };
 }
 
-test('Everything is built in, first in the rail, and cannot be deleted, archived or renamed (#99)', async t => {
+test('Everything is built in and cannot be deleted, archived or renamed (#99)', async t => {
   const { workspace } = service(t);
-  const everything = workspace.snapshot().workspaces[0];
+  assert.notEqual(workspace.snapshot().workspaces[0].id, EVERYTHING_ID, 'callers that take the first listed workspace still reach a project');
+  const everything = workspace.snapshot().workspaces.find(item => item.id === EVERYTHING_ID);
   assert.equal(everything.id, EVERYTHING_ID);
   assert.equal(everything.builtin, 'everything');
   assert.notEqual(workspace.activeWorkspaceId, EVERYTHING_ID, 'a new profile still opens on its own project workspace');
@@ -38,17 +39,17 @@ test('Everything is built in, first in the rail, and cannot be deleted, archived
   assert.equal(imported.builtin, undefined);
 });
 
-test('stores created before Everything gain it once, first in the rail, with contents kept', () => {
+test('stores created before Everything gain it once, with contents kept', () => {
   const data = { workspaces: [{ id: 'ws_a', name: 'Project' }] };
   assert.equal(ensureEverything(data, '2026-10-19T00:00:00.000Z'), true);
-  assert.deepEqual(data.workspaces.map(item => item.id), [EVERYTHING_ID, 'ws_a']);
+  assert.deepEqual(data.workspaces.map(item => item.id), ['ws_a', EVERYTHING_ID]);
   assert.equal(ensureEverything(data), false);
-  // A hand-edited store gets its built-in identity back.
-  data.workspaces.reverse(); data.workspaces[1].archived = true; data.workspaces[1].name = 'Renamed';
+  // A hand-edited store gets its built-in identity back and Everything is not listed first.
+  data.workspaces.reverse(); data.workspaces[0].archived = true; data.workspaces[0].name = 'Renamed';
   assert.equal(ensureEverything(data), true);
-  assert.equal(data.workspaces[0].id, EVERYTHING_ID);
-  assert.equal(data.workspaces[0].archived, false);
-  assert.equal(data.workspaces[0].name, 'Everything');
+  assert.deepEqual(data.workspaces.map(item => item.id), ['ws_a', EVERYTHING_ID]);
+  assert.equal(data.workspaces[1].archived, false);
+  assert.equal(data.workspaces[1].name, 'Everything');
 });
 
 test('deleting a workspace can reopen its pages in Everything; moving materials and captures in and out of it', async t => {

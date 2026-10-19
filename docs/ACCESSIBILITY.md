@@ -41,7 +41,7 @@ WEFT_A11Y_REPORT=/tmp/a11y.json xvfb-run -a node --test test/accessibility.test.
 | Focus restoration | A dialog is opened from its control with `Enter`, closed with `Escape`; focus must have moved into it and must return to the same control. |
 | Native page boundary | `F6` from the address bar focuses the live page (a separate Chromium view); `F6` and `Ctrl+L` pressed inside the page return focus to Weft; the page never receives those keys; the "Move focus into the page" control works. |
 | Live regions | Only the toast, the announcer, the alert announcer and dialog error regions are live; four seconds of idle polling announce nothing and replace no controls; a new agent request is announced once. |
-| Ownership and split view | Agent control and takeover update the ownership chip, the page frame (with the handoff transition) and an announcement; split view states the focused pane in text and moves keyboard focus into the chosen pane. |
+| Ownership and panes | Agent control and takeover update the ownership chip, the page frame (with the handoff transition) and an announcement; every pane header states its position, title, owner and "Focused" in text, choosing a pane moves keyboard focus into it, F6 visits every pane, dividers are `role="separator"` controls moved with the arrow keys (Home resets), and a collapsed layout is announced. Windows are titled with their workspace; moving a workspace has a menu alternative to dragging. |
 | Zoom and text scaling | At the minimum window (1000 × 640) with 200% browser zoom (a 500 × 320 CSS px viewport) and separately with 200% root text: no horizontal overflow, no clipped control outside a scroll container, no overlapping visible controls, no cut-off text. |
 | Reduced motion | With `prefers-reduced-motion: reduce` emulated, no element runs an animation or transition and the handoff duration token is `0ms`. |
 
@@ -150,9 +150,11 @@ checks; VoiceOver on the current macOS; Orca on GNOME (Wayland and X11).
 4. **Page boundary.** `F6` into the page, use the page's own links, then `F6`
    and `Ctrl+L` back. The page must not receive those keys; the agent must not
    lose control because you left with `F6`.
-5. **Split view.** With two live pages, turn on split view, use the "Left pane" /
+5. **Panes.** With two live pages, turn on split view, use the "Left pane" /
    "Right pane" buttons; the pressed state and "Focused" are read and focus moves
-   into that pane.
+   into that pane. Choose Page tools > Pane layout > Four in a grid, move a
+   divider with the arrow keys, and F6 through every pane. Move a workspace to a
+   new window from Manage workspaces and confirm the new window's title is read.
 6. **Agent requests and payment.** On a new agent request one announcement is
    read; open Agent requests; each card starts with "Weft browser control · Agent
    request" (or "Payment approval"); approve once with the keyboard.

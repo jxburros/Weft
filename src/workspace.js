@@ -121,8 +121,8 @@ function createWorkspace(name = 'My workspace') {
 }
 function initialState() {
   const initial = createWorkspace();
-  // Everything (#99) is built in and first in the rail; a new profile still opens on its own project workspace.
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [everythingRecord(initial.createdAt), initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [], tabGroups: [], resumeStates: [],
+  // Everything (#99) is built in (the GUI shows it first in the rail); a new profile still opens on its own project workspace.
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial, everythingRecord(initial.createdAt)], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [], tabGroups: [], resumeStates: [],
     ...Object.fromEntries(KNOWLEDGE_COLLECTIONS.map(name => [name, []])) };
 }
 /** Version metadata without content. Agents see restricted originals as withheld stubs that name their sanitized derivatives. */
@@ -270,7 +270,7 @@ export class WorkspaceService {
       for (const task of legacyTasks) { task.status = 'waiting_on_human'; appendTimeline(task, { type: 'transition', from: 'waiting', to: 'waiting_on_human', actor: 'system', reason: 'legacy', at: now() }); }
       // Tab groups and resume records (#24) likewise start empty in older stores.
       for (const key of VIEW_STATE) if (!Array.isArray(data[key])) data[key] = [];
-      // Profiles created before the built-in Everything workspace (#99) gain it, first in the rail.
+      // Profiles created before the built-in Everything workspace (#99) gain it.
       const addedEverything = Array.isArray(data.workspaces) && ensureEverything(data, now());
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));

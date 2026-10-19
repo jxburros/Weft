@@ -76,7 +76,7 @@ test('a search-index version change rebuilds in the background: open is fast, se
   assert.equal(status.lexical.complete, false);
   assert.equal(status.lexical.indexing.state, 'running');
   assert.equal(status.lexical.indexing.reason, 'version_change');
-  assert.equal(status.lexical.indexing.totalRecords, RECORDS + 2, 'every record (and the workspace) is rebuilt');
+  assert.equal(status.lexical.indexing.totalRecords, RECORDS + 3, 'every record (and both workspaces, Everything included) is rebuilt');
   assert.ok(status.lexical.indexing.processedRecords < RECORDS);
   assert.ok(status.lexical.unindexedRecords > 0);
 
@@ -132,7 +132,7 @@ test('an interrupted plaintext rebuild resumes from its saved position after a r
   await service.execute('search.indexing', { action: 'pause' }, human);
   service.storage.indexStep({ maxRecords: 2000, budgetMs: Infinity });
   const reached = service.storage.indexing.done;
-  assert.ok(reached > 0 && reached < 6002);
+  assert.ok(reached > 0 && reached < 6003);
   service.close();
   service = new WorkspaceService({ directory, onWarning() {} });
   closeAfter(t, service);

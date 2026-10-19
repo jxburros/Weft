@@ -367,6 +367,26 @@ refuses tabs that are leased, linked to an open task, busy, playing media or
 holding edited form fields and lists why. `tabs.search` finds tabs by title, URL
 or group, and `resume.get` lists blockers, open tasks and handoffs to continue.
 
+## Everything, windows and panes
+
+The built-in **Everything** workspace holds unfiled pages and links other apps
+asked Weft to open. It is never an implicit agent target: it does not make a
+profile ambiguous, an agent that omits `workspaceId` reaches the single project
+workspace (or gets `ambiguous_target`, whose `details.workspaceIds` omit
+Everything), and the current tab in Everything is not an implicit page target.
+Name it explicitly (its id is in `workspaces.list`, `builtin: "everything"`);
+a scoped client needs it in its grant like any workspace. A link opened by the
+operating system never grants access or starts an action. It cannot be deleted,
+renamed or archived (`invalid_arguments`). `workspaces.moveRecord` (human only)
+moves a material or capture between workspaces.
+
+Windows and panes are display state. `windows.list` reports each window, the
+workspaces it shows and its active tab, filtered to your grant; tabs carry an
+informational `windowId`. `windows.moveWorkspace` and `windows.focus` are human
+only. Saved pane layouts appear in `resume.get` as `view.panes`
+(`{layout, items, focused, sizes}`); a pane grants nothing, and tabs are still
+addressed by id. `workspaces.switch` refuses a workspace shown in another window.
+
 ## Updates
 
 Agents can read update state with `update.status` (MCP `weft_browser`; also

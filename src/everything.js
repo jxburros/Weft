@@ -8,7 +8,7 @@
  * opened by the operating system never grants any agent access.
  */
 // A fixed, UUID-shaped id, so every surface that validates workspace ids (MCP resource URIs, typed error details) accepts it.
-export const EVERYTHING_ID = 'ws_00000000-0000-4000-8000-000000000001';
+export const EVERYTHING_ID = 'ws_e0e0e0e0-e0e0-4e0e-8e0e-e0e0e0e0e0e0';
 export const EVERYTHING_NAME = 'Everything';
 export const EXTERNAL_DESTINATIONS = Object.freeze(['everything', 'ask', 'last-used']);
 
@@ -19,15 +19,21 @@ export function everythingRecord(timestamp = new Date().toISOString()) {
     archived: false, builtin: 'everything', createdAt: timestamp, updatedAt: timestamp, revision: 1 };
 }
 
-/** Add Everything to a store that predates it, first in the rail. Returns true when it was added or repaired. */
+/**
+ * Add Everything to a store that predates it. The trusted GUI always shows it first in the rail; in storage it
+ * stays after the project workspaces, so callers that take the first listed workspace keep reaching a project.
+ * Returns true when it was added or repaired.
+ */
 export function ensureEverything(data, timestamp) {
   const index = data.workspaces.findIndex(item => item.id === EVERYTHING_ID);
-  if (index === -1) { data.workspaces.unshift(everythingRecord(timestamp)); return true; }
+  if (index === -1) { data.workspaces.push(everythingRecord(timestamp)); return true; }
   const record = data.workspaces[index];
   let changed = false;
   // The built-in identity is restored if a store was edited by hand; its contents are left alone.
-  if (record.builtin !== 'everything' || record.archived || record.name !== EVERYTHING_NAME) { Object.assign(record, { builtin: 'everything', archived: false, name: EVERYTHING_NAME }); changed = true; }
-  if (index !== 0) { data.workspaces.splice(index, 1); data.workspaces.unshift(record); changed = true; }
+  // A project workspace that happens to have this id is never taken over.
+  if (record.builtin !== 'everything') return false;
+  if (record.archived || record.name !== EVERYTHING_NAME) { Object.assign(record, { builtin: 'everything', archived: false, name: EVERYTHING_NAME }); changed = true; }
+  if (index === 0 && data.workspaces.length > 1) { data.workspaces.splice(index, 1); data.workspaces.push(record); changed = true; }
   return changed;
 }
 

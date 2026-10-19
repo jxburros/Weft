@@ -6,7 +6,7 @@ import { WEFT_VERSION } from './version.js';
 import { GUIDANCE, getGuidance, guidanceTopics } from './guidance.js';
 
 const groups = {
-  tabs: ['tabs', 'tabGroups', 'display'], page: ['page'],
+  tabs: ['tabs', 'tabGroups', 'display', 'windows'], page: ['page'],
   workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'encryption', 'resume', 'resources', 'browsingData'],
   memory: ['memories', 'learning'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],

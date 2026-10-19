@@ -4,6 +4,11 @@
 const env = process.env;
 const azure = env.AZURE_SIGNING_ENDPOINT && env.AZURE_SIGNING_ACCOUNT && env.AZURE_SIGNING_PROFILE && env.WEFT_WINDOWS_PUBLISHER;
 const icon = 'assets/logo/icons/app-icon-plum-1024.png';
+// Links and files other applications may hand to Weft (#99). On macOS and Linux these only declare that Weft
+// can open them; Weft becomes the default browser only when a person opts in from Settings. Windows declares
+// nothing at install time: registering file types there could take over .html/.pdf silently.
+const protocols = [{ name: 'Web page', schemes: ['http', 'https'] }];
+const fileAssociations = [{ ext: ['html', 'htm'], name: 'HTML document', role: 'Viewer', mimeType: 'text/html' }, { ext: 'pdf', name: 'PDF document', role: 'Viewer', mimeType: 'application/pdf' }];
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
@@ -55,6 +60,7 @@ module.exports = {
     target: [{ target: 'dmg', arch: ['arm64', 'x64'] }, { target: 'zip', arch: ['arm64', 'x64'] }],
     icon,
     category: 'public.app-category.productivity',
+    protocols, fileAssociations,
     hardenedRuntime: true,
     gatekeeperAssess: false,
     // Notarization runs only when Apple credentials are present in the environment.
@@ -64,6 +70,7 @@ module.exports = {
     target: [{ target: 'AppImage', arch: ['x64'] }, { target: 'deb', arch: ['x64'] }],
     icon,
     category: 'Network',
+    protocols, fileAssociations,
     executableName: 'weft',
     synopsis: 'Local workspace browser for human and agent collaboration',
     maintainer: 'Weft contributors <https://github.com/jxburros/Weft>',

@@ -10,7 +10,7 @@ import electron from 'electron';
 import { electronEnv } from '../scripts/electron-env.js';
 import { budget } from './time-budget.js';
 
-const EVERYTHING = 'ws_00000000-0000-4000-8000-000000000001';
+const EVERYTHING = 'ws_e0e0e0e0-e0e0-4e0e-8e0e-e0e0e0e0e0e0';
 const launch = (args, env) => spawn(typeof electron === 'string' ? electron : process.execPath, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), ...args], { env: electronEnv(env), stdio: ['ignore', 'pipe', 'pipe'] });
 
 if (process.argv.includes('--second-launch')) {

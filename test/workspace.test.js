@@ -14,8 +14,8 @@ function fixture(t) {
 
 test('empty workspace persists notes, revisions, conversations and theme across restart', async t => {
   const { directory, service } = fixture(t);
-  assert.equal(service.snapshot().workspaces[0].name, 'Everything', 'the built-in Everything workspace is first in the rail');
-  assert.equal(service.workspace().name, 'My workspace', 'a new profile opens on its own project workspace');
+  assert.equal(service.snapshot().workspaces[0].name, 'My workspace', 'a new profile opens on its own project workspace');
+  assert.equal(service.snapshot().workspaces.at(-1).builtin, 'everything', 'the built-in Everything workspace is stored after the projects');
   assert.deepEqual(service.snapshot().materials, []);
   const note = await service.execute('materials.create', { title: 'Release notes', content: 'First version' });
   await service.execute('materials.update', { id: note.id, expectedRevision: 1, changes: { content: 'Second version' } });

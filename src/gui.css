@@ -2252,7 +2252,7 @@ dialog.trusted .trusted-band {
 :root[data-density="compact"] .settings-row { padding-block:8px; }
 :root[data-density="compact"] .record-card { padding:12px; }
 
-/* Everything workspace (#99) and workspaces shown in another window (#100). */
+/* Everything workspace (issue 99) and workspaces shown in another window (issue 100). */
 .workspace-dot.everything {
   border-style: dashed;
   border-width: 2px;
@@ -2284,7 +2284,7 @@ dialog.trusted .trusted-band {
   font-size: var(--font-size-13);
 }
 
-/* 1–4 pane layouts (#101): headers, document panes and resizable dividers. */
+/* 1–4 pane layouts (issue 101): headers, document panes and resizable dividers. */
 .pane-header .pane-close {
   margin-left: auto;
   padding: 0 var(--space-4);
