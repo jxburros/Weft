@@ -39,6 +39,8 @@ if (process.argv.includes("--gui-site")) {
       await open("/notify");
       let view;
       for (let i = 0; i < 200 && !(view = page("/notify")); i++) await new Promise((r) => setTimeout(r, 25));
+      // The address appears once the navigation commits; click only after the page and its button have loaded.
+      for (let i = 0; i < 400 && (view.isLoading() || view.getTitle() !== "notify"); i++) await new Promise((r) => setTimeout(r, 25));
       await new Promise((r) => setTimeout(r, 400));
       view.focus();
       view.sendInputEvent({ type: "mouseDown", x: 50, y: 50, button: "left", clickCount: 1 });
