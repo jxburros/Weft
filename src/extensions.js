@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { auditExtensionManifest, matchesPattern } from './extension-policy.js';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
+import { readBoundedFile, typedError } from './helpers.js';
 
 const workspaceId = z.string().min(1).max(128).optional();
 const path = z.string().min(1).max(4096).refine(value => isAbsolute(value) && !value.includes('\0'), 'Expected an absolute local directory path').describe('Absolute path of an unpacked extension directory on this computer.');
@@ -21,20 +22,11 @@ const schemas = Object.fromEntries(Object.entries(extensionCommandDefinitions).m
 const recordSchema = z.strictObject({ id: z.string(), workspaceId: z.string(), name: z.string(), version: z.string(), sha256: z.string(), hostGrants: z.array(z.string()), permissions: z.array(z.string()),
   enabled: z.boolean(), installedAt: z.string(), source: z.string(), chromeId: z.string().nullable(), lastError: z.string().nullable() });
 const LIMITS = { files: 1000, bytes: 50 * 1024 * 1024, file: 20 * 1024 * 1024, depth: 20 };
-const failure = (code, message, details) => Object.assign(new Error(message), { code, ...(details && { details }) });
+const failure = typedError;
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 
-function readBounded(file, limit) {
-  const fd = openSync(file, 'r');
-  try {
-    const size = fstatSync(fd).size;
-    if (size > limit) throw failure('invalid_arguments', `Extension file exceeds ${limit} bytes`);
-    const buffer = Buffer.alloc(size);
-    let offset = 0;
-    while (offset < size) { const read = readSync(fd, buffer, offset, size - offset, offset); if (!read) break; offset += read; }
-    return buffer.subarray(0, offset);
-  } finally { closeSync(fd); }
-}
+// One link-refusing, size-capped reader shared with the plugin registry (#120).
+const readBounded = (file, limit) => readBoundedFile(file, limit, { fail: message => failure('invalid_arguments', `Extension file ${message}`) });
 
 /** Reads a package without following links; returns files and a deterministic tree digest. */
 export function readPackage(root) {

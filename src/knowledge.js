@@ -4,6 +4,7 @@ import { knowledgeSchemas } from './knowledge-commands.js';
 import { originFor } from './provenance.js';
 import { TRUSTED_CATEGORIES, collectionRole, forCaller, prefetchSourceTexts, quotedSources, recheckCitations } from './context-records.js';
 import { ServiceCredentials, createLink, detectStatus, fetchService, readLinked, validateServiceUrl } from './linked-sources.js';
+import { typedError } from './helpers.js';
 
 /**
  * Shared context collections, linked sources, service references, proposals,
@@ -14,7 +15,7 @@ import { ServiceCredentials, createLink, detectStatus, fetchService, readLinked,
  */
 const now = () => new Date().toISOString();
 const human = context => ['human', 'admin'].includes(context.actor ?? 'human');
-const fail = (code, message) => Object.assign(new Error(message), { code });
+const fail = typedError;
 const denied = message => fail('permission_required', `PERMISSION_REQUIRED: ${message}`);
 const stale = message => fail('stale_state', `STALE_STATE: ${message}`);
 const MAX_SERVICE_VERSIONS = 5;

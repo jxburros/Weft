@@ -4,6 +4,7 @@ import { locality } from './providers.js';
 import { originFor } from './provenance.js';
 import { frameUntrusted } from './provider-safety.js';
 import { workspaceSchemas } from './workspace-commands.js';
+import { readCappedBody } from './helpers.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const human = context => ['human', 'admin'].includes(context.actor);
@@ -90,10 +91,8 @@ export class Learning {
             messages: [{ role: 'user', content: frameUntrusted(source.title, source.text, 14000) }] });
           const response = await this.fetch(request.url, { method: 'POST', redirect: 'error', headers: requestHeaders(profile, this.providers.key(profile)), body: JSON.stringify(request.body), signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(45000)]) });
           if (!response.ok) { await response.body?.cancel(); throw new Error(`Learning endpoint returned HTTP ${response.status}`); }
-          const reader = response.body.getReader(); let bytes = 0; const chunks = [];
-          try { for (;;) { const { value, done } = await reader.read(); if (done) break; bytes += value.byteLength; if (bytes > 1024 * 1024) throw new Error('Learning reply too large'); chunks.push(Buffer.from(value)); } }
-          finally { await reader.cancel().catch(() => {}); }
-          const reply = parseJsonReply(profile.provider, JSON.parse(Buffer.concat(chunks).toString('utf8')));
+          const body = await readCappedBody(response, 1024 * 1024, { fail: () => new Error('Learning reply too large') });
+          const reply = parseJsonReply(profile.provider, JSON.parse(body.toString('utf8')));
           if (!reply.complete || reply.finishReason !== 'stop' || reply.toolCalls.length) throw new Error('Learning reply incomplete');
           const result = JSON.parse(reply.text.replace(/^```(?:json)?\s*|\s*```$/g, ''));
           const fields = result.skip === true ? null : workspaceSchemas['memories.create'].parse({ workspaceId, title: result.title, content: result.content,

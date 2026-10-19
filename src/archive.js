@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { typedError } from './helpers.js';
 
 /**
  * Resource archives (weft-archive format 1).
@@ -23,7 +24,7 @@ export const FALLBACK_DOCUMENT_URL = 'https://document.weft-archive.invalid/';
 /** Response policy for every archived document and frame served in the offline preview. */
 export const ARCHIVE_CSP = "sandbox; default-src 'none'; img-src http: https: data:; style-src http: https: 'unsafe-inline'; font-src http: https: data:; media-src http: https: data:; frame-src http: https:; script-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'; manifest-src 'none'";
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-const failure = (code, message) => Object.assign(new Error(message), { code });
+const failure = typedError;
 const SECRET_PARAM = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 
 /** Lookup key for a resource URL: credentials, fragment and secret-named parameters removed (the same rule as stored URLs). */
