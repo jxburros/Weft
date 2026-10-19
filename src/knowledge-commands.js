@@ -74,6 +74,4 @@ export const knowledgeCommandDefinitions = {
     merged: z.strictObject({ title: title.describe('Merged title.'), content: text.describe('Merged content.') }).optional().describe('Merged record for decision merge.'),
     note: z.string().max(4000).default('').describe('Resolution note.'), expectedRevision: expectedRevision.optional() }],
 };
-export const knowledgeNamespaces = Object.freeze(['collections', 'sources', 'services', 'citations', 'freshness', 'conflicts']);
-export const knowledgeCommands = Object.freeze(Object.keys(knowledgeCommandDefinitions));
 export const knowledgeSchemas = Object.fromEntries(Object.entries(knowledgeCommandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));

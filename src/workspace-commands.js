@@ -4,6 +4,8 @@ import { pageField } from './pagination.js';
 import { PHASES } from './task-phases.js';
 import { taskPlan, workflowParameter, workflowStep, credentialRef } from './task-commands.js';
 import { resourceSettingsShape } from './resources.js';
+import { SEARCH_ENGINES, templateProblem } from './search-engines.js';
+import { EXTERNAL_DESTINATIONS } from './everything.js';
 
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
@@ -45,7 +47,7 @@ export const commandDefinitions = {
   'bookmarks.list': ['List pinned website materials', optionalWorkspace],
   'bookmarks.create': ['Bookmark a website as a pinned material', { ...optionalWorkspace, title, url: httpUrl }],
   'bookmarks.delete': ['Delete a bookmarked website material', { id }],
-  'workspace.snapshot': ['Get persistent workspace state', optionalWorkspace],
+  'workspace.snapshot': ['Get persistent workspace state', { ...optionalWorkspace, ifRevision: z.string().max(100).optional().describe('Revision from an earlier snapshot. When the state has not changed since, the reply is only { unchanged: true, revision }.') }],
   'workspaces.list': ['List workspaces', {}],
   'workspaces.get': ['Get one workspace', { id }],
   'workspaces.create': ['Create an empty workspace', { ...workspaceDetails, name: title, description: text.optional(), color: z.string().max(30).optional(), icon: z.string().max(50).optional() }],
@@ -54,7 +56,10 @@ export const commandDefinitions = {
   'workspaces.archive': ['Archive a workspace without deleting its contents', { id }],
   'workspaces.restore': ['Restore an archived workspace', { id }],
   'workspaces.duplicate': ['Copy project records; exclude sessions and credentials', { id, name: title.optional() }],
-  'workspaces.delete': ['Permanently delete a workspace and its saved records', { id }],
+  'workspaces.delete': ['Permanently delete a workspace and its saved records; the built-in Everything workspace cannot be deleted', { id,
+    moveTabsToEverything: z.boolean().optional().describe('Reopen the workspace\'s open pages in Everything (fresh storage container) instead of closing them.') }],
+  'workspaces.moveRecord': ['Human moves a material or saved capture to another workspace (for example out of Everything into a project)', { collection: z.enum(['materials', 'artifacts']), id, workspaceId: id.describe('Destination workspace.'),
+    expectedRevision: z.number().int().positive().optional() }],
   'workspaces.export': ['Export project records with optional exact-term residue scan and metadata review; images are unverifiable', { id, sensitiveTerms: z.array(z.string().min(1).max(200)).max(100).optional(), captures: capturePolicy.optional(),
     acknowledgePlaintext: z.boolean().optional().describe('Required when the profile is encrypted: the person confirmed that this export is written as plaintext.'),
     reviewMetadata: z.boolean().optional().describe('Add a review of URL query/path metadata and detection-assistance matches in exported fields.') }],
@@ -64,7 +69,16 @@ export const commandDefinitions = {
     automation: z.strictObject({ inputConcurrency: z.enum(['shared', 'exclusive']).optional().describe('shared lets agents act on available tabs; exclusive requires a lease.'),
       queueLimit: z.number().int().min(0).max(20).optional().describe('Agent input requests that may wait per tab; 0 rejects busy tabs immediately.'),
       queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.'),
-    resources: resourceSettingsShape.optional() }],
+    resources: resourceSettingsShape.optional(),
+    searchEngine: z.strictObject({ preset: z.enum([...Object.keys(SEARCH_ENGINES), 'custom']).describe('A preset engine, or custom with a template.'),
+      template: z.string().max(2048).optional().describe('custom only: an https:// search address containing %s exactly once, replaced by the search words.'),
+      name: z.string().min(1).max(60).optional().describe('custom only: a name shown in the address bar and menus.') })
+      .superRefine((value, context) => {
+        const problem = value.preset === 'custom' ? templateProblem(value.template) : value.template != null ? 'A template is only used with the custom preset' : null;
+        if (problem) context.addIssue({ code: 'custom', message: problem, path: ['template'] });
+      }).optional().describe('Address-bar search engine. Typed text is sent to it only when the person presses Enter; Weft requests no remote suggestions.'),
+    externalLinks: z.strictObject({ destination: z.enum(EXTERNAL_DESTINATIONS).optional().describe('Where links and files from other applications open: everything (default), ask each time, or the last-used workspace.') }).optional()
+      .describe('Links and files opened from other applications (#99).') }],
   'search.query': ['Search project records and saved text locally (BM25, fused with opt-in local embeddings when enabled); page mode adds coverage and verified absence', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional(),
     passageChars: z.number().int().min(300).max(6000).optional().describe('Return a cited passage of this many characters instead of a short snippet.'),
     mode: z.enum(['auto', 'lexical', 'hybrid']).optional().describe('auto (default) fuses lexical and vector results when this workspace has embeddings enabled; lexical uses BM25 only; hybrid requires embeddings.') }],

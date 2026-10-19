@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
 import { z } from 'zod';
@@ -97,16 +97,28 @@ export function discoverSources({ home = homedir(), platform = process.platform,
   return { sources, readable: READABLE, neverImported: NEVER_IMPORTED, notice: 'Weft lists browser profiles it found. Nothing is read until you preview a source, and only bookmarks and history files are opened.' };
 }
 
-/** Copy a SQLite database (and its WAL) into a private temporary folder and open the copy. */
-function withCopy(path, work) {
+/** Folder inside the profile that holds short-lived copies of imported browser databases. */
+export const IMPORT_SCRATCH = 'import-scratch';
+/** Remove copies left behind by an import that was interrupted (crash, power loss); run at startup. */
+export function cleanImportScratch(profileDirectory) {
+  if (profileDirectory) rmSync(join(profileDirectory, IMPORT_SCRATCH), { recursive: true, force: true });
+}
+/**
+ * Copy a SQLite database (and its WAL) into a private folder and open the copy. The folder lives in the
+ * Weft profile (owner-only), not the OS temporary folder, so an interrupted import leaves no browsing
+ * history in a shared location, and startup removes any leftover. The copy is opened with
+ * trusted_schema=OFF so schema-defined functions in a hostile database cannot run.
+ */
+function withCopy(path, work, scratch = null) {
   regularFile(path, LIMITS.sqliteBytes);
-  const folder = mkdtempSync(join(tmpdir(), 'weft-import-'));
+  if (scratch) mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  const folder = mkdtempSync(join(scratch ?? tmpdir(), 'weft-import-'));
   try {
     const copy = join(folder, 'copy.sqlite');
     copyFileSync(path, copy);
     if (regularFile(`${path}-wal`, LIMITS.sqliteBytes)) copyFileSync(`${path}-wal`, `${copy}-wal`);
     const db = new DatabaseSync(copy);
-    try { return work(db); } finally { db.close(); }
+    try { db.exec('PRAGMA trusted_schema = OFF'); return work(db); } finally { db.close(); }
   } finally { rmSync(folder, { recursive: true, force: true }); }
 }
 
@@ -128,7 +140,7 @@ function chromiumBookmarks(path, report) {
   }
   return items;
 }
-function chromiumHistory(path, report) {
+function chromiumHistory(path, report, scratch) {
   if (!existsSync(path)) return [];
   return withCopy(path, db => {
     // Chromium timestamps (microseconds since 1601) exceed 2^53: read them as BigInt.
@@ -137,9 +149,9 @@ function chromiumHistory(path, report) {
     const rows = statement.all(LIMITS.history + 1);
     report.note('Chromium history imports each URL’s title, last visit time and visit count; individual visits, transitions, durations and referrers are not imported.');
     return rows.map(row => ({ url: row.url, title: row.title, visitedAt: chromeTime(row.last), visitCount: Number(row.visits) || 1 }));
-  });
+  }, scratch);
 }
-function firefoxPlaces(path, include, report) {
+function firefoxPlaces(path, include, report, scratch) {
   return withCopy(path, db => {
     const out = { bookmarks: [], history: [] };
     if (include.includes('bookmarks')) {
@@ -161,7 +173,7 @@ function firefoxPlaces(path, include, report) {
       report.note('Firefox history imports each URL’s title, last visit time and visit count; individual visits and transition types are not imported.');
     }
     return out;
-  });
+  }, scratch);
 }
 function firefoxContainers(path) {
   const file = join(path, 'containers.json');
@@ -194,7 +206,7 @@ function netscapeBookmarks(path, report) {
 }
 
 /** Read and normalize one source. Nothing outside READABLE is opened. */
-export function readSource({ kind, path, include }) {
+export function readSource({ kind, path, include, scratch = null }) {
   const unsupported = new Map();
   const notes = [];
   const report = { unsupported: (field, count = 1) => unsupported.set(field, (unsupported.get(field) ?? 0) + count), note: text => { if (!notes.includes(text)) notes.push(text); } };
@@ -204,12 +216,12 @@ export function readSource({ kind, path, include }) {
   if (kind === 'chromium') {
     directory(path);
     if (include.includes('bookmarks')) raw.bookmarks = chromiumBookmarks(join(path, 'Bookmarks'), report);
-    if (include.includes('history')) raw.history = chromiumHistory(join(path, 'History'), report);
+    if (include.includes('history')) raw.history = chromiumHistory(join(path, 'History'), report, scratch);
     try { profile = JSON.parse(readFileSync(join(path, '..', 'Local State'), 'utf8'))?.profile?.info_cache?.[basename(path)]?.name || profile; } catch { /* optional */ }
   } else if (kind === 'firefox') {
     directory(path);
     if (!existsSync(join(path, 'places.sqlite'))) throw fail('not_found', 'places.sqlite not found in this Firefox profile');
-    raw = firefoxPlaces(join(path, 'places.sqlite'), include, report);
+    raw = firefoxPlaces(join(path, 'places.sqlite'), include, report, scratch);
     containers = firefoxContainers(path);
     if (containers.length) report.note('Firefox containers are listed for review. places.sqlite does not record which container a visit or bookmark came from, so items cannot be separated by container; container cookies and sessions are never imported.');
   } else {
@@ -280,7 +292,7 @@ export async function executeBrowsingCommand(name, input, context, { workspace }
   if (name === 'browsingData.sources') return discoverSources();
   const workspaceId = args.workspaceId ?? workspace.activeWorkspaceId;
   workspace.workspace(workspaceId);
-  const spec = { kind: args.kind, path: args.path, include: args.include };
+  const spec = { kind: args.kind, path: args.path, include: args.include, scratch: workspace.directory ? join(workspace.directory, IMPORT_SCRATCH) : null };
   if (name === 'browsingData.preview') return summary(spec, planImport(spec, workspace.data, workspaceId));
   const run = workspace.queue.then(() => {
     const plan = planImport(spec, workspace.data, workspaceId);

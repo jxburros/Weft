@@ -283,6 +283,16 @@ test('service references: explicit authorization, cached versus live content, re
   assert.equal((await f.run('services.refresh', { id: redirecting.id })).outcome, 'redirected');
   assert.equal(hits.length, count + 1);
   assert.equal(hits.some(hit => hit.url === '/target'), false);
+  // A stored credential is scoped to its origin: moving the reference to another host drops it (#115).
+  mode = 'ok';
+  const movable = await f.run('services.create', { workspaceId: f.a, title: 'Movable', url: `${base}/policy` });
+  await f.run('services.setCredential', { id: movable.id, header: 'Authorization', secretValue: secret });
+  await f.run('services.update', { id: movable.id, changes: { url: `${base}/policy?same-origin` } });
+  assert.equal(f.workspace.data.materials.find(item => item.id === movable.id).service.credentialState, 'stored', 'a path change on the same origin keeps the credential');
+  await f.run('services.update', { id: movable.id, changes: { url: `${base.replace('127.0.0.1', 'localhost')}/policy` } });
+  assert.equal(f.workspace.data.materials.find(item => item.id === movable.id).service.credentialState, 'none');
+  await f.run('services.refresh', { id: movable.id });
+  assert.equal(hits.at(-1).authorization, null, 'the new host never receives the old credential');
   // The credential never reaches project data, activity or exports.
   await f.run('services.setCredential', { id: redirecting.id, header: 'X-API-Key', secretValue: secret });
   const exported = JSON.stringify(await f.run('workspaces.export', { id: f.a }));

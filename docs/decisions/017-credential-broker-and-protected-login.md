@@ -3,7 +3,9 @@
 Status: implemented for issue #6 with fixture and real-Chromium adversarial
 tests. **Independent security review has not been performed**, so Weft does not
 assert credential isolation; the 1Password CLI adapter is tested only against a
-fake `op` program, not a real account. Last reviewed: 2026-10-17.
+fake `op` program, not a real account. The scope and checklist for that review
+are in [the credential review brief](../maintainers/CREDENTIAL-REVIEW.md).
+Last reviewed: 2026-10-19.
 
 ## Context
 

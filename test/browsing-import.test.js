@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { AutomationAdmission } from '../src/admission.js';
-import { discoverSources, readSource, NEVER_IMPORTED } from '../src/browsing-import.js';
+import { discoverSources, readSource, NEVER_IMPORTED, IMPORT_SCRATCH, cleanImportScratch } from '../src/browsing-import.js';
 import { chromiumProfile, firefoxProfile, netscapeFile } from './fixtures/browsing-data.mjs';
 
 const human = { actor: 'human', source: 'gui' };
@@ -56,6 +56,13 @@ test('Chromium preview reports folders, duplicates, unsupported fields and skipp
   assert.ok(preview.unsupported.some(item => item.field === 'bookmark.meta_info'));
   assert.ok(preview.unsupported.some(item => item.field === 'url.sensitiveParametersRemoved'));
   assert.equal(preview.history.found, 2, 'hidden and non-web entries are excluded');
+  // The History copy is made inside the profile (owner-only), never the OS temporary folder, and removed afterwards (#126).
+  const scratch = join(workspace.directory, IMPORT_SCRATCH);
+  assert.deepEqual(readdirSync(scratch), []);
+  mkdirSync(join(scratch, 'weft-import-leftover'));
+  writeFileSync(join(scratch, 'weft-import-leftover', 'copy.sqlite'), 'left by a crash');
+  cleanImportScratch(workspace.directory);
+  assert.equal(existsSync(scratch), false, 'startup cleanup removes leftovers');
   assert.deepEqual(preview.source.filesRead, ['Bookmarks', 'History', 'History-wal', '../Local State']);
   assert.match(preview.disclosure, /sign in again/);
   assert.equal(hash(join(path, 'History')), historyBefore, 'the browser database is copied, never modified');

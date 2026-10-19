@@ -1,3 +1,4 @@
+import { redactPaths } from './activity-log.js';
 import { commands, executeOutcome, normalizeCommand, validateCommand, errorOutcome, CommandError, API_VERSION, OUTCOME_STATUSES, ERROR_HTTP_STATUS, ERROR_STATUS, exitCodes } from './commands.js';
 import { PAGEABLE, pageItems } from './pagination.js';
 import { describeCapabilities, MAX_DEADLINE_MS, DEADLINE_GRACE_MS } from './capabilities.js';
@@ -19,14 +20,14 @@ import { ResourceScheduler } from './resources.js';
 import { ResumeService } from './resume.js';
 import { executeBrowsingCommand } from './browsing-import.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'captures.cancel', 'payments.status'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'windows.list', 'captures.cancel', 'payments.status'];
 // Commands that page natively; every other pageable command is paged here from its full list.
 const NATIVE_PAGED = new Set(['search.query', 'conversations.messages', 'artifacts.versions', 'transfers.list']);
 const DEADLINE = Symbol('deadline');
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, windows = null, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
   if (providers) { providers.commandCatalog = commands; providers.validateAppCommand = validateCommand; }
   // Agent concurrency, capture queue and budgets apply to every caller (#30), including task-runtime steps.
@@ -167,7 +168,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       catch (error) { authority.restoreApproval(decision, { command, context, target, error }); throw error; }
     }
     authority.recordAttempt({ command, args, context, target, decision });
-    const scopedWorkspaces = () => workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
+    const scopedWorkspaces = () => structuredClone((workspace.data ?? workspace.snapshot()).workspaces.filter(item => context.workspaceIds.includes(item.id)));
     // Workspace-queued commands mark their own start when dequeued; everything else starts here.
     const queued = Object.hasOwn(workspaceCommands, command) || command.startsWith('handoffs.');
     const start = () => {
@@ -285,6 +286,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (command.startsWith('display.')) {
       if (!display) throw Object.assign(new Error('Display controls are available only in the Weft application'), { code: 'unavailable' });
       return display.execute(command, args, context);
+    }
+    if (command.startsWith('windows.')) {
+      if (!windows) throw Object.assign(new Error('Windows are available only in the Weft application'), { code: 'unavailable' });
+      return windows.execute(command, args, context);
     }
     if (command === 'resources.status') {
       const visible = tab => !context.workspaceIds || context.workspaceIds.includes(tab.workspaceId);
@@ -408,6 +413,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     // Versioned request envelope: authenticated identity and linkage, never caller-asserted.
     outcome.request = { apiVersion: API_VERSION, requestId: typeof state.args?.requestId === 'string' ? state.args.requestId : null, actor: typeof context.actor === 'string' ? context.actor.slice(0, 64) : null,
       clientId: context.clientId ?? null, taskId: context.taskId ?? null, deadlineMs: Number.isSafeInteger(deadlineMs) ? deadlineMs : null };
+    // Untyped errors carry raw Node/filesystem text; agents never see local paths from it (typed Weft errors are kept as written).
+    if (outcome.error?.code === 'command_failed' && !['human', 'admin'].includes(context.actor)) outcome.error.message = redactPaths(outcome.error.message);
     authority.recordOutcome({ command: outcome.command, args: state.args ?? {}, context, outcome, decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {}, batch: state.batch });
     const event = { type: 'command', command: outcome.command, actor: context.actor,
       status: outcome.execution === 'succeeded' ? 'success' : outcome.error?.code === 'approval_required' || outcome.error?.details?.authority ? 'blocked' : 'failure', outcome: outcome.status,

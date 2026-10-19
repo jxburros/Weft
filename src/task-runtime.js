@@ -994,7 +994,8 @@ export class TaskRuntime {
     if (workflow.enabled === false) throw typed('permission_required', 'This workflow is inactive. A person reviews and enables it in Weft before it can run; saving or importing a workflow never authorizes it.', { notStarted: true, details: { authority: { decision: 'deny', reason: 'workflow_inactive', actionClass: 'local_write' } } });
     const report = this.validateWorkflow(workflow, args.parameters, { forRun: true });
     if (!report.ok) throw new CommandError({ code: 'invalid_arguments', message: `Workflow cannot run: ${report.errors.join('; ')}`.slice(0, 4000), field: 'parameters' });
-    const executor = this.resolveExecutor(args.executor, context, workflow.workspaceId);
+    // Validates the requested executor before anything starts; the run itself resolves it again.
+    this.resolveExecutor(args.executor, context, workflow.workspaceId);
     if (args.tabId != null) {
       const tab = this.browser?.tabs?.get?.(args.tabId);
       if (!tab || tab.workspaceId !== workflow.workspaceId) throw typed('not_found', 'That tab is not open in this workflow’s workspace');

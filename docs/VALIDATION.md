@@ -1,7 +1,11 @@
 # Validation and supported test coverage
 
 `npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
-once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
+once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript,
+fails on exports nothing in the repository uses (`scripts/unused-exports.mjs`) and runs ESLint with
+the small rule set in `eslint.config.js` (`npm run lint` runs ESLint alone): unused variables, empty
+blocks without a comment, unreachable code, `==` other than against `null`, and `let` that is never
+reassigned. `no-shadow` is deliberately not enabled (see the comment in the config).
 `npm run test:unit` runs non-GUI tests with a three-minute per-file cap (multiplied, like
 every explicit per-test timeout, by `WEFT_TEST_TIME_SCALE`; CI sets 4 on Windows, whose synced
 disk writes are several times slower) and
@@ -24,6 +28,10 @@ leaked handle shows up before Windows CI. Crash tests accept Windows termination
 `SIGKILL`; AppImage replacement tests run only off Windows, and the open-database
 replacement scenario asserts that Windows refuses the replacement instead.
 
+`npm test` runs exactly the files matching `test/**/*.test.js`; helpers and
+fixtures under `test/` and `scripts/test-unit.mjs` are never collected as tests
+(#122), so a new helper with top-level side effects cannot run by accident.
+
 The separate Linux Chromium job runs **all** tests under `xvfb-run -a npm test`,
 including native browser isolation and GUI workflows, then compares the GUI
 goldens (`WEFT_VISUAL=1`; `test/visual.test.js` skips without it; see
@@ -34,7 +42,9 @@ Weft startup retains Chromium sandboxing. Fixture tokens are disposable local-on
 values; CI has read-only repository permissions and uses no production secrets.
 
 `npm run test:docs`, `npm run evals`, and `npm run test:perf` exercise published
-examples, scripted MCP tasks, and generous local performance budgets respectively.
+examples, scripted MCP tasks, and local performance budgets respectively. CI runs
+`test:perf` on the Linux unit job and an `npm audit --omit=dev --audit-level=high` job
+on every pull request; workflow actions are pinned by commit SHA.
 Performance budgets are regression thresholds, not a throughput guarantee.
 
 Hostile-input tests use fixed random seeds, compare record operations against a
@@ -58,6 +68,26 @@ Headless-session, tab-suspension and responsiveness tests (`test/headless.test.j
 run only in the Linux Chromium job under Xvfb with software rendering. Their
 evidence is Linux-only; the responsiveness budgets are deliberately generous
 regression ceilings, and `perf/README.md` records the reference numbers.
+
+Everyday browser chrome (`test/browser-chrome.test.js`) runs real Electron in the
+Linux Chromium job: shortcuts pressed inside a page (including a page that claims
+Ctrl+F), the context-menu template and a site-blocked link, find counts, zoom
+memory, recently closed tabs, tab order, DevTools refusals and page source. The
+native context menu and the system print dialog are not opened under test (the
+menu is captured before it is shown; printing is stubbed). The print dialog on
+Windows, macOS and Linux desktops and macOS Cmd shortcuts have not been checked
+by hand yet.
+
+`test/windows-browser.test.js` (real Electron under Xvfb, Linux only) opens a
+link from the first launch and from a second launch into Everything, moves a
+workspace into a second window and back without reloading its page, and shows
+four live pages in a 2×2 pane grid. On the 4-core CI-class container used on
+2026-10-19 (software rendering), applying the four-pane layout took about 20 ms
+until all four native views were placed, with 8 page renderers open (four
+visible, four in other workspaces) using about 770 MiB of working set in total.
+This is a single local measurement, not a budget; real pointer drags out of the
+rail, multiple physical displays and macOS/Windows window behaviour were not
+exercised.
 
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
 malware-feed, payment-provider, model-provider account, signed-in webmail,

@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Providers } from '../src/providers.js';
+import { Providers, locality } from '../src/providers.js';
 import { budget } from './time-budget.js';
 
 async function fixture(t, handler, options = {}) {
@@ -275,8 +275,7 @@ test('unknown write tools and model attempts to change workspace or tab are refu
 
 test('conversation workspace changes during inference prevent cross-workspace tool reads', async t => {
   let reads = 0;
-  let fixtureData;
-  fixtureData = await fixture(t, (_req, res) => {
+  const fixtureData = await fixture(t, (_req, res) => {
     fixtureData.conversations.get('conversation-1').workspaceId = 'project-b';
     reply(res, toolReply('workspace_search', { query: 'secret' }));
   }, { searchWorkspace: async () => { reads++; return []; } });
@@ -381,7 +380,7 @@ test('cloud sends require itemized acknowledgement, reuse scoped consent, and sa
   await assert.rejects(providers.execute('chat.send', args), /CLOUD_DISCLOSURE_REQUIRED/);
   assert.equal(requests.length, 0);
   assert.equal(conversations.get('conversation-1').messages.length, 0);
-  await providers.execute('chat.send', { ...args, disclosureAck: true });
+  await providers.execute('chat.send', { ...args, disclosureAck: disclosure.digest });
   assert.equal(JSON.stringify(requests).includes('Private value'), false);
   assert.equal(manifests.at(-1).status, 'complete');
   assert.deepEqual(manifests.at(-1).contextIds, ['ref-a']);
@@ -405,7 +404,7 @@ test('local-only context taints derived assistant history and cannot cross to cl
   await send({ context: [{ title: 'Private source', content: 'Sensitive original', localOnly: true }] });
   assert.equal(conversations.get('conversation-1').messages.every(message => message.localOnly), true);
   await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model });
-  await send({ disclosureAck: true });
+  await send({ disclosureAck: (await providers.execute('chat.preview', { conversationId: 'conversation-1', modelId: model.id, text: 'Hello' })).disclosure.digest });
   assert.equal(JSON.stringify(requests[1]).includes('Sensitive'), false);
 });
 
@@ -423,7 +422,7 @@ test('local-only search results are withheld from cloud tools and recorded in th
   const { providers, workspace, model, send } = fixtureData;
   workspace.recordTurnManifest = async (_id, manifest) => manifests.push(structuredClone(manifest));
   await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model, tools: true });
-  await send({ allowReadTools: true, disclosureAck: true });
+  await send({ allowReadTools: true, disclosureAck: (await providers.execute('chat.preview', { conversationId: 'conversation-1', modelId: model.id, text: 'Hello', allowReadTools: true })).disclosure.digest });
   assert.equal(JSON.stringify(requests[1]).includes('secret reference'), false);
   assert.equal(manifests.at(-1).tools[0].withheldLocalOnly, true);
 });
@@ -444,18 +443,18 @@ test('only normalized loopback allowlist endpoints bypass cloud disclosure', { t
     ['http://[::1]:11434/v1', false],
     ['http://[0:0:0:0:0:0:0:1]:11434/v1', false],
     ['http://127.1:11434/v1', false], // WHATWG URL canonicalizes this to 127.0.0.1.
-    ['http://localhost.:11434/v1', true],
+    ['https://localhost.:11434/v1', true],
     ['http://127.0.0.2:11434/v1', true],
-    ['http://[::ffff:127.0.0.1]:11434/v1', true],
+    ['https://[::ffff:127.0.0.1]:11434/v1', true],
     ['http://10.0.0.1:11434/v1', true],
     ['http://192.168.1.1:11434/v1', true],
     ['http://172.16.0.1:11434/v1', true],
     ['http://[fc00::1]:11434/v1', true],
     ['http://[fe80::1]:11434/v1', true],
     ['http://model.local:11434/v1', true],
-    ['http://127.0.0.1.nip.io:11434/v1', true],
-    ['http://localhost.example:11434/v1', true],
-    ['http://10.attacker.example:11434/v1', true],
+    ['https://127.0.0.1.nip.io:11434/v1', true],
+    ['https://localhost.example:11434/v1', true],
+    ['https://10.attacker.example:11434/v1', true],
     ['https://models.example/v1', true],
     ['https://8.8.8.8/v1', true],
     ['https://[2001:4860:4860::8888]/v1', true],
@@ -466,4 +465,56 @@ test('only normalized loopback allowlist endpoints bypass cloud disclosure', { t
     assert.equal(disclosure.requiresAcknowledgement, requiresAcknowledgement, endpoint);
     assert.equal(disclosure.locality === 'on-device endpoint', !requiresAcknowledgement, endpoint);
   }
+});
+
+test('plain HTTP is refused for public model hosts, and environment keys do not follow an endpoint to another host (#115)', { timeout: budget(10000) }, async t => {
+  const env = { WEFT_TEST_PROVIDER_KEY: 'env-secret-key' };
+  const { providers, model } = await fixture(t, (_req, res) => reply(res, { choices: [{ message: { content: 'ok' } }] }), { env });
+  for (const endpoint of ['http://models.example/v1', 'http://8.8.8.8/v1', 'http://10.attacker.example/v1', 'http://127.0.0.1.nip.io/v1']) {
+    await assert.rejects(providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint, model: model.model }),
+      error => error.code === 'invalid_arguments' && /Plain HTTP/.test(error.message), endpoint);
+    await assert.rejects(providers.execute('models.discover', { provider: 'openai', endpoint }), /Plain HTTP/, endpoint);
+  }
+  for (const endpoint of ['http://192.168.1.20:11434/v1', 'http://10.0.0.5/v1', 'http://172.20.0.1/v1', 'http://studio.local:1234/v1', 'http://[fd00::1]:8080/v1', 'https://models.example/v1']) {
+    await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint, model: model.model });
+  }
+  assert.equal(locality('http://10.attacker.example/v1'), 'external endpoint', 'only literal private addresses are local-network');
+  const local = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: model.endpoint, model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(local.hasApiKey, true);
+  const sameHost = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: `${model.endpoint}/`, model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(sameHost.apiKeyEnv, 'WEFT_TEST_PROVIDER_KEY', 'the same origin keeps the variable');
+  const moved = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://moved.example/v1', model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(moved.apiKeyEnv, undefined, 'a new host stops receiving the environment key');
+  assert.equal(moved.hasApiKey, false);
+  assert.match(moved.keyNotice, /confirmKeyDestination/);
+  const reentered = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: model.endpoint, model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(reentered.apiKeyEnv, 'WEFT_TEST_PROVIDER_KEY', 'a newly entered variable is used');
+  const kept = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://third.example/v1', model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY', confirmKeyDestination: true });
+  assert.equal(kept.apiKeyEnv, 'WEFT_TEST_PROVIDER_KEY', 'an explicit confirmation keeps it');
+});
+
+test('model connections are written durably and survive a reopen (#114)', async t => {
+  const { providers, model, directory } = await fixture(t, (_req, res) => reply(res, { choices: [{ message: { content: 'ok' } }] }));
+  await providers.execute('models.save', { id: model.id, name: 'Renamed', provider: model.provider, endpoint: model.endpoint, model: model.model });
+  const disk = JSON.parse(await readFile(join(directory, 'model-connections.json'), 'utf8'));
+  assert.equal(disk.profiles.find(item => item.id === model.id).name, 'Renamed');
+  assert.deepEqual((await readdir(directory)).filter(name => name.endsWith('.tmp')), [], 'no temporary files are left behind');
+  const reopened = await new Providers({ directory, workspace: { getConversation() {}, async appendMessage() {} }, env: {} }).init();
+  t.after(() => reopened.close());
+  assert.equal((await reopened.execute('models.list', {})).find(item => item.id === model.id).name, 'Renamed');
+});
+
+test('agents acknowledge a cloud disclosure only with the digest of what they previewed (#126)', async t => {
+  const requests = [];
+  const { providers, model } = await fixture(t, () => {}, { fetchImpl: async (_url, options) => { requests.push(JSON.parse(options.body)); return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })); } });
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model });
+  const args = { conversationId: 'conversation-1', modelId: model.id, text: 'Summarize' };
+  const agent = { actor: 'client:11111111-1111-1111-1111-111111111111', clientId: '11111111-1111-1111-1111-111111111111' };
+  const { disclosure } = await providers.execute('chat.preview', args);
+  assert.match(disclosure.digest, /^[0-9a-f]{64}$/);
+  await assert.rejects(providers.execute('chat.send', { ...args, disclosureAck: true }, agent), /CLOUD_DISCLOSURE_REQUIRED.*disclosure\.digest/, 'an agent cannot self-acknowledge with a bare true');
+  await assert.rejects(providers.execute('chat.send', { ...args, text: 'Something else', disclosureAck: disclosure.digest }, agent), error => error.code === 'stale_state', 'a digest for other content does not acknowledge this one');
+  assert.equal(requests.length, 0);
+  await providers.execute('chat.send', { ...args, disclosureAck: disclosure.digest }, agent);
+  assert.equal(requests.length, 1);
 });

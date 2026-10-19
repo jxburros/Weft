@@ -41,7 +41,7 @@ WEFT_A11Y_REPORT=/tmp/a11y.json xvfb-run -a node --test test/accessibility.test.
 | Focus restoration | A dialog is opened from its control with `Enter`, closed with `Escape`; focus must have moved into it and must return to the same control. |
 | Native page boundary | `F6` from the address bar focuses the live page (a separate Chromium view); `F6` and `Ctrl+L` pressed inside the page return focus to Weft; the page never receives those keys; the "Move focus into the page" control works. |
 | Live regions | Only the toast, the announcer, the alert announcer and dialog error regions are live; four seconds of idle polling announce nothing and replace no controls; a new agent request is announced once. |
-| Ownership and split view | Agent control and takeover update the ownership chip, the page frame (with the handoff transition) and an announcement; split view states the focused pane in text and moves keyboard focus into the chosen pane. |
+| Ownership and panes | Agent control and takeover update the ownership chip, the page frame (with the handoff transition) and an announcement; every pane header states its position, title, owner and "Focused" in text, choosing a pane moves keyboard focus into it, F6 visits every pane, dividers are `role="separator"` controls moved with the arrow keys (Home resets), and a collapsed layout is announced. Windows are titled with their workspace; moving a workspace has a menu alternative to dragging. |
 | Zoom and text scaling | At the minimum window (1000 × 640) with 200% browser zoom (a 500 × 320 CSS px viewport) and separately with 200% root text: no horizontal overflow, no clipped control outside a scroll container, no overlapping visible controls, no cut-off text. |
 | Reduced motion | With `prefers-reduced-motion: reduce` emulated, no element runs an animation or transition and the handoff duration token is `0ms`. |
 
@@ -78,14 +78,16 @@ the text stays in the DOM visually hidden, and the current section has
 | Saved sign-ins, payments, plugins, extensions, backups, resource limits, export, encryption, retention, model connection, learning & memory, background learning, add memory, semantic search, explain address, storage coverage, page tools | pass | pass | pass | pass | — | — | — | manual |
 | Subscribe to a community list (and its preview) | pass | pass | pass | pass | modal pass (12) | pass | pass / pass | manual |
 | Lock screen | pass | pass | pass | pass | trapped inside, app inert | pass after unlock | — | manual |
-| Credential entry window (separate secret window) | n/a | token-checked only | manual | manual | manual | n/a | manual | manual |
+| Credential entry window (separate secret window; sign-in and payment card, light and dark OS theme) | pass | pass | pass | pass | pass (4 and 6 controls; Escape cancels and closes) | n/a (own window) | manual | manual |
 | Send to Weft preview, Ask Weft action review, email reader, workflow watch fields, Mailbox with messages | not audited | not audited | not audited | not audited | not audited | not audited | not audited | manual |
 | Website content inside the live page | n/a (the website's own) | n/a | n/a | n/a | boundary only | n/a | n/a | n/a |
 
 A dash means that combination is not exercised separately; the row's other
 checks cover its markup. The credential entry window is a separate sandboxed
-window and is not yet driven by the audit; neither are the surfaces in the
-"not audited" row. `test/gui.test.js` drives the Send to Weft preview,
+window; since 1.4.0 the audit opens it directly (the CI Linux keyring is
+`basic_text`, so `credentials.create` refuses before prompting) for both kinds
+under both OS themes. Zoom and text scaling of that fixed-size window are not
+checked. The surfaces in the "not audited" row are not driven by the audit. `test/gui.test.js` drives the Send to Weft preview,
 action review, email reader and a populated Mailbox, but runs no accessibility
 checks on them; the workflow editor is not opened by any GUI test.
 
@@ -94,6 +96,8 @@ checks on them; the workflow editor is not opened by any GUI test.
 | Finding | Fix |
 | --- | --- |
 | The page view could trap keyboard focus: once inside a website there was no key back to Weft. | `F6`/`Shift+F6`, `Ctrl/Cmd+L` and `Ctrl/Cmd+K` are intercepted before the page sees them (`src/browser.js` `chromeShortcut`) and return focus to the chrome; `F6` cycles address bar → page → agent panel → sidebar → content; a "Move focus into the page" control appears on focus. These keys are not human takeover. |
+| Browser shortcuts stopped working once focus was inside a website (#88). | The full shortcut table (`src/shortcuts.js`) runs from the chrome and from inside a page; controls that have a shortcut expose it with `aria-keyshortcuts` and in their tooltip, and Page tools lists every shortcut. Pointer-only interactions have keyboard equivalents: Alt+Shift+↑/↓ moves a sidebar tab (drag), Shift+F10 or the menu key opens the page context menu (a native, screen-reader-labelled menu). |
+| Address suggestions, the find bar and the recently closed list (#91, #92, #93). | The address field is an ARIA combobox (`aria-expanded`, `aria-controls`, `aria-activedescendant`, ↑/↓/Enter/Escape); the find bar is a `search` landmark whose match count is announced through the single status region; both are axe-audited in both themes, as is the recently closed tabs dialog (`test/accessibility.test.js`). |
 | Polling replaced the sidebar, tab list, notices and view every snapshot change, destroying the focused control (screen readers lost their place) and restoring focus to the wrong duplicate control. | Markup is replaced only when it changes (`setHTML`), and focus restoration remembers the region and position of the control. |
 | Outcome codes were lost across the preload bridge, so a lock made outside the window never showed the lock screen and status labels never applied. | The renderer unwraps `executeOutcome` itself. |
 | The status bar was a live region announcing every "Running …/Done"; streamed chat tokens, the approval list, activity filters, update and display panels were live regions too. | One polite announcer and one alert announcer; announcements for completed replies, new agent requests, stopped automation, tasks needing attention, ownership changes, palette results and filter results; streaming text is `aria-hidden` and the log is `aria-busy` while a reply streams. |
@@ -107,6 +111,7 @@ checks on them; the workflow editor is not opened by any GUI test.
 | The rail overlapped its own buttons at 200% zoom. | The rail scrolls. |
 | Opening the agent panel left focus on the toggle; the palette had no arrow-key navigation. | Opening from the keyboard focuses the message field, `Escape` returns to the toggle; arrow keys move through palette results and `Enter` opens the first. |
 | A stray `}` in `gui.css` silently dropped the tab-group styles. | Removed. |
+| Credential entry window (1.4.0): the trusted band sat outside every landmark (axe `region`). | The band is the window's `header` (banner landmark). |
 
 ## Keyboard reference
 
@@ -150,9 +155,11 @@ checks; VoiceOver on the current macOS; Orca on GNOME (Wayland and X11).
 4. **Page boundary.** `F6` into the page, use the page's own links, then `F6`
    and `Ctrl+L` back. The page must not receive those keys; the agent must not
    lose control because you left with `F6`.
-5. **Split view.** With two live pages, turn on split view, use the "Left pane" /
+5. **Panes.** With two live pages, turn on split view, use the "Left pane" /
    "Right pane" buttons; the pressed state and "Focused" are read and focus moves
-   into that pane.
+   into that pane. Choose Page tools > Pane layout > Four in a grid, move a
+   divider with the arrow keys, and F6 through every pane. Move a workspace to a
+   new window from Manage workspaces and confirm the new window's title is read.
 6. **Agent requests and payment.** On a new agent request one announcement is
    read; open Agent requests; each card starts with "Weft browser control · Agent
    request" (or "Payment approval"); approve once with the keyboard.

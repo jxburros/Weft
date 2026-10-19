@@ -49,6 +49,12 @@ authenticated identity (requests rejected by transport validation omit it). Use 
 for record updates, deletions, task transitions and artifact annotations; a
 mismatch is `stale_state` and changes nothing.
 
+Page reads are untrusted data. `page.evaluate` returns
+`{ "value": <JSON result>, "contentTrust": "untrusted" }` to agents, with control
+and bidirectional-override characters removed from every string and key (a person
+in the trusted interface receives the raw value). Untyped failures (`command_failed`)
+never show agents local filesystem paths: they read `<path>`.
+
 Bound any command with a deadline: the REST `Weft-Deadline-Ms` header (or a
 `deadlineMs` field next to `command` and `args`), the CLI `--deadline-ms` option
 or the MCP grouped-tool `deadlineMs` argument (1–600000 ms). Expiry returns
@@ -167,9 +173,13 @@ without image input, fail before any request with the typed
 A vision fallback is used only when a human configured `visionFallbackId` on the
 selected connection; it receives only the new message text and the listed
 images, and its description returns to the selected model as untrusted text.
-Cloud destinations, images sent off-device and every fallback use require
-`disclosureAck: true` after preview. No request is ever retried against another
-provider or endpoint.
+Cloud destinations, images sent off-device and every fallback use require an
+acknowledgement after preview: agents send `disclosureAck` set to the
+`disclosure.digest` that `chat.preview` returned for the same arguments (a bare
+`true` is accepted only from the trusted interface and from a task step a person
+acknowledged with `tasks.continue`). A digest for different content or a changed
+destination is refused with `stale_state` (`disclosure_changed`); preview again.
+No request is ever retried against another provider or endpoint.
 
 `chat.send` can also give the model tools. `allowReadTools: true` offers
 `page_readable` (only the `tabId` you pass), `workspace_search` and
@@ -289,7 +299,11 @@ those events are no longer retained (at most 1,000 events, 1 MiB or 15 minutes),
 the process restarted or the id is unknown, an `event: gap` frame with a
 `reason` precedes whatever is still retained; re-read current state before
 relying on derived assumptions. Replay applies the same metadata allowlist and
-workspace scope as live delivery. The complete list of event types is
+workspace scope as live delivery. A scoped client's stream needs the read scope
+and the `activity` data class (like `events.list`); a turn stream needs the
+`conversations` data class (like `conversations.get`). Both end as soon as the
+grant is narrowed, revoked or expires, or its bound task closes. One identity may
+hold four streams at once. The complete list of event types is
 `features.eventReplay.types` in `weft.capabilities`; besides those above it
 includes `activity`, `collection`, `conflict`, `credential`, `capture`, `tab`,
 `display`, `payment`, `indexing` and `encryption`. `turn` events report `started`, `completed`, `partial`, `interrupted` or
@@ -318,6 +332,20 @@ application launches (`launches.approve`) are human-only. Agents may read
 prefetch/prerender requests are cancelled for every destination. Browser
 enforcement covers requests made by Weft's Chromium sessions only; your own
 HTTP clients, shells and tools are outside it and need their own controls.
+
+Web permissions (camera, microphone, location, notifications, clipboard
+read, screen sharing, MIDI, sensors) are answered only by the person in a
+browser-owned prompt. `permissions.list` shows the workspace's decisions and
+pending prompts; `permissions.respond`, `permissions.set`,
+`permissions.configure`, `permissions.stop` and `popups.allow` are human-only
+(MCP `weft_site`). A page you drive without recent human input is denied
+without a prompt, so a site feature that needs a permission fails; report it
+and ask the person. Pop-ups an action opens become tabs whose `opener` field
+names the tab that opened them; they never inherit your lease. The person's
+saved passwords (`passwords.*`) and private windows are not available to any
+agent: a tab id that belongs to a private window fails with
+`permission_required`. Use brokered sign-ins (`credentials.fill`, below) for
+logins you are allowed to perform.
 
 ## Headless sessions, limits, queues and suspended tabs
 
@@ -366,6 +394,37 @@ unsent input is gone) and `page.inspect` reports `restored`. Agents may suspend 
 refuses tabs that are leased, linked to an open task, busy, playing media or
 holding edited form fields and lists why. `tabs.search` finds tabs by title, URL
 or group, and `resume.get` lists blockers, open tasks and handoffs to continue.
+
+Tab order is the order of `tabs.list`; `tabs.reorder` moves a tab nobody else
+holds and does not change its version. `tabs.closed` lists up to 25 recently
+closed tabs of the workspace (data class `browsing_history`; cleared when a
+person clears history) and `tabs.reopen` reopens one at its saved scroll and
+zoom like `tabs.new`: it comes back without any lease, control mode or
+protected-operation state. Browser shortcuts, the page context menu, the print
+dialog, DevTools and page source are people-only chrome, not commands; agent
+key presses never trigger a shortcut, and `view-source:` addresses are refused.
+The address-bar search engine is a human-only `settings.update` field
+(`searchEngine`).
+
+## Everything, windows and panes
+
+The built-in **Everything** workspace holds unfiled pages and links other apps
+asked Weft to open. It is never an implicit agent target: it does not make a
+profile ambiguous, an agent that omits `workspaceId` reaches the single project
+workspace (or gets `ambiguous_target`, whose `details.workspaceIds` omit
+Everything), and the current tab in Everything is not an implicit page target.
+Name it explicitly (its id is in `workspaces.list`, `builtin: "everything"`);
+a scoped client needs it in its grant like any workspace. A link opened by the
+operating system never grants access or starts an action. It cannot be deleted,
+renamed or archived (`invalid_arguments`). `workspaces.moveRecord` (human only)
+moves a material or capture between workspaces.
+
+Windows and panes are display state. `windows.list` reports each window, the
+workspaces it shows and its active tab, filtered to your grant; tabs carry an
+informational `windowId`. `windows.moveWorkspace` and `windows.focus` are human
+only. Saved pane layouts appear in `resume.get` as `view.panes`
+(`{layout, items, focused, sizes}`); a pane grants nothing, and tabs are still
+addressed by id. `workspaces.switch` refuses a workspace shown in another window.
 
 ## Updates
 

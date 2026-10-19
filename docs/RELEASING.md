@@ -39,6 +39,10 @@ The repository maintainers with release permission on `jxburros/Weft` own releas
 the signing identities and Electron/Chromium security updates. Dependabot opens
 weekly npm and GitHub Actions update PRs (`.github/dependabot.yml`); Electron is
 grouped separately so its security review is never bundled with routine updates.
+Every workflow action is pinned by commit SHA with its version in a comment
+(`test/release.test.js` refuses a tag or branch reference); Dependabot updates the SHA
+and the comment together. Pull requests run the same `npm audit --omit=dev
+--audit-level=high` gate as releases, and CI and releases run `npm run test:perf`.
 Naming an individual on-call owner is a maintainer decision recorded in the
 repository settings, not in this file.
 
@@ -55,9 +59,11 @@ A release tag is blocked unless all of these hold:
    changelog when accepted.
 3. The full suite passes with real Chromium (`xvfb-run -a npm test`), plus
    `npm run test:docs` and `npm run evals`.
-4. Every platform builds, and the packaged app passes `scripts/release/smoke-packaged.js`
-   (authenticated loopback API, version, kill switch honored, automation refused
-   update checks, clean exit).
+4. Every platform builds, its packaged executable has the Electron fuses in
+   `scripts/release/fuses.cjs` (`scripts/release/check-fuses.js`), and the packaged
+   app passes `scripts/release/smoke-packaged.js` (authenticated loopback API,
+   version, kill switch honored, automation refused update checks, no inspector
+   opened for `--inspect` or `NODE_OPTIONS`, clean exit).
 5. `scripts/release/verify-assets.js` re-verifies each `latest*.yml` with the same
    strict parser the app uses and every listed file's size and SHA-512, then writes
    `SHA256SUMS.txt`.
@@ -65,6 +71,34 @@ A release tag is blocked unless all of these hold:
    changes and security notes, `webPreferences`/sandbox defaults, new permission or
    `session` behavior, `test/browser*.test.js` results, and the browser safety audit
    (`docs/BROWSER-SAFETY-AUDIT.md`). Record the review in the release notes.
+
+### Electron fuses
+
+Packaged builds flip these fuses (`electronFuses` in `electron-builder.config.cjs`,
+values in `scripts/release/fuses.cjs`, checked after every build):
+
+| Fuse | State | Effect |
+| --- | --- | --- |
+| `EnableNodeOptionsEnvironmentVariable` | off | `NODE_OPTIONS` is ignored by every Weft process |
+| `EnableNodeCliInspectArguments` | off | `--inspect`, `--inspect-brk` and similar flags cannot attach a debugger |
+| `EnableEmbeddedAsarIntegrityValidation` | on | macOS and Windows refuse to start with a modified `app.asar` (Linux has no such validation) |
+| `OnlyLoadAppFromAsar` | on | the app is loaded only from `app.asar`, never from a loose `app/` folder |
+| `RunAsNode` | **on** | `ELECTRON_RUN_AS_NODE` still works; see below |
+
+Packaged builds also ship only the runtime packages the app imports (today only `zod`).
+The MCP bridge (`node bin/weft.js mcp`) runs from a source checkout, and `bin/` is not
+packaged, so `@modelcontextprotocol/sdk` and the HTTP transports it depends on
+(express, hono, cors, jose and others) stay out of `app.asar`; `test/release.test.js`
+fails if shipped code starts importing an excluded package.
+
+`RunAsNode` stays enabled because the plugin sandbox (`src/plugins/sandbox.js`) and the
+credential broker (`src/credentials.js`) are child processes of the Electron binary
+started with `ELECTRON_RUN_AS_NODE` and Node's permission-model flags, with an
+explicit minimal environment. A same-user process can therefore still run the Weft
+binary as plain Node. Turning the fuse off requires moving both children to
+`utilityProcess` and re-establishing their stdin protocol and `--permission`
+restrictions there; that is tracked as a follow-up rather than done silently. Cookie
+encryption is not changed by this build.
 
 ## Release procedure
 
@@ -113,7 +147,17 @@ Without these secrets the workflow still releases, but each package is labelled
 **UNSIGNED** in the release notes and on Windows the updater verifies only the
 manifest's size and SHA-512. Unsigned Windows release notes also tell people how
 to check the installer against `SHA256SUMS.txt` and get past the SmartScreen
-"Windows protected your PC" prompt (**More info** > **Run anyway**).
+"Windows protected your PC" prompt (**More info** > **Run anyway**); unsigned macOS
+notes explain checking the `.dmg`/`.zip` with `shasum -a 256` and opening Weft past
+Gatekeeper (**System Settings** > **Privacy & Security** > **Open Anyway**).
+
+`scripts/release/signing.cjs` holds the one signing decision: `electron-builder.config.cjs`
+enables Azure Trusted Signing and notarization from it, and the release workflow labels
+a platform signed only when it holds. Windows needs all of `AZURE_SIGNING_ENDPOINT`,
+`AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` and `WEFT_WINDOWS_PUBLISHER` (or a
+`WIN_CSC_LINK` certificate); macOS needs the certificate and all three notarization
+values. A partial set builds and is labelled unsigned rather than failing signature
+verification with a confusing cause.
 
 | Secret | Purpose |
 | --- | --- |
@@ -129,6 +173,47 @@ Store signing secrets in a protected GitHub **environment** with required review
 before first use. EV/HSM-backed certificates should prefer Azure Trusted Signing.
 **Not yet verified:** no signing identity exists for this repository, so signing,
 notarization, Gatekeeper assessment and the signature verification steps have not run.
+
+## Maintainer checklist with real credentials
+
+Everything below needs accounts, certificates or hardware that CI does not
+have. Each step closes one "Not yet verified" row in the validation table;
+record the date, version, machine and result there (and in
+`docs/VALIDATION.md`) when it is done. Issues #33, #54 and #60 were closed as
+code complete with this list as their outstanding external validation.
+
+1. **Create signing identities.** Windows: an Azure Trusted Signing account and
+   certificate profile (or an OV/EV certificate as PFX), with the publisher
+   common name chosen for `WEFT_WINDOWS_PUBLISHER`. macOS: an Apple Developer ID
+   Application certificate and an App Store Connect API key with notarization
+   rights. Optional: a GPG key for `SHA256SUMS.txt`, with its fingerprint
+   published in `README.md`.
+2. **Store the secrets** in a protected GitHub environment with required
+   reviewers (table above). Set either the complete Azure group or the PFX pair,
+   not part of a group: the workflow and `electron-builder.config.cjs` must agree
+   on whether a build is signed.
+3. **Dry run on a release branch.** Push a `vX.Y.Z-rc` style tag in a fork or a
+   draft and confirm: Windows `Get-AuthenticodeSignature` reports `Valid` with
+   the expected subject; `codesign --verify --deep --strict` and
+   `spctl --assess --type execute` pass and `xcrun stapler validate` succeeds on
+   the macOS app; the GPG signature of `SHA256SUMS.txt` verifies.
+4. **Interactive Windows installer** (#54): on a real Windows 10/11 machine run
+   the installer by hand: welcome, folder choice, finish page; check the art and
+   text; uninstall once keeping data and once choosing data removal (with its
+   confirmation); confirm SmartScreen behaviour for the signed build.
+5. **Upgrade across two real releases** (#33, #60): install release N, create a
+   workspace with captures, a credential and an encrypted profile, then update to
+   N+1 through Settings > Updates on Windows, macOS, AppImage and `.deb`.
+   Confirm the profile migrates, the health check passes, and data is intact.
+6. **Failed and tampered updates** (#60): serve a manifest with a wrong SHA-512
+   and a downgraded version from a test release and confirm refusal; force a
+   health-check failure (for example by killing the new version during its first
+   two launches) and confirm AppImage rollback, the Windows retained-installer
+   offer and the macOS/`.deb` guidance.
+7. **Offline recovery**: with networking off, reinstall the previous release
+   from a downloaded file verified with `SHA256SUMS.txt`.
+8. **Intel macOS**: launch the x64 app on Intel hardware (or under Rosetta).
+9. **Name release owners** in "Maintenance ownership" above.
 
 ## Trust roots
 
@@ -183,5 +268,6 @@ manifest. Code signing (Windows/macOS) is what defends against that.
 | Windows installer (silent per-user install, uninstall registry entry, Start menu and desktop shortcuts, launch of the installed app, reinstall over an existing copy, silent uninstall keeping workspace data and removing the update cache) | Checked on every PR and release by `scripts/release/windows-install-check.ps1` on GitHub's `windows-latest` runner (Windows Server, build 26100); first passed 2026-10-18 for 1.1.0. Same-version reinstall only: an upgrade across two real releases is not yet exercised. The interactive pages (welcome, install folder, uninstall data choice and its confirmation) are not exercised by a silent run |
 | macOS dmg/zip packaging | dmg and zip for arm64 and x64 built on `macos-latest` on every PR and release, manifests verified and the native arm64 app launched by `scripts/release/smoke-packaged.js`; the x64 app has not been launched on Intel hardware |
 | macOS signing, notarization, Gatekeeper | **Not yet verified** (requires Apple credentials) |
+| Electron fuses | Checked by `scripts/release/check-fuses.js` on the Linux unpacked build (locally, 2026-10-19) and in CI and releases on every platform's executable; the smoke test confirms `--inspect=0` and `NODE_OPTIONS=--inspect=0` open no inspector. Asar integrity refusal of a tampered `app.asar` has not been exercised on macOS or Windows |
 | Tag-triggered release workflow | Ran successfully on GitHub for v1.1.3, v1.2.0 and v1.3.0; v1.2.0 and v1.3.0 were published by the workflow with every platform labelled unsigned. Earlier tags (v1.1.0–v1.1.2) failed in the workflow; see `CHANGELOG.md` |
 | Install, upgrade across real versions, uninstall data preservation, real rollback on each OS | **Not yet verified** on real machines |

@@ -20,9 +20,9 @@ export const downloadSafetySchemas = Object.fromEntries(Object.entries(downloadS
 // Schemes with a record of remote-code or credential abuse are never launched, even with approval.
 export const NEVER_LAUNCH = new Set(['file', 'javascript', 'data', 'vbscript', 'blob', 'filesystem', 'chrome', 'about', 'devtools', 'view-source', 'ms-msdt', 'search-ms', 'search', 'ms-officecmd', 'ms-cxh', 'ms-cxh-full', 'ms-appinstaller', 'ms-settings', 'smb', 'nfs', 'afp', 'jar', 'shell', 'res', 'its', 'mk', 'ms-its', 'hcp', 'ldap', 'ldaps']);
 const CATEGORIES = [
-  ['installer', /\.(msi|msix|msixbundle|appx|appxbundle|pkg|mpkg|dmg|deb|rpm|apk|aab|ipa|appimage|snap|flatpak|run)$/i],
-  ['executable', /\.(exe|com|scr|pif|cpl|dll|sys|app|bin|elf|out|xpi|crx|jar|class|so|dylib)$/i],
-  ['script', /\.(bat|cmd|ps1|psm1|vbs|vbe|js|jse|mjs|wsf|wsh|hta|sh|bash|zsh|command|tool|py|pyw|pl|rb|php|lnk|url|scf|reg|inf|desktop|applescript|scpt|workflow)$/i],
+  ['installer', /\.(msi|msix|msixbundle|appx|appxbundle|pkg|mpkg|dmg|deb|rpm|apk|aab|ipa|appimage|snap|flatpak|run|msp|mst)$/i],
+  ['executable', /\.(exe|com|scr|pif|cpl|dll|sys|app|bin|elf|out|xpi|crx|jar|class|so|dylib|chm|msc|xll|jnlp|appref-ms)$/i],
+  ['script', /\.(bat|cmd|ps1|psm1|vbs|vbe|js|jse|mjs|wsf|wsh|hta|sh|bash|zsh|command|tool|py|pyw|pl|rb|php|lnk|url|scf|reg|inf|desktop|applescript|scpt|workflow|wsc|sct|ps1xml|library-ms|settingcontent-ms|iqy|slk)$/i],
   ['archive', /\.(zip|7z|rar|tar|gz|tgz|bz2|tbz|xz|txz|zst|cab|iso|img|vhd|vhdx|lzh|ace|arj|z)$/i],
   ['office-macro-capable', /\.(docm|dotm|xlsm|xltm|xlam|pptm|potm|ppsm|sldm)$/i],
 ];

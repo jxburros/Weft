@@ -1,7 +1,7 @@
 # ADR 009: malicious-destination intelligence and download protection
 
 Status: implemented; provider adapter and OS metadata paths tested against
-fixtures only. Last reviewed: 2026-10-17. Issue: #20.
+fixtures only. Last reviewed: 2026-10-19 (publisher addendum). Issue: #20.
 
 ## Destination intelligence
 
@@ -73,6 +73,46 @@ services. A v5 (`hashes:search`) adapter is future work.
   were observed to be dropped by Chromium without reaching the permission hook.
 - All web permission requests remain denied; repeated or deceptive prompts are
   counted per tab and never reach the person.
+
+## Addendum (2026-10-19): no bundled or curated list publisher
+
+Decision: Weft ships **no** threat list and names **no** default or
+"recommended" publisher. This closes the open product decision from #20.
+
+Reasons:
+
+- **Trust and liability.** A bundled list makes the Weft maintainers the
+  publisher of a security verdict for every user. Nobody has taken on that
+  responsibility (hosting, signing keys, response time to false positives,
+  appeals), and an unmaintained list is worse than none because it reads as
+  protection.
+- **Freshness.** Weft does not update anything in the background (ADR 010:
+  stable-only, person-started updates). A list frozen into a release would be
+  stale within the 72-hour default `maxAgeHours` of most releases.
+- **Privacy and licensing.** The large public feeds have terms that forbid
+  redistribution or commercial use without an agreement (for example Safe
+  Browsing's non-commercial terms); the ones that allow it change terms and
+  formats without notice.
+- **Separation of concerns.** Findings must stay distinguishable from personal
+  preference and community lists (this ADR, ADR 004). A Weft-chosen publisher
+  would blur "Weft says this is dangerous" with "a source you chose says so".
+
+What a person can do today: install any `weft-threat-list` v1 file whose
+SHA-256 and size they obtained from its publisher (`threats.install`), or
+enable the hash-prefix provider with their own API key and an egress
+acknowledgement (`threats.configureProvider`).
+
+Conditions for revisiting (all required, recorded as a new ADR):
+
+1. A named publisher (an organization or a maintainer group) commits to
+   hosting, Ed25519 signing with pinned keys and rotation (as ADR 004),
+   a documented false-positive/appeal process and a maximum update interval.
+2. Redistribution terms that permit inclusion in an MIT-licensed browser,
+   reviewed and recorded in `THIRD-PARTY-NOTICES.md`.
+3. Delivery that preserves the person-started update model: the list is
+   offered, previewed and installed by a person, never fetched silently, and
+   it can be removed like any other list.
+4. Validation against the live feed recorded in `docs/VALIDATION.md`.
 
 ## Verification limits
 

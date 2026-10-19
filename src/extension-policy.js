@@ -47,9 +47,10 @@ const UNSUPPORTED_PERMISSIONS = Object.freeze(['alarms', 'notifications', 'conte
   'offscreen', 'webNavigation', 'unlimitedStorage', 'clipboardWrite', 'dns', 'documentScan', 'printerProvider', 'printing', 'wallpaper', 'loginState', 'processes', 'gcm', 'system.cpu', 'system.memory',
   'system.display', 'system.storage', 'storage.managed', 'webview', 'accessibilityFeatures.read', 'accessibilityFeatures.modify', 'audio']);
 const ALLOWED_KEYS = new Set(['manifest_version', 'name', 'version', 'description', 'short_name', 'version_name', 'author', 'homepage_url', 'icons', 'default_locale', 'key', 'minimum_chrome_version',
-  'permissions', 'host_permissions', 'background', 'content_scripts', 'web_accessible_resources', 'content_security_policy', 'offline_enabled', 'incognito']);
+  'permissions', 'host_permissions', 'background', 'content_scripts', 'web_accessible_resources', 'content_security_policy', 'offline_enabled', 'incognito',
+  // Toolbar button, action popup and options page (#98, ADR-007 addendum): shown only in browser-owned windows.
+  'action', 'options_page', 'options_ui']);
 const IGNORED_KEYS = Object.freeze({
-  action: 'Weft has no extension toolbar; popups are not shown', options_page: 'Weft has no extension options UI', options_ui: 'Weft has no extension options UI',
   devtools_page: 'Weft does not expose DevTools', commands: 'extension keyboard shortcuts are not registered', omnibox: 'Weft has no omnibox integration',
   side_panel: 'Weft has no extension side panel', chrome_url_overrides: 'Weft pages are not overridable', update_url: 'Weft never updates extensions automatically; reinstall to update',
   browser_specific_settings: 'other browsers only', requirements: 'not evaluated', storage: 'managed storage policies are not provided',
@@ -161,6 +162,31 @@ export function auditExtensionManifest(manifest, { hostGrants = [], files = null
     else if (files && !files.has(background.service_worker)) refuse('background.service_worker', 'invalid', `missing file ${background.service_worker}`);
     if (background?.type != null && background.type !== 'module') refuse('background.type', 'invalid', 'type must be module when present');
   }
+  const ui = { title: null, popup: null, options: null, icon: null };
+  const page = (key, value) => {
+    if (!relativeFile(value) || !/\.html?$/i.test(value)) { refuse(key, 'invalid', 'must be an .html file inside the package'); return null; }
+    if (files && !files.has(value)) { refuse(key, 'invalid', `missing file ${value}`); return null; }
+    return value;
+  };
+  if (manifest.action != null) {
+    const action = manifest.action;
+    if (!action || typeof action !== 'object' || Array.isArray(action) || Object.keys(action).some(key => !['default_title', 'default_icon', 'default_popup'].includes(key))) refuse('action', 'unsupported', 'only default_title, default_icon and default_popup are supported (no badges or action APIs)');
+    else {
+      if (action.default_title != null) ui.title = typeof action.default_title === 'string' ? action.default_title.slice(0, 200) : (refuse('action.default_title', 'invalid', 'must be text'), null);
+      if (action.default_popup != null) ui.popup = page('action.default_popup', action.default_popup);
+      const icons = typeof action.default_icon === 'string' ? { 0: action.default_icon } : action.default_icon && typeof action.default_icon === 'object' ? action.default_icon : {};
+      for (const [size, file] of Object.entries(icons)) {
+        if (!relativeFile(file) || (files && !files.has(file))) refuse(`action.default_icon.${size}`, 'invalid', 'icon must be a file inside the package');
+        else ui.icon = file;
+      }
+    }
+  }
+  if (manifest.options_page != null) ui.options = page('options_page', manifest.options_page);
+  if (manifest.options_ui != null) {
+    const options = manifest.options_ui;
+    if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['page', 'open_in_tab', 'browser_style'].includes(key))) refuse('options_ui', 'invalid', 'only page, open_in_tab and browser_style are supported');
+    else ui.options = page('options_ui.page', options.page);
+  }
   const csp = manifest.content_security_policy;
   if (csp != null && (typeof csp !== 'object' || /unsafe-eval|unsafe-inline|https?:|\*/.test(JSON.stringify(csp)))) refuse('content_security_policy', 'denied', 'extension CSP may not relax script sources');
   const grants = new Set(hostGrants);
@@ -172,6 +198,6 @@ export function auditExtensionManifest(manifest, { hostGrants = [], files = null
   }
   for (const pattern of grants) if (!requested.has(pattern)) refuse(`hostGrants.${String(pattern).slice(0, 200)}`, 'invalid', 'grant only hosts the extension requests');
   return { ok: refusals.length === 0, name: typeof manifest.name === 'string' ? manifest.name.slice(0, 200) : null, version: typeof manifest.version === 'string' ? manifest.version.slice(0, 50) : null,
-    refusals, ignored, scope: { hosts, permissions, contentScripts: Array.isArray(contentScripts) ? contentScripts.length : 0, serviceWorker: Boolean(background?.service_worker),
+    refusals, ignored, scope: { ui, hosts, permissions, contentScripts: Array.isArray(contentScripts) ? contentScripts.length : 0, serviceWorker: Boolean(background?.service_worker),
       requestedHostGrants: [...requested.keys()].map(String), residualRisks: [...RESIDUAL_RISKS] } };
 }

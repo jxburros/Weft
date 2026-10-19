@@ -99,3 +99,36 @@ remembered data (cookies, localStorage, IndexedDB, Cache Storage, service
 worker) survives. `test/site-security.test.js` covers header logic (including
 stale and unresolved frames, deterministically), write-ahead journaling and
 revocation without Electron.
+
+## Addendum (2026-10-19, issue #94): private windows
+
+- **What it is.** Ctrl/Cmd+Shift+N or Page tools > *New private window* (trusted
+  GUI only; no command exists) opens a separate window with its own minimal,
+  always-dark chrome labelled *Private*. Its page uses an in-memory Chromium
+  partition (`weft-private-<uuid>`, no `persist:` prefix): cookies, storage,
+  caches and service workers never touch the profile. Pop-ups after a click
+  open as further private windows on the same in-memory session (without an
+  opener); the session is erased when its last window closes. A crash leaves
+  nothing to clean up because nothing was written (verified by a SIGKILL test
+  that scans every profile file for the page's markers).
+- **No workspace.** A private window belongs to no workspace: no tab records,
+  history, recently-closed entries, bookmarks, captures, resume state or
+  exports. Activity records only that a private window opened or closed (with
+  a count), never an address. Downloads need a recent click or key press and
+  always open a save dialog; they are not listed in Downloads.
+- **Agents: refused by default, no opt-in offered.** Private pages are not in
+  `tabs.list`, and their ids are reserved in the tab id space so any tab or
+  page command naming one fails with `permission_required` (`private_window`).
+  There is no per-session "allow this agent here" option: inviting an agent
+  into a private window would need its own grant model and evidence trail,
+  which would contradict "leaves nothing behind". Revisit only with a separate
+  decision.
+- **Saving a page** from a private window is not offered in this version.
+- **Policy.** Every web permission is denied without a prompt. Only site rules
+  with global scope and installed threat lists apply (there is no workspace
+  scope); while an encrypted profile is locked every request is refused, as for
+  workspace pages.
+- **Interaction with other windows.** Private windows are separate from
+  workspaces and from any future multi-window or Everything workspace work.
+- **Limits.** It does not hide you from websites, your network or this
+  computer; the operating system may still page memory to swap.

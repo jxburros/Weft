@@ -16,7 +16,8 @@ deliberately generous ceilings:
 
 | Operation | Budget |
 | --- | ---: |
-| Update one record in a 10k-record store | 5 s |
+| Update one record in a 10k-record store | 500 ms |
+| Unchanged `workspace.snapshot` poll (`ifRevision`) with 10k records | 50 ms |
 | Search text across 1k captures | 2 s |
 | Export the workspace | 5 s |
 | Import its 11k records | 10 s |
@@ -25,7 +26,7 @@ deliberately generous ceilings:
 | Ranked search over 500 captures | 1 s |
 | Reopen the capture-heavy store | 5 s |
 | Encrypted: enable encryption in place (11k records, 1k captures, first backup) | 30 s |
-| Encrypted: update one record in a 10k-record store | 5 s |
+| Encrypted: update one record in a 10k-record store | 1 s |
 | Encrypted: background in-memory index rebuild after enabling, and after unlock | 15 s each |
 | Encrypted: first search after the rebuild / repeated search | 2 s / 2 s |
 | Encrypted: export (acknowledged plaintext) | 5 s |
@@ -34,6 +35,14 @@ deliberately generous ceilings:
 | 100 catalog serializations | 2 s |
 | 100 OpenAPI generations and serializations | 3 s |
 | Exact cosine search over 20,000 × 768 vectors: first (loads the matrix) / cached | 5 s / 1.5 s |
+
+Change tracking (#108): a command commits after a diff of only the collections it
+touched and the records it read or added, so the 10k-record update no longer
+re-serializes the store (Linux container, Node 22, 2026-10-19: ~8-12 ms outside the
+test runner, against ~35-60 ms with a full diff). Under the Node test runner every
+hinted commit is also compared with a full diff (`WEFT_VERIFY_CHANGE_TRACKING`), so
+the timings this suite reports include that check. An unchanged snapshot poll
+answers in under 1 ms against ~110-150 ms to build a full snapshot.
 
 Reference run (Linux container, Node 22, 2026-10-17): 10k-record update
 ~50-230 ms (JSON store: ~270 ms), 1k-capture search ~10-50 ms, import ~2.6-3.1 s

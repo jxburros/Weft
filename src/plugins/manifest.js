@@ -4,7 +4,6 @@ import { z } from 'zod';
 export const PLUGIN_API_VERSION = 1;
 // Ordered by restrictiveness; the last entry maps to the authority layer's 'unclassified' (exact approval for every use).
 const ACTION_ORDER = ['local_read', 'external_read', 'local_write', 'external_write', 'code_exec', 'cloud_spend', 'administration', 'unclassified'];
-export const PERMISSION_KEYS = Object.freeze(['workspaceRead', 'pageRead', 'workspaceWrite', 'origins', 'nativeAccess']);
 const text = (max, min = 0) => z.string().min(min).max(max);
 const bytes = 4 * 1024 * 1024;
 

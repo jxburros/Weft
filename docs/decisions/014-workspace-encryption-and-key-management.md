@@ -66,8 +66,12 @@ store, a ciphertext moved to another row, a changed revision or key version, a
 flipped byte and a keyring for another profile are all rejected with
 `component_integrity` and nothing is changed. Per-record authenticity does not
 detect rollback of a whole profile or of one record to an older ciphertext of
-the same record and revision (no trusted counter exists); that is outside the
-confidentiality threat model.
+the same record: the envelope declares its revision and the authenticated data
+binds that declared revision, so an older sealed copy decrypts as the older
+revision (no trusted counter exists). Someone with write access to the profile
+can therefore swap in an earlier sealed value; that is outside the
+confidentiality threat model and is documented in
+[storage safety](../STORAGE-SAFETY.md#encryption-at-rest).
 
 Human secrets: passphrases (minimum 12 characters) use scrypt N=2^17, r=8,
 p=1; recovery keys carry 184 random bits plus a 16-bit checksum (ten base32
@@ -92,7 +96,18 @@ wrap AAD, so lowering them fails instead of weakening the key.
   index, and zeroes key buffers. Every command except `encryption.status`,
   `encryption.unlock`, `encryption.checkRecoveryKey` and `guide.get` returns
   `locked` (HTTP 423, CLI exit 9, MCP `isError` with the same outcome), before
-  any target lookup reads workspace data. There is no idle auto-lock yet.
+  any target lookup reads workspace data.
+- **Idle auto-lock** (amended in 1.4.0). Off by default. A person sets it in
+  Settings → Encryption → Unlock options (`encryption.configure`
+  `autoLockMinutes` 1–1440 or null, `lockOnScreenLock`); agents cannot change
+  it. The main process polls OS idle time (`powerMonitor.getSystemIdleTime`)
+  every 30 s and, past the limit, locks through the same lock path with lock
+  reason `idle`; with `lockOnScreenLock` the OS `lock-screen` and `suspend`
+  events lock with reason `screen_locked`. Idle means no human keyboard or mouse
+  use of the computer: agent commands never keep the profile unlocked, and
+  running agent work stops at lock as with a manual lock. The setting lives in
+  `<profile>/auto-lock.json` (not secret; a person with write access to the
+  profile can turn it off, which is outside the at-rest threat model).
 - **Unlock** is human-only administration from the trusted GUI (agents get
   `permission_required`). A wrong secret is `key_invalid`; an OS key that
   cannot unwrap (moved profile, other account, denied keychain) is

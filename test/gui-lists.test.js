@@ -157,7 +157,7 @@ if (process.argv.includes("--gui-lists")) {
     const port = reservation.address().port;
     await new Promise((r) => reservation.close(r));
     const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--gui-lists"], {
-      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-lists-token" }),
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-lists-token-0123456789abcdef" }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

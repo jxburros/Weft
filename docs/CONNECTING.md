@@ -8,7 +8,11 @@ enforced. For guidance on writing an integration, see
 
 ## CLI and MCP
 
-Keep the browser running and give the CLI the same token:
+Keep the browser running and give the CLI the same token. The CLI and MCP bridge
+use `WEFT_API_URL` (default `http://127.0.0.1:9222`; `localhost` is connected as
+`127.0.0.1`, and `[::1]` is refused because the API listens on IPv4 loopback only).
+If you changed the port with `WEFT_PORT` (for example because Chrome's DevTools
+already uses 9222), set the same port in `WEFT_API_URL`:
 
 ```sh
 node bin/weft.js commands
@@ -43,9 +47,11 @@ For MCP, configure your client:
 }
 ```
 
-MCP advertises ten tools: `weft_tabs`, `weft_page`, `weft_workspace`,
-`weft_memory`, `weft_records`, `weft_knowledge`, `weft_artifacts`,
-`weft_browser`, `weft_models` and `weft_reference` for command discovery.
+MCP advertises eleven tools: `weft_tabs`, `weft_page`, `weft_workspace`,
+`weft_memory`, `weft_records`, `weft_knowledge`, `weft_site` (site
+permissions, pop-ups and saved passwords; every decision there is human-only),
+`weft_artifacts`, `weft_browser`, `weft_models` and `weft_reference` for
+command discovery.
 Execution tools accept a canonical command as `action` and its `args`;
 legacy underscore names such as `page_readable` remain accepted but unadvertised.
 Schemas and structured outcomes are shared. Screenshots retain MCP image content.
@@ -72,6 +78,13 @@ Requests require `Authorization: Bearer <token>`:
 - `GET /v1/capabilities` reports the API version, catalog hash, outcome table,
   limits and features; `GET /v1/download` streams stored bytes.
 
+The server answers only requests whose `Host` is `127.0.0.1:<port>` or
+`localhost:<port>` (a DNS-rebinding backstop) and accepts the `Bearer` scheme in
+any letter case. `WEFT_TOKEN` must be at least 32 characters; repeated failed
+authentication is delayed (after ten failures a minute, each further failure waits
+up to two seconds). One identity may hold at most four event or turn streams at
+once (sixteen in total), and the server accepts at most 64 connections.
+
 Discovery is the authoritative list of available commands and arguments. Unknown
 fields are rejected. API request bodies are capped at 1 MiB, so large projects
 move as package folders (`workspaces.exportPackage`/`workspaces.importPackage`,
@@ -97,7 +110,17 @@ workspaces need an explicit cross-workspace grant), read/record-write/tab-contro
 scopes, allowed sites, readable data classes, an autonomy level, an optional
 command limit and a finite lifetime. Changes and revocation take effect on every
 subsequent command and event; idle event streams close at their next heartbeat.
-Tokens are displayed once and never stored in the project. Scoped clients cannot
+Streams are authorized like the commands they mirror: `/v1/events` needs the read
+scope and the `activity` data class (as `events.list`), a turn stream needs the
+read scope and the `conversations` data class (as `conversations.get`), and both
+end when the grant is narrowed, revoked or expires or its bound task closes.
+Tokens are displayed once and never stored in the project. They are signed with
+a per-profile key (`client-signing-key.json`, owner-only, in the profile's
+workspace data), not with `WEFT_TOKEN`, so a grant keeps working across restarts
+until it expires or is revoked even when the bootstrap token is regenerated.
+Tokens issued before 1.4 were signed with the bootstrap token and keep working
+only while that same `WEFT_TOKEN` is set. Deleting the signing key file
+invalidates every issued token at once. Scoped clients cannot
 execute page scripts or send to models unless granted, configure providers,
 change site policy, approve requests, or mint other tokens. Activity records
 decisions, approvals and outcomes with hash-chain tamper evidence and

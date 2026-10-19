@@ -9,9 +9,10 @@ async function capture(fixture, bytes = png(), extra = {}) {
   const artifact = await fixture.workspace.execute('artifacts.create', { title: 'Checkout page', text: 'Order total 42', pngBase64: bytes.toString('base64'), url: 'https://shop.example/checkout' });
   const versionId = fixture.workspace.data.artifacts.find(item => item.id === artifact.id).versions.at(-1).id;
   Object.assign(fixture.workspace.data.artifacts.find(item => item.id === artifact.id).versions.at(-1), extra);
+  fixture.workspace.save();
   return { id: artifact.id, versionId, image: `artifact:${artifact.id}:${versionId}:image`, text: `artifact:${artifact.id}:${versionId}:text` };
 }
-const outcomeOf = (fixture, args) => executeOutcome((name, input) => fixture.providers.execute(name, input), 'chat.send', { conversationId: fixture.conversation.id, text: 'What does the screenshot show?', ...args });
+const outcomeOf = (fixture, args) => executeOutcome((name, input) => fixture.providers.execute(name, input, { actor: 'human', source: 'gui' }), 'chat.send', { conversationId: fixture.conversation.id, text: 'What does the screenshot show?', ...args });
 
 test('a text-only model asked for visual work gets a typed unsupported_capability outcome and nothing is sent', async t => {
   const endpoint = await fakeEndpoint(t, reply('unused'));
@@ -76,13 +77,13 @@ test('visual data to a cloud destination needs per-turn acknowledgement even aft
   const model = await fixture.save({ endpoint: 'https://vision.example/v1', capabilities: { images: true } });
   const artifact = await capture(fixture);
   const attachments = [{ kind: 'artifact', id: artifact.id, versionId: artifact.versionId }];
-  await fixture.send(model.id, { text: 'Text only', disclosureAck: true });
+  await fixture.send(model.id, { text: 'Text only', disclosureAck: true }, { actor: 'human', source: 'gui' });
   assert.equal((await fixture.preview(model.id)).requiresAcknowledgement, false);
   const disclosure = await fixture.preview(model.id, { attachments });
   assert.deepEqual(disclosure.acknowledgementReasons, ['visual-data']);
   await assert.rejects(fixture.send(model.id, { attachments }), /CLOUD_DISCLOSURE_REQUIRED.*visual-data/);
   assert.equal(requests.length, 1);
-  await fixture.send(model.id, { attachments, disclosureAck: true });
+  await fixture.send(model.id, { attachments, disclosureAck: disclosure.digest });
   assert.equal(requests.length, 2);
 });
 
@@ -109,7 +110,7 @@ test('explicit vision fallback describes images for a text-only model after disc
   assert.deepEqual(image.regions, { redacted: 1, inaccessible: 1, redactionStatus: 'not-reviewed' });
   await assert.rejects(fixture.send(text.id, { attachments }), /CLOUD_DISCLOSURE_REQUIRED.*vision-fallback/);
   assert.equal(fallbackEndpoint.requests.length, 0);
-  const result = await fixture.send(text.id, { attachments, disclosureAck: true });
+  const result = await fixture.send(text.id, { attachments, disclosureAck: true }, { actor: 'human', source: 'gui' });
   const fallbackBody = JSON.stringify(fallbackEndpoint.requests[0].body);
   assert.match(fallbackBody, /image_url/);
   assert.equal(fallbackBody.includes('Earlier private history'), false, 'the fallback receives only the new request and images');
@@ -284,7 +285,7 @@ test('vision fallback requests and capability refusals are separate durable dest
   assert.deepEqual(audit.map(entry => [entry.decision, entry.reason, entry.outcome, entry.summary.capability]), [['deny', 'unsupported_capability', 'denied', 'images']]);
   audit.length = 0;
   const text = await fixture.save({ id: plain.id, name: 'Text', endpoint: `${primaryEndpoint.base}/v1`, model: 'text-model', visionFallbackId: vision.id });
-  await fixture.send(text.id, { attachments, disclosureAck: true });
+  await fixture.send(text.id, { attachments, disclosureAck: true }, { actor: 'human', source: 'gui' });
   const attempts = audit.filter(entry => entry.outcome === 'attempted');
   assert.deepEqual(attempts.map(entry => [entry.summary.role, entry.summary.model, entry.summary.destination]),
     [['vision-fallback', 'vision-model', fallbackEndpoint.base], ['primary', 'text-model', primaryEndpoint.base]]);

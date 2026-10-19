@@ -3,14 +3,74 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
-## Unreleased
+## v1.4.0 — 2026-10-19
+
+Everyday-browser parity, the Everything workspace, multiple windows and 1–4 panes, and fixes for every finding of the 2026-10-19 code audit (#102). Platform-, account- and hardware-dependent validation that fixtures cannot supply is listed per item in `docs/maintainers/ISSUE-STATUS.md`.
+
+### Security
+
+- After a card fill, agent `page.click`/`page.fill`/`page.press`/`page.clickAt` are refused on that page (`card_filled`), so only `payments.submit` can click pay; task grants for cards cover filling only (#103).
+- Turn streams require the `conversations` data class and `/v1/events` requires `activity`; scope, data classes and task binding are rechecked before every frame and both streams end when a grant narrows or its task closes (#106).
+- Plugins run in a Linux network namespace when unprivileged namespaces are available; `plugins.list` reports which isolation applies, and the vm-only limit elsewhere is documented (#107).
+- `WEFT_TOKEN` values shorter than 32 characters are refused; repeated failed logins are delayed; Host-header allowlist; `Bearer` is case-insensitive; at most 4 streams per identity and 64 connections; new `WEFT_TOKEN_FILE` writes a generated token to an owner-only file instead of the terminal (#111, #112, #126).
+- Model `apiKeyEnv` keys and service credentials no longer follow an endpoint to another host (`models.save` gains `confirmKeyDestination`), and plain HTTP to public model hosts is refused (#115).
+- Agents acknowledge a cloud disclosure with the preview's `disclosure.digest`; a missing actor is never treated as a person (#126).
+- Local paths are removed from untyped errors returned to agents and from activity details; `page.evaluate` results are returned to agents as `{ value, contentTrust: "untrusted" }` with control and bidi characters removed (**result shape change**) (#126).
+- History import copies databases into the profile's scratch folder (cleared at startup) and opens them with `trusted_schema=OFF` (#126).
+- Packaged builds ignore `NODE_OPTIONS` and inspector flags and load the app only from an integrity-checked `app.asar`; `RunAsNode` stays on for the sandbox and broker children (documented) (#117).
+- Extension files are no longer read through symbolic links; embedding replies are size-capped (#120).
+
+### Added
+
+- Standard browser shortcuts work inside pages (keys a page may claim reach it first), with `aria-keyshortcuts`; agent input never triggers them (#88).
+- A page context menu for links, images, selected text, editable fields (spelling suggestions) and the page, routed through site rules (#89).
+- Address-bar suggestions from this workspace's tabs, bookmarks and history, and a configurable search engine (six presets or a validated custom `https` template; no remote suggestions) (#91).
+- Recently closed tabs (Ctrl/Cmd+Shift+T, `tabs.closed`, `tabs.reopen`) and saved tab order (`tabs.reorder`, drag, Alt+Shift+↑/↓) (#92).
+- An inline find bar with match counts, the system print dialog, zoom steps 25–500% with an address-bar indicator, and per-site zoom memory per workspace (#93).
+- Per-site permission prompts for camera, microphone, location, notifications, clipboard, screen sharing (with a source picker and sharing indicator), MIDI and sensors; per-workspace decisions reviewable and revocable in Site controls; "Never ask"; only a person can answer (#90).
+- Popups opened after a person's click keep their opener (`window.opener`, `postMessage`, `window.close()`); blocked popups show in the address bar with "Open once" and "Always allow for this site" (#97).
+- Private windows (Ctrl/Cmd+Shift+N) with in-memory sessions erased on close, no workspace records, and no agent access (ADR-008 addendum) (#94).
+- The person's own saved passwords: save/update offers, gesture-only fill on the saved origin's frames, a generator, CSV import/export and a manager, in a vault agents cannot reach (ADR-020) (#95).
+- Extensions' action popups and options pages open from an extensions menu (ADR-007 addendum; no badges, CRX or `declarativeNetRequest`) (#98).
+- Human-only DevTools and a read-only page-source view; saved sign-ins are never filled while DevTools are open (#96).
+- A built-in Everything workspace for unfiled pages and for links and files opened from other apps, with a destination setting, opt-in default-browser registration and a this-workspace/Everything/all scope switch (#99).
+- Workspaces can move into their own windows and back without reloading their pages (`windows.list`, human-only `windows.moveWorkspace`/`windows.focus`) (#100).
+- The browse area shows 1–4 panes of tabs, captures, materials or tasks, replacing two-tab split view; old split-view resume data opens as two panes (#101).
+- Opt-in idle auto-lock for encrypted profiles, optionally also on screen lock or sleep (#26).
+- New commands: `permissions.*`, `popups.allow`, `passwords.*`, `extensions.actions`, `extensions.openPage`, `tabs.closed`, `tabs.reopen`, `tabs.reorder`, `windows.*`, `workspaces.moveRecord`; new MCP tool `weft_site`; `workspace.snapshot` accepts `ifRevision`; `workspaces.delete` gains `moveTabsToEverything`.
+
+### Fixed
+
+- Full-text search stays fast on Node 22.23 / SQLite 3.51, whose query planner re-ran the match once per indexed document (about 1.7 s instead of 9 ms across 1k captures); found by the new CI performance job.
+- Case-insensitive redaction no longer leaves part of a secret visible when case mapping changes text length (#104).
+- Key rotation applies new keys only after the keyring is saved, so a failed save can no longer lose data (#105).
+- Client tokens are signed with a persisted per-profile key and survive restarts (#110).
+- The external-app launch approval shows the full address with its length and query highlighted (#113).
+- Model connections are written durably (#114).
+- More Windows file types that can run code get the download warning (#116).
+- The CLI connects `localhost` to `127.0.0.1` and refuses `[::1]` with the reason; the downloads panel reports render failures instead of failing silently (#126).
+
+### Changed
+
+- Commands diff only the records they read or added (about 4× faster single updates in a 10k-record store), and the GUI fetches a workspace snapshot only when its revision moves (#108, #109).
+- ESLint and an unused-export check run in `npm run check`; `npm test` collects only `test/**/*.test.js`; shared bounded-file, capped-body, queue and typed-error helpers replace drifted copies; fewer wall-clock-dependent tests; direct tests for atomic JSON writes, presets, capabilities, encryption coverage and the store CLI (#118, #120–#122, #124, #125).
+- `gui.js` (4,497 → 2,015 lines) dispatches actions through per-feature handler maps and renders views from separate modules; `Browser` page and browser commands run from dispatch tables, with chrome, credential/payment and capture concerns in collaborator modules; `WorkspaceService` moves artifacts, transfer and encryption into their own modules. Behaviour is unchanged (#119).
+- GitHub Actions are pinned by commit SHA; PRs run `npm audit --omit=dev`; performance budgets run in CI; one signing decision drives both the build and the release label; unsigned macOS release notes include Gatekeeper steps (#123).
+- Packaged builds no longer include the MCP SDK and its HTTP transports, which the app never loads (#126).
+- High-contrast (`forced-colors`, `prefers-contrast`) styles; the credential entry window is covered by the automated accessibility audit (#31, #126).
 
 ### Documentation
 
+- The port 9222 clash with Chrome's DevTools port, the encrypted-record rollback limit, the shared tool-call budget and the plugin network-isolation limit are documented (#107, #126).
+- ADR-009 addendum (no bundled threat-list publisher), a credential broker review brief, a maintainer release checklist for real credentials and a brand sign-off record (#6, #20, #33, #36, #54, #60).
 - Brought the README, guides, integration reference, design system, implementation coverage, accessibility, storage, validation, release and issue-status records in line with 1.2 and 1.3 behavior: version, workspace instructions and memory, Send to Weft capture, provider presets, retrieval with `passageChars`, background learning, the `weft_memory` MCP tool, web watches, mailbox, and the icon-grid sidebar.
 - Corrected the encrypted-search performance budgets (15 s background rebuild, 2 s searches), added the vector-search budget, and recorded that web watches, model, embedding and learning requests use main-process `fetch`, so site rules and threat intelligence do not apply to them.
 - Listed the bundled Source Sans 3 font in third-party notices.
 - Accessibility audit counts were re-measured under Xvfb (111 states, 0 findings). The Send to Weft preview, action review, email reader and workflow watch fields are not yet audited.
+
+### Not verified
+
+- Real cameras, OS location services, screen sharing under load, real pointer drags between windows, multiple displays, the system print dialog and macOS/Windows behaviour of the new browser chrome; packaged fuse enforcement on macOS/Windows; default-browser registration on real OSes. Everything above is tested in real Electron/Chromium on Linux under Xvfb or with fixtures.
 
 ## v1.3.0 — 2026-10-18
 

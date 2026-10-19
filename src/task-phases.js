@@ -7,7 +7,6 @@
 export const PHASES = Object.freeze(['queued', 'running', 'waiting_on_human', 'paused', 'completed', 'failed', 'cancelled', 'uncertain']);
 export const TERMINAL_PHASES = Object.freeze(['completed', 'failed', 'cancelled']);
 /** Phases in which a runtime-managed task holds work that a person or the runtime still has to resolve. */
-export const OPEN_PHASES = Object.freeze(['queued', 'running', 'waiting_on_human', 'paused', 'uncertain']);
 // Record-only tasks (tracked by hand) may also be marked completed or failed directly; runtime tasks
 // reach completed only through their runtime (tasks.transition is refused for them).
 export const TRANSITIONS = Object.freeze({

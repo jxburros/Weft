@@ -3,6 +3,7 @@ import { locality } from './providers.js';
 import { recordDocument, versionDocument, indexable } from './search-index.js';
 import { chunkText, normalize, DEFAULT_MIN_SIMILARITY, MAX_VECTORS_PER_WORKSPACE } from './vector-index.js';
 import { redactProviderSecrets } from './provider-safety.js';
+import { readCappedBody } from './helpers.js';
 
 /**
  * Optional local embeddings and hybrid retrieval (ADR 018, issue #67).
@@ -14,7 +15,8 @@ import { redactProviderSecrets } from './provider-safety.js';
  * never sent. Lexical BM25 and exact-cosine vector results are fused with reciprocal-rank fusion.
  */
 export const RRF_K = 60;
-export const EMBED_BATCH = 16;
+const EMBED_BATCH = 16;
+const EMBED_RESPONSE_LIMIT = 64 * 1024 * 1024;
 const EMBED_TIMEOUT_MS = 30000;
 const sha = value => createHash('sha256').update(value).digest('hex');
 const typed = (message, code, extra = {}) => Object.assign(new Error(message), { code, ...extra });
@@ -77,10 +79,13 @@ export class Retrieval {
       if (signal?.aborted) throw error;
       throw typed(`Unable to reach the embedding endpoint (${new URL(profile.endpoint).origin}). Start the local model server; Weft does not fall back to another endpoint.`, 'unavailable');
     }
-    const body = await response.text().catch(() => '');
+    // Capped like every other model read (#120): an endpoint cannot make Weft buffer an unbounded reply.
+    let body;
+    try { body = (await readCappedBody(response, response.ok ? EMBED_RESPONSE_LIMIT : 32768, { truncate: !response.ok, fail: () => typed(`Embedding response exceeded the ${EMBED_RESPONSE_LIMIT / 1024 / 1024} MiB limit`, 'unavailable') })).toString('utf8'); }
+    catch (error) { if (error.code === 'unavailable') throw error; body = ''; }
     if (!response.ok) throw typed(redactProviderSecrets(`Embedding endpoint returned HTTP ${response.status}. Check that ${config.embedding_model} is already available there; Weft never downloads models.`), 'unavailable');
     let json;
-    try { json = JSON.parse(body.slice(0, 64 * 1024 * 1024)); } catch { throw typed('Embedding endpoint did not return valid JSON', 'unavailable'); }
+    try { json = JSON.parse(body); } catch { throw typed('Embedding endpoint did not return valid JSON', 'unavailable'); }
     const vectors = ollama ? json?.embeddings : Array.isArray(json?.data) ? [...json.data].sort((a, b) => (a?.index ?? 0) - (b?.index ?? 0)).map(item => item?.embedding) : null;
     if (!Array.isArray(vectors) || vectors.length !== texts.length) throw typed('Embedding endpoint returned an unexpected number of vectors', 'unavailable');
     return vectors.map(normalize);
@@ -211,8 +216,8 @@ export class Retrieval {
     }
     const current = this.vectors.count(item.workspace_id, config.model_key) - (existing.size);
     if (current + rows.length > MAX_VECTORS_PER_WORKSPACE) throw typed(`This workspace reached the ${MAX_VECTORS_PER_WORKSPACE} vector limit for exact search; remaining records stay lexical-only.`, 'capacity');
-    for (let start = 0; start < pending.length; start += 16) {
-      const batch = pending.slice(start, start + 16);
+    for (let start = 0; start < pending.length; start += EMBED_BATCH) {
+      const batch = pending.slice(start, start + EMBED_BATCH);
       const vectors = await this.embed(config, batch.map(entry => entry.input));
       vectors.forEach((vector, index) => {
         if (vector.length !== config.dims) throw typed('The embedding model returned a different dimension; a person must configure embeddings again.', 'unavailable');

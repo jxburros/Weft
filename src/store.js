@@ -16,6 +16,8 @@ export const COMPONENTS_DIR = 'components';
 export const RECOVERY_DIR = 'recovery';
 export const MAX_DOCUMENT_BYTES = 64 * 1024 * 1024;
 const MAX_RETAINED_RESULT = 1024 * 1024;
+// Under the Node test runner (or when asked), every hinted commit is checked against a full diff (#108).
+const VERIFY_HINTS = process.env.WEFT_VERIFY_CHANGE_TRACKING === '1' || (Boolean(process.env.NODE_TEST_CONTEXT) && process.env.WEFT_VERIFY_CHANGE_TRACKING !== '0');
 export const OMITTED_RESULT = '{"$omitted":"size"}';
 export const REQUEST_RETENTION = Object.freeze({ resultMs: 7 * 24 * 3600 * 1000, fingerprintMs: 30 * 24 * 3600 * 1000, maxEntries: 50000 });
 const failure = (code, message) => Object.assign(new Error(`${code}: ${message}`), { code });
@@ -465,10 +467,12 @@ export class MetadataStore {
    * (for example the browser session or history) so frequent small writes do not re-serialize
    * every record, and never commit unrelated in-memory changes that are still in progress.
    */
-  plan(state, only = null) {
+  plan(state, only = null, hints = null) {
     if (!state || typeof state !== 'object') throw failure('STORE_INVALID', 'Workspace state must be an object');
     const plan = { meta: [], metaDeletes: [], collections: new Map(), upserts: [], reseq: [], deletes: [], layout: null };
-    const considered = key => !only || only.includes(key);
+    // With change hints (#108), a stored collection the transaction never touched is left as it is.
+    const touched = key => !hints || !this.layout.has(key) || hints.replaced.has(key) || hints.records.has(key);
+    const considered = key => (!only || only.includes(key)) && touched(key);
     const keys = Object.keys(state).filter(key => state[key] !== undefined && considered(key));
     const collections = keys.filter(key => isRecordArray(state[key]));
     for (const key of keys) {
@@ -482,8 +486,16 @@ export class MetadataStore {
       let maxSeq = this.maxSeq.get(name) || 0;
       let last = 0;
       let ordered = true;
+      // Records the transaction never read cannot have changed through the state: reuse their stored document.
+      const read = hints && !hints.replaced.has(name) ? hints.records.get(name) || new Set() : null;
       const rows = state[name].map(record => {
         const prior = previous.get(record.id);
+        if (read && prior && !read.has(record)) {
+          const seq = prior.seq;
+          if (seq <= last) ordered = false;
+          last = seq;
+          return { collection: name, record, prior, doc: prior.doc, markers: null, seq, changed: false };
+        }
         const { doc, markers } = this.serialize(name, record, { write: false });
         const seq = prior ? prior.seq : ++maxSeq;
         if (seq <= last) ordered = false;
@@ -497,7 +509,7 @@ export class MetadataStore {
       for (const id of previous.keys()) if (!ids.has(id)) plan.deletes.push({ collection: name, id });
     }
     for (const name of this.layout) if (considered(name) && !collections.includes(name)) for (const id of (this.docs.get(name) || new Map()).keys()) plan.deletes.push({ collection: name, id });
-    const layout = only ? [...new Set([...[...this.layout].filter(name => !considered(name)), ...collections])].sort() : [...collections].sort();
+    const layout = only || hints ? [...new Set([...[...this.layout].filter(name => !considered(name)), ...collections])].sort() : [...collections].sort();
     if (canonicalJson(layout) !== canonicalJson([...this.layout].sort())) plan.layout = layout;
     return plan;
   }
@@ -512,10 +524,11 @@ export class MetadataStore {
       state: [...plan.meta.map(item => item.key), ...plan.metaDeletes].sort(),
     };
   }
-  commit(state, { requests = [], removeRequests = [], deferCollection = false, only = null } = {}) {
+  commit(state, { requests = [], removeRequests = [], deferCollection = false, only = null, hints = null } = {}) {
     this.assertOpen();
     this.assertOwned();
-    const plan = this.plan(state, only);
+    const plan = this.plan(state, only, hints);
+    if (hints && VERIFY_HINTS) this.verifyHints(plan, this.plan(state, only));
     // Secret checks precede any component or row write.
     for (const row of plan.upserts) rejectSecretKeys(row.record);
     for (const item of plan.meta) rejectSecretKeys(item.value);
@@ -572,6 +585,16 @@ export class MetadataStore {
       if (!deferCollection) this.collectGarbage(releasedList);
       return { released: releasedList };
     } finally { this.pending = null; }
+  }
+  /** Test-time check that a hinted plan writes exactly what a full diff would (#108). */
+  verifyHints(hinted, full) {
+    const signature = plan => [...plan.upserts.map(row => `u ${row.collection} ${row.record.id}`), ...plan.reseq.map(row => `s ${row.collection} ${row.record.id} ${row.seq}`),
+      ...plan.deletes.map(item => `d ${item.collection} ${item.id}`), ...plan.meta.map(item => `m ${item.key}`), ...plan.metaDeletes.map(key => `x ${key}`), `l ${JSON.stringify(plan.layout)}`].sort();
+    const a = signature(hinted);
+    const b = signature(full);
+    const missing = b.filter(item => !a.includes(item));
+    const extra = a.filter(item => !b.includes(item));
+    if (missing.length || extra.length) throw failure('STORE_TRACKING_MISMATCH', `Change tracking missed or added writes. Missing: ${missing.slice(0, 10).join(', ') || 'none'}; extra: ${extra.slice(0, 10).join(', ') || 'none'}`);
   }
   applyPlan(plan) {
     for (const item of plan.meta) this.meta.set(item.key, item.json);
@@ -656,14 +679,18 @@ export class MetadataStore {
     return state;
   }
   /** Return the last committed state, reusing unchanged in-memory objects. Components written for the discarded changes are removed. */
-  revert(state) {
+  revert(state, hints = null) {
     if (this.uncommittedComponents && this.db) { this.uncommittedComponents = false; this.sweepOrphans(); }
     const restored = {};
     for (const [key, json] of this.meta) restored[key] = state && JSON.stringify(state[key]) === json ? state[key] : JSON.parse(json);
     for (const name of this.layout) {
+      // With change hints (#108), an untouched collection and every unread record are still the committed ones.
+      if (hints && !hints.replaced.has(name) && !hints.records.has(name) && Array.isArray(state?.[name])) { restored[name] = state[name]; continue; }
+      const read = hints && !hints.replaced.has(name) ? hints.records.get(name) : null;
       const live = new Map(Array.isArray(state?.[name]) ? state[name].filter(item => item && typeof item === 'object' && typeof item.id === 'string').map(item => [item.id, item]) : []);
       restored[name] = [...(this.docs.get(name) || new Map())].sort((a, b) => a[1].seq - b[1].seq).map(([id, { doc }]) => {
         const current = live.get(id);
+        if (current && read && !read.has(current)) return current;
         return current && this.serialize(name, current, { write: false }).doc === doc ? current : this.parse(name, doc);
       });
     }
@@ -878,7 +905,7 @@ export class MetadataStore {
   searchCount({ workspaceId, query }) {
     const compiled = compileQuery(query);
     if (!compiled || typeof workspaceId !== 'string') return 0;
-    return this.db.prepare('SELECT count(*) AS count FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid WHERE search_fts MATCH ? AND d.workspace_id = ?').get(compiled.any ?? compiled.all, workspaceId).count;
+    return this.db.prepare('SELECT count(*) AS count FROM search_fts CROSS JOIN search_docs d ON d.rowid = search_fts.rowid WHERE search_fts MATCH ? AND d.workspace_id = ?').get(compiled.any ?? compiled.all, workspaceId).count;
   }
   /** Indexed documents of a workspace (lexical coverage). */
   documentCount(workspaceId) { return this.db.prepare('SELECT count(*) AS count FROM search_docs WHERE workspace_id = ?').get(workspaceId).count; }
@@ -886,9 +913,10 @@ export class MetadataStore {
     this.assertOpen();
     const compiled = compileQuery(query);
     if (!compiled || typeof workspaceId !== 'string') return [];
-    // Rank first; build excerpts only for the returned rows.
+    // Rank first; build excerpts only for the returned rows. CROSS JOIN keeps the full-text match as the outer loop:
+    // SQLite 3.51 (Node 22.23) otherwise walks the workspace index and re-runs the MATCH once per document.
     const statement = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, bm25(search_fts, 6.0, 1.0) AS score
-      FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid
+      FROM search_fts CROSS JOIN search_docs d ON d.rowid = search_fts.rowid
       WHERE search_fts MATCH ? AND d.workspace_id = ? ORDER BY score, d.rowid LIMIT ?`);
     // FTS5 snippet() scores every fragment of large captures; a direct scan for the first query token is far cheaper.
     const text = this.db.prepare('SELECT title, body FROM search_fts WHERE rowid = ?');

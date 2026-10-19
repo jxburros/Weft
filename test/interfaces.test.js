@@ -9,7 +9,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { commands, validateCommand, executeOutcome, resultExitCode } from '../src/commands.js';
-import { createApiServer } from '../src/server.js';
+import { createApiServer, MAX_CONNECTIONS, STREAM_LIMITS } from '../src/server.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { request as httpRequest } from 'node:http';
+import { ClientGrants } from '../src/clients.js';
+import { Authority } from '../src/authority.js';
+import { TurnRelay } from '../src/turn-relay.js';
 import { createClient } from '../src/client.js';
 import { createMcpServer, mcpTools } from '../src/mcp.js';
 import { budget } from './time-budget.js';
@@ -160,7 +167,7 @@ test('MCP stdio entry point performs a real protocol handshake without stdout no
   });
   t.after(() => client.close());
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 10);
+  assert.equal((await client.listTools()).tools.length, 11);
   const response = await client.callTool({ name: 'tabs_list', arguments: {} });
   assert.deepEqual(JSON.parse(response.content[0].text).result, { command: 'tabs.list', args: {} });
 });
@@ -387,4 +394,110 @@ test('safe admission diagnostics survive outcomes without copying arbitrary deta
     assert.equal(failed.error.httpStatus, 409);
     assert.equal(resultExitCode(failed), exit);
   }
+});
+
+/** Real grants and authority behind the API server, to exercise stream authorization end to end. */
+async function grantedServer(t, { tasks = [] } = {}) {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-streams-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const workspaceId = 'ws_12345678-1234-1234-1234-123456789abc';
+  const workspace = { data: { tasks }, workspace: id => { if (id !== workspaceId) throw new Error('Workspace not found'); }, snapshot: () => ({ tasks }) };
+  const clients = new ClientGrants({ directory, masterToken: randomBytes(32).toString('hex'), workspace });
+  const authority = new Authority({ directory, workspace, clients });
+  const relay = new TurnRelay();
+  const events = new EventEmitter();
+  const server = createApiServer({ authenticate: token => clients.authenticate(token), authorizeStream: (identity, request) => authority.streamAccess(identity, request),
+    execute: () => true, turns: relay, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); relay.close(); }));
+  const human = { actor: 'human', source: 'gui' };
+  const grant = fields => clients.execute('clients.create', { name: 'Agent', scopes: ['read'], workspaceIds: [workspaceId], ...fields }, human);
+  return { url: `http://127.0.0.1:${server.address().port}`, clients, relay, events, workspaceId, grant, human, server };
+}
+const drain = async reader => { let text = ''; for (;;) { const chunk = await reader.read(); if (chunk.done) return text; text += new TextDecoder().decode(chunk.value); } };
+
+test('event and turn streams enforce grant data classes, scope narrowing and task binding like the commands they mirror', { timeout: budget(10000) }, async t => {
+  const tasks = [{ id: 'task_11111111-1111-1111-1111-111111111111', workspaceId: 'ws_12345678-1234-1234-1234-123456789abc', status: 'running' }];
+  const f = await grantedServer(t, { tasks });
+  const turnId = 'turn_12345678-1234-1234-1234-123456789abc';
+  f.relay.start(turnId, { conversationId: 'conv_1', workspaceId: f.workspaceId, modelId: 'm', model: 'm', endpoint: 'http://127.0.0.1/v1', locality: 'on-device endpoint', streaming: true });
+  f.relay.push(turnId, { type: 'delta', text: 'private reply text' });
+  const get = (path, token) => fetch(`${f.url}${path}`, { headers: { authorization: `Bearer ${token}` } });
+  // Without the conversations data class the turn stream is refused, as conversations.get would be.
+  const noConversations = f.grant({ dataAccess: ['workspace_records', 'activity'] });
+  const refused = await get(`/v1/turns/${turnId}/events`, noConversations.token);
+  assert.equal(refused.status, 403);
+  assert.doesNotMatch(await refused.text(), /private reply text/);
+  // Without the activity data class /v1/events is refused, as events.list would be.
+  const noActivity = f.grant({ dataAccess: ['workspace_records', 'conversations'] });
+  assert.equal((await get('/v1/events', noActivity.token)).status, 403);
+  // Narrowing the grant mid-turn ends the turn stream before the next frame.
+  const reader = f.grant({});
+  const turn = await get(`/v1/turns/${turnId}/events`, reader.token);
+  assert.equal(turn.status, 200);
+  const turnBody = turn.body.getReader();
+  await turnBody.read();
+  f.clients.execute('clients.update', { clientId: reader.clientId, changes: { dataAccess: ['workspace_records'] } }, f.human);
+  f.relay.push(turnId, { type: 'delta', text: 'after narrowing' });
+  assert.doesNotMatch(await drain(turnBody), /after narrowing/);
+  // Removing the read scope ends /v1/events at its next delivery.
+  const watcher = f.grant({ scopes: ['read', 'records.write'] });
+  const stream = await get('/v1/events', watcher.token);
+  assert.equal(stream.status, 200);
+  const body = stream.body.getReader();
+  await body.read();
+  f.clients.execute('clients.update', { clientId: watcher.clientId, changes: { scopes: ['records.write'] } }, f.human);
+  f.events.emit('event', { type: 'command', command: 'tabs.list', workspaceId: f.workspaceId });
+  assert.doesNotMatch(await drain(body), /event: weft/);
+  // A task-bound grant's streams end when the task closes.
+  const bound = f.grant({ taskId: tasks[0].id });
+  const boundStream = await get('/v1/events', bound.token);
+  assert.equal(boundStream.status, 200);
+  const boundBody = boundStream.body.getReader();
+  await boundBody.read();
+  tasks[0].status = 'completed';
+  f.events.emit('event', { type: 'command', command: 'tabs.list', workspaceId: f.workspaceId });
+  assert.doesNotMatch(await drain(boundBody), /event: weft/);
+  assert.equal((await get('/v1/events', bound.token)).status, 403);
+  f.relay.end(turnId, { status: 'complete', finishReason: 'stop' });
+});
+
+test('stream slots are capped per identity; the server caps connections, checks Host and accepts any Bearer case', { timeout: budget(10000) }, async t => {
+  const f = await grantedServer(t);
+  assert.equal(f.server.maxConnections, MAX_CONNECTIONS);
+  const one = f.grant({});
+  const two = f.grant({});
+  const open = [];
+  for (let i = 0; i < STREAM_LIMITS.perIdentity; i++) {
+    const response = await fetch(`${f.url}/v1/events`, { headers: { authorization: `Bearer ${one.token}` } });
+    assert.equal(response.status, 200);
+    open.push(response.body.getReader());
+  }
+  const over = await fetch(`${f.url}/v1/events`, { headers: { authorization: `Bearer ${one.token}` } });
+  assert.equal(over.status, 503);
+  assert.match((await over.json()).error.message, /already holds/);
+  const other = await fetch(`${f.url}/v1/events`, { headers: { authorization: `bearer ${two.token}` } });
+  assert.equal(other.status, 200, 'another client still gets a slot, and the scheme is case-insensitive');
+  open.push(other.body.getReader());
+  for (const reader of open) await reader.cancel();
+  // DNS-rebinding backstop: an unexpected Host is refused before authentication.
+  const status = host => new Promise((resolve, reject) => {
+    const req = httpRequest(`${f.url}/v1/commands`, { headers: { host, authorization: `Bearer ${one.token}` } }, res => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject); req.end();
+  });
+  const port = Number(new URL(f.url).port);
+  assert.equal(await status(`attacker.example:${port}`), 403);
+  assert.equal(await status(`127.0.0.1:${port + 1}`), 403);
+  assert.equal(await status(`localhost:${port}`), 200);
+});
+
+test('repeated failed authentication is delayed; valid tokens are not', { timeout: budget(20000) }, async t => {
+  const { url, headers } = await fixture(t);
+  for (let i = 0; i < 10; i++) assert.equal((await fetch(`${url}/v1/commands`, { headers: { authorization: 'Bearer wrong' } })).status, 401);
+  let started = Date.now();
+  for (let i = 0; i < 4; i++) assert.equal((await fetch(`${url}/v1/commands`, { headers: { authorization: 'Bearer wrong' } })).status, 401);
+  assert.ok(Date.now() - started >= 100 + 200 + 300 + 400 - 50, 'failures after the first ten are delayed progressively');
+  started = Date.now();
+  assert.equal((await fetch(`${url}/v1/commands`, { headers })).status, 200);
+  assert.ok(Date.now() - started < 1000, 'a valid token is answered without delay');
 });

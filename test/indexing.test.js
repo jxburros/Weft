@@ -47,15 +47,24 @@ test('a search-index version change rebuilds in the background: open is fast, se
   service.close();
 
   // Reference: opening with a current index, and how long a synchronous rebuild of this store takes.
-  const clean = performance.now();
-  service = new WorkspaceService({ directory, onWarning() {} });
-  const openCleanMs = performance.now() - clean;
-  assert.equal(service.storage.indexing, null);
-  service.close();
-  staleIndex(directory);
-  const pendingStart = performance.now();
-  service = new WorkspaceService({ directory, onWarning() {} });
-  const openPendingMs = performance.now() - pendingStart;
+  // Each open is timed three times and the fastest kept, so one GC pause or slow disk flush on a shared CI
+  // runner cannot decide the comparison below (#121).
+  const timedOpen = () => { const start = performance.now(); const opened = new WorkspaceService({ directory, onWarning() {} }); return [opened, performance.now() - start]; };
+  let openCleanMs = Infinity;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const [opened, elapsed] = timedOpen();
+    assert.equal(opened.storage.indexing, null);
+    opened.close();
+    openCleanMs = Math.min(openCleanMs, elapsed);
+  }
+  let openPendingMs = Infinity;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    staleIndex(directory);
+    const [opened, elapsed] = timedOpen();
+    openPendingMs = Math.min(openPendingMs, elapsed);
+    if (attempt < 2) opened.close();
+    else service = opened;
+  }
   assert.ok(service.storage.indexing, 'the rebuild is still pending after open');
   // Opening may not write in proportion to the old index (zeroing every freed page made opening take seconds on Windows).
   const walBytes = (() => { try { return statSync(join(directory, 'workspace.sqlite-wal')).size; } catch (error) { if (error.code === 'ENOENT') return 0; throw error; } })();
@@ -76,7 +85,7 @@ test('a search-index version change rebuilds in the background: open is fast, se
   assert.equal(status.lexical.complete, false);
   assert.equal(status.lexical.indexing.state, 'running');
   assert.equal(status.lexical.indexing.reason, 'version_change');
-  assert.equal(status.lexical.indexing.totalRecords, RECORDS + 2, 'every record (and the workspace) is rebuilt');
+  assert.equal(status.lexical.indexing.totalRecords, RECORDS + 3, 'every record (and both workspaces, Everything included) is rebuilt');
   assert.ok(status.lexical.indexing.processedRecords < RECORDS);
   assert.ok(status.lexical.unindexedRecords > 0);
 
@@ -132,7 +141,7 @@ test('an interrupted plaintext rebuild resumes from its saved position after a r
   await service.execute('search.indexing', { action: 'pause' }, human);
   service.storage.indexStep({ maxRecords: 2000, budgetMs: Infinity });
   const reached = service.storage.indexing.done;
-  assert.ok(reached > 0 && reached < 6002);
+  assert.ok(reached > 0 && reached < 6003);
   service.close();
   service = new WorkspaceService({ directory, onWarning() {} });
   closeAfter(t, service);
@@ -146,7 +155,7 @@ test('an interrupted plaintext rebuild resumes from its saved position after a r
 test('an encrypted profile rebuilds its in-memory index in the background after unlock', { timeout: budget(120000) }, async t => {
   const directory = profile(t);
   const keyProtector = createKeyProtector({ safeStorage: fakeSafeStorage(), platform: 'linux' });
-  let service = new WorkspaceService({ directory, onWarning() {}, keyProtector, encryption: { kdf: kdfParams } });
+  const service = new WorkspaceService({ directory, onWarning() {}, keyProtector, encryption: { kdf: kdfParams } });
   await seed(service, RECORDS);
   await service.executeEncryption('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' }, human);
   await service.indexingIdle();

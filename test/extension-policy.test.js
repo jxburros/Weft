@@ -22,14 +22,15 @@ export function materialize(directory, name) {
 const audit = (name, hostGrants) => auditExtensionManifest(JSON.parse(fixtures[name]['manifest.json']), { hostGrants, files: new Set(Object.keys(fixtures[name])), chromiumVersion: '152.0.0.0' });
 const kinds = report => Object.fromEntries(report.refusals.map(item => [item.key, item.kind]));
 
-test('the verified probe passes only with its exact host grant; UI-only keys are reported as ignored', () => {
+test('the verified probe passes only with its exact host grant; its toolbar button is described', () => {
   const ungranted = audit('probe', []);
   assert.equal(ungranted.ok, false);
   assert.deepEqual(kinds(ungranted), { 'hosts.http://127.0.0.1/*': 'ungranted' });
   const granted = audit('probe', ['http://127.0.0.1/*']);
   assert.equal(granted.ok, true, JSON.stringify(granted.refusals));
   assert.deepEqual(granted.scope.permissions.map(item => item.name), ['storage', 'scripting', 'tabs']);
-  assert.deepEqual(granted.ignored.map(item => item.key), ['action']);
+  assert.deepEqual(granted.ignored, []);
+  assert.deepEqual(granted.scope.ui, { title: 'Probe', popup: null, options: null, icon: null });
   assert.ok(granted.scope.residualRisks.some(item => /runs its code inside matching pages/.test(item)), 'residual risk is part of the scope display');
   assert.equal(audit('probe', ['http://127.0.0.1/*', 'https://extra.example/*']).ok, false, 'grants beyond the request are refused');
 });

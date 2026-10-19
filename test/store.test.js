@@ -63,11 +63,15 @@ test('version-1 JSON stores migrate losslessly with preserved original, records,
   assert.equal(existsSync(join(directory, 'workspace-state.json')), false);
   assert.equal(readFileSync(join(directory, 'recovery', `workspace-state.${sha(original)}.json`), 'utf8'), original);
   const expected = { ...structuredClone(legacy), schemaVersion: 2, memories: [], history: [], handoffs: [], sharedCollections: [], conflicts: [], freshnessPolicies: [], tabGroups: [], resumeStates: [] };
-  assert.deepEqual(JSON.parse(JSON.stringify(service.storage.materialize(service.data), (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)),
+  // The built-in Everything workspace (#99) is added by the migration; everything else is the original store.
+  const materialized = service.storage.materialize(service.data);
+  assert.equal(materialized.workspaces.filter(item => item.builtin === 'everything').length, 1);
+  materialized.workspaces = materialized.workspaces.filter(item => item.builtin !== 'everything');
+  assert.deepEqual(JSON.parse(JSON.stringify(materialized, (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)),
     JSON.parse(JSON.stringify(expected, (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)));
   // Browser containers are derived from workspace IDs; tab ownership survives.
   assert.deepEqual(service.snapshot().browserSession, legacy.browserSession);
-  assert.deepEqual(service.snapshot().workspaces.map(item => item.id), legacy.workspaces.map(item => item.id));
+  assert.deepEqual(service.snapshot().workspaces.filter(item => !item.builtin).map(item => item.id), legacy.workspaces.map(item => item.id));
   const task = await service.execute('tasks.get', { id: legacy.tasks[0].id });
   assert.deepEqual([task.evidence, task.materialIds, task.revision], [legacy.tasks[0].evidence, legacy.tasks[0].materialIds, 4]);
   const version = await service.execute('artifacts.get', { id: legacy.artifacts[0].id, versionId: 'version_1' });

@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
+import { writeJsonDurable } from './atomic-json.js';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -8,6 +9,7 @@ import { ADAPTERS, buildRequest, requestHeaders, readStreamedReply, parseJsonRep
 import { IMAGE_LIMITS, boundImage, imageTokenEstimate, regionSummary } from './model-media.js';
 import { reportedCapabilities } from './provider-presets.js';
 import { TurnRelay } from './turn-relay.js';
+import { readCappedBody } from './helpers.js';
 
 const INITIAL_PROFILES = [
   { id: 'openai', name: 'OpenAI', provider: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', apiKeyEnv: 'OPENAI_API_KEY' },
@@ -51,13 +53,40 @@ export function capRetrieved(items, budgetTokens, wrap = kept => kept) {
   return { kept, omitted: items.length - kept.length, tokens: estimateTokens(JSON.stringify(wrap(kept))) };
 }
 const digest = value => createHash('sha256').update(value).digest('hex');
+/** Digest of everything a disclosure acknowledgement covers: destinations, each item's delivery, tools and reasons. */
+function disclosureDigest(disclosure) {
+  return digest(JSON.stringify({ destinations: disclosure.destinations, reasons: disclosure.acknowledgementReasons, tools: disclosure.tools, toolScope: disclosure.toolScope,
+    fallback: disclosure.fallback?.items ?? null, items: disclosure.items.map(item => [item.key, item.delivery ?? null, Boolean(item.withheld), Boolean(item.excluded), item.bytes ?? 0]) }));
+}
 
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+/** Loopback, private-network (RFC 1918, link-local, IPv6 ULA/link-local) and mDNS `.local` hosts. Only literal addresses count; `10.example.com` is a public name. */
+function privateHost(host) {
+  const v4 = IPV4.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (host.startsWith('[')) { const v6 = host.slice(1, -1).toLowerCase(); return v6 === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6); }
+  return host === 'localhost' || host.endsWith('.local');
+}
 export function locality(endpoint) {
   const host = new URL(endpoint).hostname;
   if (['localhost', '127.0.0.1', '[::1]'].includes(host)) return 'on-device endpoint';
-  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) || host.endsWith('.local')) return 'local-network endpoint';
+  if (privateHost(host)) return 'local-network endpoint';
   return 'external endpoint';
 }
+/**
+ * Bearer keys and prompts never travel unencrypted to a public host: plain `http:` is accepted only
+ * for loopback and private-network endpoints (#115).
+ */
+export function assertSecureTransport(endpoint) {
+  const url = new URL(endpoint);
+  if (url.protocol === 'http:' && !privateHost(url.hostname)) {
+    throw Object.assign(new Error(`Plain HTTP is accepted only for on-device and private-network model endpoints; use https:// for ${url.host}`), { code: 'invalid_arguments', details: { reason: 'insecure_transport' } });
+  }
+}
+const originOf = endpoint => { try { return new URL(endpoint).origin; } catch { return null; } };
 const onDevice = endpoint => locality(endpoint) === 'on-device endpoint';
 const typed = (message, code, details) => Object.assign(new Error(message), { code, ...(details ? { details } : {}) });
 
@@ -74,7 +103,8 @@ export class Providers {
     this.searchWorkspace = searchWorkspace;
     this.audit = entry => { try { audit(entry); } catch { /* Audit failure must not change the model decision. */ } };
     this.env = env;
-    this.fetch = fetchImpl;
+    // Backstop for profiles saved before the transport rule: nothing is sent over plain HTTP to a public host.
+    this.fetch = (url, init) => { assertSecureTransport(String(url)); return fetchImpl(url, init); };
     // timeoutMs is the total turn deadline; first-token and idle deadlines bound silent endpoints.
     this.timeoutMs = timeoutMs;
     this.deadlines = { firstTokenMs: 120000, idleMs: 60000, ...deadlines };
@@ -165,9 +195,8 @@ export class Providers {
   }
 
   async persist(profiles, acknowledgements = this.acknowledgements) {
-    const temporary = `${this.file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, profiles, acknowledgements }, null, 2), { mode: 0o600 });
-    await rename(temporary, this.file);
+    // Synced file and directory, like every other durable JSON file (#114): a crash cannot leave it empty or partial.
+    writeJsonDurable(this.file, { version: 1, profiles, acknowledgements });
     this.profiles = profiles;
     this.acknowledgements = acknowledgements;
   }
@@ -180,7 +209,8 @@ export class Providers {
 
   async save(args) {
     return this.mutate(async () => {
-      const { apiKey, clearApiKey, ...fields } = args;
+      const { apiKey, clearApiKey, confirmKeyDestination, ...fields } = args;
+      assertSecureTransport(fields.endpoint);
       if (fields.tools && !ADAPTERS[fields.provider].tools) throw new Error('Read-only tools currently require an OpenAI-compatible connection');
       const previous = fields.id ? this.profiles.find(profile => profile.id === fields.id) : undefined;
       if (fields.id && !previous) throw new Error('Model connection not found');
@@ -192,6 +222,13 @@ export class Providers {
         // A key is scoped to its endpoint. Changing destination must not forward an old key.
         if (previous.endpoint === profile.endpoint) profile.encryptedKey = previous.encryptedKey;
       }
+      // The same holds for an environment-variable key: moving the connection to another origin stops using it
+      // unless the caller confirms that key is meant for the new destination (#115).
+      let keyNotice = null;
+      if (previous?.apiKeyEnv && profile.apiKeyEnv === previous.apiKeyEnv && originOf(previous.endpoint) !== originOf(profile.endpoint) && !confirmKeyDestination) {
+        delete profile.apiKeyEnv;
+        keyNotice = `The endpoint moved to another host, so ${previous.apiKeyEnv} is no longer sent; save again with confirmKeyDestination to use it there`;
+      }
       // Probe results describe one exact endpoint/model; they never carry over to a new destination.
       if (previous?.probed && previous.endpoint === profile.endpoint && previous.model === profile.model && previous.provider === profile.provider) profile.probed = previous.probed;
       if (apiKey) {
@@ -202,7 +239,7 @@ export class Providers {
       await this.persist(previous
         ? this.profiles.map(item => item.id === profile.id ? profile : item)
         : [...this.profiles, profile]);
-      return this.describe(profile);
+      return { ...this.describe(profile), ...(keyNotice ? { keyNotice } : {}) };
     });
   }
 
@@ -223,39 +260,13 @@ export class Providers {
 
   async responseJSON(response) {
     if (!response.ok) {
-      let detail = '';
-      if (response.body) {
-        const reader = response.body.getReader();
-        const chunks = [];
-        let bytes = 0;
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = Buffer.from(value).subarray(0, Math.max(0, 32768 - bytes));
-            chunks.push(chunk); bytes += chunk.length;
-            if (bytes >= 32768) break;
-          }
-          detail = Buffer.concat(chunks).toString('utf8');
-        } finally { await reader.cancel().catch(() => {}); }
-      }
+      const detail = (await readCappedBody(response, 32768, { truncate: true })).toString('utf8');
       throw new Error(formatProviderError(detail, response.status));
     }
     if (!response.body) throw new Error('Model endpoint returned an empty response');
-    const reader = response.body.getReader();
-    const chunks = [];
-    let bytes = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        bytes += value.byteLength;
-        if (bytes > 2 * 1024 * 1024) throw new Error('Model response exceeded the 2 MB limit');
-        chunks.push(Buffer.from(value));
-      }
-      try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-      catch { throw new Error('Model endpoint did not return valid JSON'); }
-    } finally { await reader.cancel().catch(() => {}); }
+    const body = await readCappedBody(response, 2 * 1024 * 1024, { fail: () => new Error('Model response exceeded the 2 MB limit') });
+    try { return JSON.parse(body.toString('utf8')); }
+    catch { throw new Error('Model endpoint did not return valid JSON'); }
   }
 
   async discover(args) {
@@ -263,6 +274,7 @@ export class Providers {
     if (args.modelId && !saved) throw new Error('Model connection not found');
     const profile = saved || { provider: args.provider, endpoint: args.endpoint?.replace(/\/+$/, ''), apiKeyEnv: args.apiKeyEnv };
     if (!profile.provider || !profile.endpoint) throw new Error('Choose an API format and endpoint first');
+    assertSecureTransport(profile.endpoint);
     const key = saved ? this.key(saved) : args.apiKey || this.key(profile);
     if (key) rememberProviderSecret(key);
     const headers = requestHeaders(profile, key);
@@ -639,7 +651,7 @@ export class Providers {
       items: items.filter(item => item.delivery === 'image-via-fallback').map(item => item.key),
       bytes: Buffer.byteLength(text) + fallbackImages.reduce((sum, { image }) => sum + image.bytes, 0),
       scope: 'Your new message text and the listed images only; no conversation history or other attachments.' } : null;
-    return { profile, caps, conversation, cloud, acknowledgementId, system, userContent, primaryImages, fallbackImages, retrievalTokens,
+    const result = { profile, caps, conversation, cloud, acknowledgementId, system, userContent, primaryImages, fallbackImages, retrievalTokens,
       fallbackProfile: fallbackImages.length ? fallback.profile : null, fallbackCaps: fallback?.caps, fallbackNotes: imageNotes.slice(primaryImages.length),
       history: history.filter(({ key }) => decisions.get(key) === 'history').map(({ message }) => message),
       textEntries,
@@ -657,6 +669,8 @@ export class Providers {
         tools: allowReadTools ? this.readTools(tabId, allowAppTools).map(tool => tool.function.name) : [],
         toolScope: allowReadTools ? { workspaceId: conversation.workspaceId, ...(tabId ? { tabId } : {}), maxCalls: allowAppTools ? 20 : 5 } : null,
         totalBytes: allItems.reduce((sum, item) => sum + (delivered(item) ? item.bytes : 0), 0) } };
+    result.disclosure.digest = disclosureDigest(result.disclosure);
+    return result;
   }
 
   async send(args, caller = {}) {
@@ -768,12 +782,20 @@ export class Providers {
       this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'unsupported_capability', outcome: 'denied', summary: { ...destinationEvent.summary, capability: disclosure.blocked.capability } });
       throw typed(disclosure.blocked.message, 'unsupported_capability', { capability: disclosure.blocked.capability, modelId: profile.id });
     }
-    if (disclosure.requiresAcknowledgement && !disclosureAck) this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'cloud_disclosure_required', outcome: 'denied',
+    // An acknowledgement is bound to what was previewed (#126): agents send the preview's disclosure.digest, so they
+    // cannot acknowledge data they never reviewed. `true` is accepted from the trusted interface and from the task
+    // runtime, which forwards a person's tasks.continue acknowledgement.
+    const trustedAck = ['human', 'admin'].includes(caller.actor) || caller.source === 'task';
+    if (disclosure.requiresAcknowledgement && typeof disclosureAck === 'string' && disclosureAck !== disclosure.digest) {
+      throw typed('The data or destination changed since chat.preview; preview again and acknowledge the new disclosure.digest.', 'stale_state', { reason: 'disclosure_changed' });
+    }
+    const acknowledged = disclosureAck === true ? trustedAck : typeof disclosureAck === 'string' && disclosureAck === disclosure.digest;
+    if (disclosure.requiresAcknowledgement && !acknowledged) this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'cloud_disclosure_required', outcome: 'denied',
       summary: { ...destinationEvent.summary, acknowledgementReasons: disclosure.acknowledgementReasons.join(',') } });
-    if (disclosure.requiresAcknowledgement && disclosureAck) this.audit({ ...destinationEvent, type: 'override', decision: 'approve', reason: 'cloud_disclosure_acknowledged', outcome: 'recorded',
+    if (disclosure.requiresAcknowledgement && acknowledged) this.audit({ ...destinationEvent, type: 'override', decision: 'approve', reason: 'cloud_disclosure_acknowledged', outcome: 'recorded',
       summary: { ...destinationEvent.summary, acknowledgementReasons: disclosure.acknowledgementReasons.join(',') } });
-    if (disclosure.requiresAcknowledgement && !disclosureAck) {
-      throw new Error(`CLOUD_DISCLOSURE_REQUIRED: Preview chat.preview and explicitly acknowledge the destination and data before sending (${disclosure.acknowledgementReasons.join(', ')}).`);
+    if (disclosure.requiresAcknowledgement && !acknowledged) {
+      throw new Error(`CLOUD_DISCLOSURE_REQUIRED: Preview chat.preview and explicitly acknowledge the destination and data before sending (${disclosure.acknowledgementReasons.join(', ')})${disclosureAck === true ? '; agents acknowledge with the disclosure.digest from chat.preview' : ''}.`);
     }
     if (disclosure.acknowledgementReasons.includes('destination')) await this.mutate(() => this.persist(this.profiles, [...this.acknowledgements, prepared.acknowledgementId].slice(-1000)));
     if (allowReadTools && !caps.tools) {

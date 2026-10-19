@@ -38,7 +38,7 @@ if (process.argv.includes("--gui-knowledge")) {
     const submit = () => run('document.getElementById("edit-form").requestSubmit()');
     const human = (command, args = {}) => run(`window.weft.execute(${JSON.stringify(command)}, ${JSON.stringify(args)})`);
     const agent = async (command, args) => {
-      const response = await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-knowledge-token", "content-type": "application/json" }, body: JSON.stringify({ command, args }) });
+      const response = await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-knowledge-token-0123456789abcdef", "content-type": "application/json" }, body: JSON.stringify({ command, args }) });
       return response.json();
     };
     await until('document.getElementById("content")?.textContent.includes("Make room")');
@@ -110,13 +110,13 @@ if (process.argv.includes("--gui-knowledge")) {
     await click('[data-action="collection-create"]');
     await fill("name", "Supplier facts");
     await submit();
-    await until('document.getElementById("dialog-title")?.textContent === "Manage Supplier facts" && document.getElementById("collection-grant-form") !== null');
+    // Everything is always another workspace, so wait for the partner workspace itself to be offered.
+    await until(`document.getElementById("dialog-title")?.textContent === "Manage Supplier facts" && document.querySelector('#collection-grant-form [name="workspaceId"] option[value=${JSON.stringify(second.id)}]') !== null`);
     await run(`document.querySelector('#collection-add-form [name="item"]').value = "context:${proposal.result.id}"`);
     await run('document.getElementById("collection-add-form").requestSubmit()');
     await until('document.getElementById("dialog-content").textContent.includes("Shipping day")');
-    await run(`document.querySelector('#collection-grant-form [name="workspaceId"]').value = ${JSON.stringify(second.id)}`);
-    await run(`document.querySelector('#collection-grant-form [name="role"]').value = "read"`);
-    await run('document.getElementById("collection-grant-form").requestSubmit()');
+    // Choose and submit in one step: a refresh re-renders the dialog and would reset the choice in between.
+    await run(`(() => { const form = document.getElementById("collection-grant-form"); form.querySelector('[name="workspaceId"]').value = ${JSON.stringify(second.id)}; form.querySelector('[name="role"]').value = "read"; form.requestSubmit(); })()`);
     await until('document.getElementById("dialog-content").textContent.includes("Granted read access")');
     await click('[data-action="close-dialog"]');
     await until('document.getElementById("content").textContent.includes("Partner project") && document.getElementById("content").textContent.includes("Read only")');
@@ -141,7 +141,7 @@ if (process.argv.includes("--gui-knowledge")) {
     const port = reservation.address().port;
     await new Promise((r) => reservation.close(r));
     const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--gui-knowledge"], {
-      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-knowledge-token", WEFT_LINK_FOLDER: folder }),
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-knowledge-token-0123456789abcdef", WEFT_LINK_FOLDER: folder }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

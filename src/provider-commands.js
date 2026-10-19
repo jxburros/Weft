@@ -5,7 +5,7 @@ export const modelEndpoint = z.string().min(1).max(2048).refine(value => {
     const url = new URL(value);
     return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
   } catch { return false; }
-}, 'Expected an HTTP(S) API base URL without credentials, query or fragment');
+}, 'Expected an HTTP(S) API base URL without credentials, query or fragment (plain HTTP only for on-device or private-network hosts)');
 const id = z.string().min(1).max(128);
 const capabilities = z.strictObject({
   images: z.boolean().optional().describe('Accepts actual image input (overrides probed/default).'),
@@ -40,6 +40,7 @@ export const providerCommandDefinitions = {
     model: z.string().trim().min(1).max(200), apiKey: z.string().max(16384).optional(),
     apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(100).optional(),
     clearApiKey: z.boolean().optional(), tools: z.boolean().optional(),
+    confirmKeyDestination: z.boolean().optional().describe('Keep sending apiKeyEnv after the endpoint moves to another host; without it the variable is dropped.'),
     capabilities: capabilities.optional(), pricing: pricing.optional(),
     visionFallbackId: id.optional().describe('Explicit image-capable connection used only for image items this model cannot read.'),
   }],
@@ -47,7 +48,7 @@ export const providerCommandDefinitions = {
   'models.delete': ['Delete a saved model connection and its encrypted key', { modelId: id }],
   'chat.send': ['Send text, selected attachments and context to the selected model, streaming when supported, with optional scoped read-only tools', {
     conversationId: id, modelId: id, text: z.string().trim().min(1).max(100000),
-    disclosureAck: z.boolean().optional(),
+    disclosureAck: z.union([z.boolean(), z.string().regex(/^[0-9a-f]{64}$/)]).optional().describe('Acknowledge the previewed cloud disclosure: agents pass disclosure.digest from chat.preview; the trusted interface may pass true.'),
     allowReadTools: z.boolean().optional(), allowAppTools: z.boolean().optional().describe("Allow command discovery and proposals; every proposed action requires human review."), tabId: z.number().int().positive().optional(),
     context: z.array(z.strictObject({
       title: z.string().max(300), content: z.string().max(100000),

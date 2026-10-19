@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { evaluateAutonomy, registerPluginActionClass } from '../autonomy.js';
 import { fileStamp, writeVerifiedJson } from '../storage-safety.js';
+import { readBoundedFile as readBounded } from '../helpers.js';
 import { BUILTIN } from './builtin/index.js';
 import { HOOK_POINTS, HOOK_NAMES, describeScope, effectiveActionClass, pluginDataClasses, validateManifest, zodFromJsonInput } from './manifest.js';
-import { PluginSandbox } from './sandbox.js';
+import { PluginSandbox, pluginNetworkIsolation } from './sandbox.js';
 
 export { HOOK_POINTS, HOOK_NAMES };
 const failure = (code, message, extra = {}) => Object.assign(new Error(message), { code, ...extra });
@@ -50,18 +51,6 @@ export const pluginCommandDefinitions = Object.fromEntries(builtins.flatMap(({ m
 const grantSchema = z.strictObject({ name: z.string().max(40), version: z.string().max(20), manifestSha256: z.string().regex(/^[a-f0-9]{64}$/), codeSha256: z.string().regex(/^[a-f0-9]{64}$/), allowAutomation: z.boolean(), grantedAt: z.string().max(64), scope: z.array(z.string().max(500)).max(100) });
 const stateSchema = z.strictObject({ version: z.literal(1), disabledBuiltins: z.array(z.string().max(40)).max(100), grants: z.array(grantSchema).max(100) });
 
-function readBounded(path, limit) {
-  const stat = lstatSync(path);
-  if (!stat.isFile()) throw new Error(`${path.split(/[\\/]/).pop()} must be a regular file, not a link or directory`);
-  const fd = openSync(path, 'r');
-  try {
-    if (fstatSync(fd).size > limit) throw new Error(`${path.split(/[\\/]/).pop()} exceeds ${limit} bytes`);
-    const buffer = Buffer.alloc(limit + 1);
-    const length = readSync(fd, buffer, 0, limit + 1, 0);
-    if (length > limit) throw new Error(`${path.split(/[\\/]/).pop()} exceeds ${limit} bytes`);
-    return buffer.subarray(0, length);
-  } finally { closeSync(fd); }
-}
 
 /**
  * The only path from core to plugins. Built-ins are reviewed core-adjacent
@@ -151,7 +140,8 @@ export class PluginRegistry {
       commands: manifest ? Object.entries(manifest.commands).map(([op, spec]) => ({ command: entry.builtin ? `plugin.${name}.${op}` : 'plugins.invoke', operation: op, description: spec.description,
         actionClass: effectiveActionClass(manifest, op), ...(entry.builtin ? {} : { input: spec.input, reads: spec.reads }) })) : [],
       ...(entry.builtin ? {} : { manifestSha256: entry.manifestSha256 ?? null, codeSha256: entry.codeSha256 ?? null, allowAutomation: grant?.allowAutomation ?? false,
-        grantedAt: grant?.grantedAt ?? null, problems: entry.problems ?? [], runtime: 'Separate sandboxed process: no filesystem, network, process, Electron or credential access; 2 s per call; 64 MiB heap' }) });
+        grantedAt: grant?.grantedAt ?? null, problems: entry.problems ?? [], runtime: 'Separate sandboxed process: no filesystem, network, process, Electron or credential access; 2 s per call; 64 MiB heap',
+        networkIsolation: pluginNetworkIsolation().mode }) });
   }
   list() { return this.entries().map(entry => this.summary(entry)); }
 

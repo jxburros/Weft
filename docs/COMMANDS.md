@@ -67,6 +67,9 @@ Human-only describes an unconditional administration gate. Every other non-human
 | tabs.move | Reopen a tab in another workspace isolated container | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.pin | Pin or unpin a tab | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.duplicate | Duplicate a tab in its workspace | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.reorder | Move a tab to a position among its workspace tabs; the order persists and is the order of tabs.list | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.closed | List recently closed tabs of a workspace, newest first (at most 25; cleared with history) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.reopen | Reopen a recently closed tab at its saved scroll position and zoom; it reopens without any agent control | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.group | Put a tab in a tab group of its workspace, or remove it from its group with null | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.search | Search open tab titles and URLs with group, ownership, task and suspension indicators | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.suspend | Release an idle background tab renderer, keeping its URL, scroll and records; refused for leased, task-bound, busy, playing or edited tabs | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -121,7 +124,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | workspaces.archive | Archive a workspace without deleting its contents | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.restore | Restore an archived workspace | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.duplicate | Copy project records; exclude sessions and credentials | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
-| workspaces.delete | Permanently delete a workspace and its saved records | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.delete | Permanently delete a workspace and its saved records; the built-in Everything workspace cannot be deleted | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.moveRecord | Human moves a material or saved capture to another workspace (for example out of Everything into a project) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | workspaces.export | Export project records with optional exact-term residue scan and metadata review; images are unverifiable | administration | Human only | GUI IPC, CLI, REST, MCP |
 | workspaces.import | Import a versioned project export as a new workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
 | settings.get | Get non-secret application preferences | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -239,6 +243,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | extensions.enable | Human loads an installed extension into its workspace session after re-verifying files and scope | administration | Human only | GUI IPC, CLI, REST, MCP |
 | extensions.disable | Human revokes an extension: it is unloaded from its workspace session immediately | administration | Human only | GUI IPC, CLI, REST, MCP |
 | extensions.remove | Human unloads and deletes an installed extension copy | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.actions | Human lists the toolbar buttons (action popup, options page) of extensions enabled in a workspace | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.openPage | Human opens an enabled extension's action popup or options page in a browser-owned window | administration | Human only | GUI IPC, CLI, REST, MCP |
 | plugin.markdown.digest | Render workspace context records as a Markdown digest that keeps categories and sources (built-in plugin markdown 1.0.0) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | plugin.session-stats.summary | Summarize command outcomes observed for a workspace since Weft started (built-in plugin session-stats 1.0.0) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | handoffs.create | Record a structured handoff with current tab state, exact evidence and next step; secrets are rejected | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -331,15 +337,15 @@ Human-only describes an unconditional administration gate. Every other non-human
 | encryption.enable | Human turns on workspace encryption in place; returns the recovery key once | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.lock | Human locks encrypted workspace data: keys leave memory and every surface returns locked until a person unlocks | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.unlock | Human unlocks encrypted workspace data with the OS key, passphrase or recovery key (Weft window only) | administration | Human only | GUI IPC, CLI, REST, MCP |
-| encryption.configure | Human changes how encrypted data unlocks (OS key at startup or manual) and sets, changes or removes the passphrase | administration | Human only | GUI IPC, CLI, REST, MCP |
+| encryption.configure | Human changes how encrypted data unlocks (OS key at startup or manual), sets, changes or removes the passphrase, and sets idle auto-lock | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.rotate | Human rotates keys: wrapping (new profile and recovery key) or dataKey (new data key with resumable re-encryption) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.checkRecoveryKey | Human checks that a recovery key opens this profile, without unlocking or changing anything | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.disable | Human turns off encryption and rewrites workspace data as plaintext on this disk | administration | Human only | GUI IPC, CLI, REST, MCP |
 | resources.status | Read scheduler limits, running and queued agent work, capture queue, suspended tabs and the caller’s budgets | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | captures.list | List queued, running and recent capture jobs with progress | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | captures.cancel | Cancel a queued capture job; a running screenshot or PDF is discarded, a running artifact capture cannot be cancelled | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
-| resume.get | Read a workspace resume record: last section, active tab, split panes, panel layout, pinned resources, continuation links to blockers, tasks and handoffs, and restore disclosures | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
-| resume.save | Save the workspace last view: section, active tab, split panes and focused pane, panel layout and pinned resources | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| resume.get | Read a workspace resume record: last section, active tab, pane layout (1–4 panes), panel layout, pinned resources, continuation links to blockers, tasks and handoffs, and restore disclosures | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| resume.save | Save the workspace last view: section, active tab, pane layout and focused pane, panel layout and pinned resources | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabGroups.list | List tab groups in a workspace with their tabs | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabGroups.create | Create a named, colored tab group and optionally move tabs into it | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabGroups.update | Rename, recolor, collapse or expand a tab group | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -347,6 +353,9 @@ Human-only describes an unconditional administration gate. Every other non-human
 | display.status | Read whether the Weft window is visible, how pages render, pending human decisions and how a person can attach | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | display.show | Show the Weft window so a person can inspect and take over the running session (attach); offscreen pages reload when shown | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | display.hide | Human hides the window and keeps this session running headless; open pages reload to render offscreen | administration | Human only | GUI IPC, CLI, REST, MCP |
+| windows.list | List Weft windows, the workspaces each one shows and its active tab (informational; windows grant nothing) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| windows.moveWorkspace | Human moves a workspace into a new window, another window, or back to the main window (the built-in Everything workspace stays in the main window) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| windows.focus | Human brings a Weft window to the front | administration | Human only | GUI IPC, CLI, REST, MCP |
 | browsingData.sources | Human lists browser profiles found on this computer and what Weft can import from them (never passwords, cookies, sessions or autofill) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | browsingData.preview | Human previews a bookmarks/history import: counts, containers, duplicates, unsupported fields and excluded secret data | administration | Human only | GUI IPC, CLI, REST, MCP |
 | browsingData.import | Human imports previewed bookmarks (as pinned website materials) and history into a workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
@@ -362,3 +371,20 @@ Human-only describes an unconditional administration gate. Every other non-human
 | payments.issueCard | Human creates a merchant-locked or single-use virtual card limited to the payment's ceiling from the configured provider and stores it in the credential vault | administration | Human only | GUI IPC, CLI, REST, MCP |
 | payments.closeCard | Human closes the payment's virtual card at the provider and revokes its vault entry | administration | Human only | GUI IPC, CLI, REST, MCP |
 | payments.configureProvider | Human configures the optional virtual-card issuer adapter (off by default; implemented against a fake issuer only, not validated with a real account) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.list | List per-site permission and popup decisions, pending prompts and which requests Weft asks about or always denies | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| permissions.respond | Human answers a pending browser-owned permission prompt (deny when dismissed) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.set | Human reviews or revokes a remembered site permission or popup decision in a workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.configure | Human turns the global "never ask" setting on or off (every prompted request is denied without a prompt) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.stop | Human stops camera, microphone or screen sharing on a tab: one-page grants end and the page reloads | administration | Human only | GUI IPC, CLI, REST, MCP |
+| popups.allow | Human opens a blocked popup once in a new tab, optionally allowing popups from the site in this workspace from now on | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.list | Human lists the saved sign-ins of a workspace (sites and usernames, never passwords), sites never saved, and pending save offers | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.respondOffer | Human answers a save-password offer after a sign-in: save (or update), never for this site, or not now | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.save | Human saves a sign-in by hand | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.update | Human edits a saved sign-in or shares it with other workspaces | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.delete | Human deletes a saved sign-in | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.reveal | Human shows one saved password after confirming in a browser-owned dialog | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.fill | Human fills a saved sign-in into a tab whose page is on the saved site (never another site or frame) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.generate | Human fills a generated strong password into the new-password fields of the current page | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.forgetNever | Human lets Weft offer to save passwords on a site again | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.import | Human imports sign-ins from a Chrome, Edge, Firefox or Safari CSV export chosen in a file dialog | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.export | Human exports this workspace's sign-ins as a plaintext CSV file (acknowledgement required) | administration | Human only | GUI IPC, CLI, REST, MCP |

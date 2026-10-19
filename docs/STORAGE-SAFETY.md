@@ -83,11 +83,23 @@ acknowledgement. The keyring wraps a random profile key with the OS key store
 (Electron `safeStorage`; `basic_text` on Linux is refused), a recovery key and
 an optional scrypt passphrase.
 
+Encryption protects confidentiality at rest, not freshness. Each envelope declares
+its own revision and the authenticated data binds collection, id and that
+revision, so someone who can write to the profile can replace a record with an
+older sealed copy of the same record (or restore an older copy of the whole
+profile) and it decrypts as that older revision. Weft has no trusted counter to
+detect this rollback; it is outside the threat model (an attacker with write
+access to the profile can also delete or corrupt it). Verified backups and the
+hash-chained activity log make such a change visible after the fact only when
+compared against an independent copy.
+
 Locking (`encryption.lock`) closes the database, drops decrypted state and keys
 and closes tabs; every command except `encryption.status`, `encryption.unlock`,
 `encryption.checkRecoveryKey` and `guide.get` then returns `locked` (HTTP 423,
 CLI exit 9). Profiles in manual unlock mode start locked. Only a person in the
-Weft window unlocks.
+Weft window unlocks. An optional idle auto-lock (off by default; Settings →
+Encryption → Unlock options) locks the same way after a chosen number of minutes
+without human use of the computer, and optionally when the screen locks.
 
 Enabling, disabling and data-key rotation are crash-safe: one SQLite
 transaction switches every value, a `pending` marker in the keyring lets the

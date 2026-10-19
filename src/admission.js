@@ -1,3 +1,4 @@
+import { isEverything } from './everything.js';
 /** A process-wide latch, shared by every automation dispatcher and model loop. */
 export class AutomationAdmission {
   constructor() { this.stoppedAt = null; }
@@ -22,9 +23,11 @@ export function resolveCommandTargets(name, input, context, { workspace, browser
   const args = { ...input };
   // Read-only lookup: the live state avoids copying every record per command.
   const state = workspace.data ?? workspace.snapshot();
-  const candidates = state.workspaces.filter(value => !value.archived).map(value => value.id);
-  const visible = id => !context.workspaceIds || context.workspaceIds.includes(id);
   const human = ['human', 'admin'].includes(context.actor);
+  // The built-in Everything workspace (#99) is never an implicit agent target: it does not make a profile
+  // ambiguous, and an agent reaches it only by naming it (and, for a scoped client, through its grant).
+  const candidates = state.workspaces.filter(value => !value.archived && (human || !isEverything(value.id))).map(value => value.id);
+  const visible = id => !context.workspaceIds || context.workspaceIds.includes(id);
   const fields = commands[name]?.inputSchema?.properties ?? {};
   const pageTarget = name.startsWith('page.') || name === 'artifacts.capture';
   const fail = message => { throw Object.assign(new Error(message), { code: 'ambiguous_target', details: {
@@ -34,9 +37,17 @@ export function resolveCommandTargets(name, input, context, { workspace, browser
     if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null) fail('Specify workspaceId when several workspaces exist');
     if (pageTarget && args.tabId == null) fail('Specify tabId when several workspaces exist');
   }
-  if (pageTarget && args.tabId == null) args.tabId = browser.activeId;
-  let tab = args.tabId != null ? browser.tab(args.tabId) : null;
-  if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null && !(human && name === 'workspace.snapshot')) args.workspaceId = tab?.workspaceId ?? workspace.activeWorkspaceId;
+  const implicitTab = pageTarget && args.tabId == null;
+  if (implicitTab) args.tabId = browser.activeId;
+  const tab = args.tabId != null ? browser.tab(args.tabId) : null;
+  if (!human && implicitTab && tab && isEverything(tab.workspaceId)) fail('The current tab is in Everything; specify tabId to act on it');
+  if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null && !(human && name === 'workspace.snapshot')) {
+    args.workspaceId = tab?.workspaceId ?? workspace.activeWorkspaceId;
+    if (!human && !tab && isEverything(args.workspaceId)) {
+      if (candidates.length !== 1) fail('The current workspace is Everything; specify workspaceId');
+      args.workspaceId = candidates[0];
+    }
+  }
   if (tab && args.workspaceId != null && name !== 'tabs.move' && tab.workspaceId !== args.workspaceId) {
     throw Object.assign(new Error('Tab belongs to a different workspace'), { code: 'target_mismatch' });
   }

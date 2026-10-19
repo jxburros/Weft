@@ -112,10 +112,15 @@ or 200% text the layout reflows without overlap (audited).
   draw (pages are native views and cannot paint there). The frame is dashed plum
   while an agent drives; a change of controller plays a 600 ms border pulse and is
   announced once. Reduced motion removes the pulse; the badge text still changes.
-- **Split view** (guide 7.4). A 6 px divider between panes; each pane has a header
-  with "Left pane"/"Right pane" buttons (`aria-pressed`), the page title, its
-  ownership badge and a "Focused" label; the focused pane has a focus-ring frame
-  and an underline. Choosing a pane moves keyboard focus into it.
+- **Panes** (guide 7.4). One to four panes with 6 px dividers that show the focus
+  ring on hover and keyboard focus; each pane has a header with its position
+  button ("Left pane", "Top right pane", …; `aria-pressed`), the title, the
+  ownership badge for tabs, a "Focused" label and a close button; the focused pane
+  has a focus-ring frame and an underline. Captures and documents render on the
+  surface color inside the pane. Choosing a pane moves keyboard focus into it.
+- **Everything and windows.** Everything's rail button has a dashed 2 px border and
+  the grid icon; a workspace shown in another window is dimmed with a small ↗ mark,
+  and its accessible name says where it is.
 - **Browser-owned surfaces** (guide 6, 13). One visual language: a band reading
   "Weft browser control · <kind>" on the trusted surface with a plum edge, a
   shield icon and a 4 px top edge on dialogs. Used for agent requests, payment
@@ -223,3 +228,20 @@ does not make them:
    the icon-only section grid, and the optional ocean, forest and rose accents.
 6. Appearance of the Windows installer art and of the icons on each platform's
    dock/taskbar at native sizes.
+
+### Sign-off record
+
+Issue #36 was closed as code complete; these decisions remain a product owner's.
+To sign off, review each item on the reference platforms (Windows 11, current
+macOS, a GNOME/KDE Linux desktop) in both themes, then fill in the row. A
+"change" outcome becomes a new issue; do not edit tokens without updating the
+visual goldens (`WEFT_VISUAL=1 WEFT_UPDATE_GOLDEN=1`, see `test/visual/README.md`) and `npm run logo:validate`.
+
+| # | Decision | Reviewed by | Date | Platforms | Outcome (accept / change) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Logo, wordmark, optical small-size variant | | | | |
+| 2 | Typeface and type scale | | | | |
+| 3 | Dark, status, focus and trusted-surface palette | | | | |
+| 4 | Workspace naming | | | | |
+| 5 | Sidebar density, breakpoints, motion, accents | | | | |
+| 6 | Installer art and platform icons | | | | |

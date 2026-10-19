@@ -1,5 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID, scryptSync } from 'node:crypto';
+import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { writeJsonDurable } from './atomic-json.js';
@@ -53,7 +53,6 @@ export function open(key, sealed, aad) {
   } catch { return null; }
 }
 const hkdf = (key, info) => Buffer.from(hkdfSync('sha256', key, Buffer.alloc(0), Buffer.from(info), 32));
-export const isSealed = value => typeof value === 'string' && value.startsWith(SEALED_PREFIX);
 
 // ---- Recovery keys and KDF -------------------------------------------------------------
 function base32(bytes) {
@@ -159,7 +158,6 @@ export function readKeyring(directory) {
 }
 export function writeKeyring(directory, keyring) { writeJsonDurable(join(directory, KEYRING_FILE), keyringSchema.parse(keyring)); }
 export function removeKeyring(directory) { rmSync(join(directory, KEYRING_FILE), { force: true }); }
-export const keyringExists = directory => existsSync(join(directory, KEYRING_FILE));
 
 function wrapSecret(profileId, kind, profileKey, secret, params, clock) {
   const salt = randomBytes(16);
@@ -327,20 +325,28 @@ export function rotateWrapping(keyring, keys, { protector, unlockMode = keyring.
     dataKeys: keyring.dataKeys.map(entry => ({ ...entry, data: seal(profileKey, keys.key(entry.version), keyAad(profileId, 'data', entry.version)).toString('base64') })) };
   if (passphrase !== null) next.wrappers.passphrase = wrapSecret(profileId, 'passphrase', profileKey, Buffer.from(String(passphrase).normalize('NFC')), kdfParams.passphrase, clock);
   if (unlockMode === 'os') next.wrappers.os = { ...protector.wrap(profileKey), createdAt: now };
-  wipe(keys.profileKey);
-  keys.profileKey = profileKey;
-  return { keyring: next, recoveryKey };
+  // `keys` is left untouched: the caller applies the new profile key only after the keyring is saved,
+  // and calls `discard` instead if saving fails, so memory never holds a key that exists nowhere on disk.
+  return { keyring: next, recoveryKey,
+    apply() { wipe(keys.profileKey); keys.profileKey = profileKey; },
+    discard() { wipe(profileKey); } };
 }
 /** Begin data-key rotation: add a new data key and make it current; existing data is re-encrypted by a resumable job. */
+/**
+ * Returns the next keyring plus `apply`/`discard`. `keys` is not changed here: the caller applies
+ * the new data key only after the keyring is saved, so a failed save can never leave records
+ * sealed under a key version that exists only in memory.
+ */
 export function beginDataKeyRotation(keyring, keys, { clock = Date.now } = {}) {
-  if (keyring.rotation) return keyring;
+  if (keyring.rotation) return { keyring, apply() {}, discard() {} };
   const version = Math.max(...keyring.dataKeys.map(entry => entry.version)) + 1;
   const dataKey = randomBytes(32);
   const now = new Date(clock()).toISOString();
-  keys.dataKeys.set(version, dataKey);
-  keys.currentVersion = version;
-  return { ...structuredClone(keyring), updatedAt: now, currentVersion: version, rotation: { from: keyring.currentVersion, to: version, startedAt: now },
+  const next = { ...structuredClone(keyring), updatedAt: now, currentVersion: version, rotation: { from: keyring.currentVersion, to: version, startedAt: now },
     dataKeys: [...keyring.dataKeys, { version, data: seal(keys.profileKey, dataKey, keyAad(keyring.profileId, 'data', version)).toString('base64'), createdAt: now }] };
+  return { keyring: next,
+    apply() { keys.dataKeys.set(version, dataKey); keys.currentVersion = version; },
+    discard() { wipe(dataKey); } };
 }
 /** Finish rotation once nothing remains under older data keys. */
 export function finishDataKeyRotation(keyring, keys, { clock = Date.now } = {}) {
@@ -357,4 +363,3 @@ export function checkRecoveryKey(keyring, recoveryKey) {
   wipe(key);
   return true;
 }
-export const sameKey = (a, b) => Buffer.isBuffer(a) && Buffer.isBuffer(b) && a.length === b.length && timingSafeEqual(a, b);

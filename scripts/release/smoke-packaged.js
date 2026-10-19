@@ -16,11 +16,12 @@ const version = JSON.parse(readFileSync(new URL('../../package.json', import.met
 const profile = mkdtempSync(join(tmpdir(), 'weft-smoke-'));
 const port = await new Promise(resolve => { const server = createServer().listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)); }); });
 const token = randomBytes(24).toString('hex');
-const args = [`--user-data-dir=${profile}`];
+// The fuses (#117) must make a packaged build ignore inspector flags and NODE_OPTIONS: both ask for a debugger here.
+const args = [`--user-data-dir=${profile}`, '--inspect=0'];
 // CI Linux runners lack the setuid sandbox helper and FUSE; production launches never pass these flags
 // (APPIMAGE_EXTRACT_AND_RUN only affects AppImages).
 if (process.platform === 'linux') args.push('--no-sandbox', '--disable-gpu');
-const child = spawn(executable, args, { env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_DISABLE_UPDATES: '1', APPIMAGE_EXTRACT_AND_RUN: '1' }), stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn(executable, args, { env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_DISABLE_UPDATES: '1', APPIMAGE_EXTRACT_AND_RUN: '1', NODE_OPTIONS: '--inspect=0' }), stdio: ['ignore', 'pipe', 'pipe'] });
 let output = '';
 child.stdout.on('data', chunk => { output += chunk; });
 child.stderr.on('data', chunk => { output += chunk; });
@@ -43,6 +44,7 @@ while (!output.includes(`Weft API: http://127.0.0.1:${port}`)) {
   if (child.exitCode !== null) await fail(`process exited early with ${child.exitCode}`);
   await new Promise(resolve => setTimeout(resolve, 250));
 }
+if (/Debugger listening/i.test(output)) await fail('the packaged app opened an inspector for --inspect or NODE_OPTIONS; check the Electron fuses');
 const unauthorized = await fetch(`http://127.0.0.1:${port}/v1/commands`).then(response => response.status);
 if (unauthorized !== 401) await fail(`unauthenticated API request returned ${unauthorized}`);
 const status = await call('update.status');

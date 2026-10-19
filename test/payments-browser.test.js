@@ -33,7 +33,6 @@ if (process.argv.includes('--payments-smoke')) {
     const posts = [];
     const record = (origin, request) => new Promise(resolve => { let body = ''; request.on('data', chunk => { body += chunk; }); request.on('end', () => { posts.push({ origin, path: request.url, body }); resolve(body); }); });
     // The card processor hosts the security-code field and, for embedded checkouts, the whole checkout.
-    let pspOrigin, merchantOrigin, otherOrigin;
     const frameCheckout = action => html('Hosted checkout', `<p>Total <span id="total">USD 25.00</span></p><form action="${action}" method="post"><button id="pay" type="submit">Pay now</button></form>`);
     const psp = createServer(async (request, response) => {
       response.setHeader('content-type', 'text/html; charset=utf-8');
@@ -42,7 +41,7 @@ if (process.argv.includes('--payments-smoke')) {
       if (request.url.startsWith('/hosted-frame')) return response.end(frameCheckout('/pay'));
       response.end(html('PSP', ''));
     });
-    pspOrigin = await listen(psp);
+    const pspOrigin = await listen(psp);
     const checkout = (posted = '/pay') => html('Checkout', `<main><h1>Checkout</h1>
 <p>Subtotal <span id="subtotal">$40.99</span></p><p>Tax <span id="tax">$4.00</span></p><p>Shipping <span id="shipping">$5.00</span></p>
 <p><strong>Total <span id="total">$49.99</span></strong></p>
@@ -57,7 +56,7 @@ if (process.argv.includes('--payments-smoke')) {
       if (request.url.startsWith('/hosted')) return response.end(html('Hosted', `<h1>Pay</h1><iframe id="hosted" title="Checkout" src="${pspOrigin}/hosted-frame" width="400" height="200"></iframe>`));
       response.end(checkout());
     });
-    merchantOrigin = await listen(merchant);
+    const merchantOrigin = await listen(merchant);
     // A lookalike checkout on another origin, reached by a redirect after approval.
     const other = createServer(async (request, response) => {
       response.setHeader('content-type', 'text/html; charset=utf-8');
@@ -65,7 +64,7 @@ if (process.argv.includes('--payments-smoke')) {
       if (request.url.startsWith('/hosted-frame')) return response.end(frameCheckout('/pay'));
       response.end(checkout());
     });
-    otherOrigin = await listen(other);
+    const otherOrigin = await listen(other);
 
     const profile = process.env.WEFT_TEST_PROFILE;
     const workspace = new WorkspaceService({ directory: join(profile, 'workspace-data') });
@@ -161,6 +160,15 @@ if (process.argv.includes('--payments-smoke')) {
       assert.deepEqual(leaks(after), [], 'snapshots redact filled card fields');
       assert.ok(after.result.nodes.some(node => node.redacted === 'sensitive-field' && node.hasValue));
       assert.equal((await run('page.evaluate', { tabId, expectedVersion: await inspect(), expression: 'document.getElementById("number").value' }, agent)).error?.details?.credential, 'credential_residue');
+      // A filled card never authorizes a purchase: automation input that could press the pay button is refused (#103).
+      for (const [command, args] of Object.entries({ 'page.click': { selector: '#pay' }, 'page.fill': { selector: '#holder', value: 'Someone else' }, 'page.press': { key: 'Enter' } })) {
+        const refused = await run(command, { tabId, expectedVersion: await inspect(), ...args }, agent);
+        assert.equal(refused.error?.code, 'permission_required', `${command} after a card fill`);
+        assert.equal(refused.error.details.payment, 'card_filled');
+        assert.equal(refused.error.details.authority.reason, 'card_filled');
+      }
+      await delay(200);
+      assert.equal(posts.length, 0, 'no automation click reached the merchant');
 
       // 4. The total changes after approval: the submission is refused before any click and the approval is void.
       await setText('#total', '$54.99');

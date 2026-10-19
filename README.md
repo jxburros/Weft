@@ -46,7 +46,8 @@ MCP or REST. Details: [connecting clients](docs/CONNECTING.md) and
 ## What you can do
 
 - **Browse** with native Chromium pages, separate sign-in state per workspace,
-  split view, bookmarks, history, downloads and find.
+  1–4 panes, multiple windows, an Everything workspace for links from other
+  apps, bookmarks, history, downloads and find.
 - **Organize** notes, website references, copied files, and what you have
   confirmed, found, asked and decided, per workspace. Give each workspace a
   description, standing instructions and memory, and an optional due date.
@@ -82,7 +83,8 @@ node node_modules/electron/install.js
 npm start
 ```
 
-The control API listens only on `127.0.0.1:9222`. Weft prints a random access
+The control API listens only on `127.0.0.1:9222` (Chrome's usual DevTools port;
+set `WEFT_PORT` if something else uses it, see [Using Weft](docs/USING-WEFT.md)). Weft prints a random access
 token to the terminal at startup, or you can set your own with `WEFT_TOKEN`. Use
 `npm start -- --user-data-dir=/absolute/path` for a separate profile, and see
 [Using Weft](docs/USING-WEFT.md) for headless mode, installers, updates,
@@ -109,7 +111,7 @@ integration authors is in [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)
 
 ## Status and limits
 
-This is version 1.3.0: a working browser that implements a large part, but not all,
+This is version 1.4.0: a working browser that implements a large part, but not all,
 of the [product specification](AI-Workspace-Browser-Product-Specification.md).
 [Implementation coverage](docs/IMPLEMENTATION.md) assesses it section by section.
 

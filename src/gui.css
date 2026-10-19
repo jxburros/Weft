@@ -2251,3 +2251,335 @@ dialog.trusted .trusted-band {
 :root[data-accent="rose"] { --brand:var(--accent-rose); }
 :root[data-density="compact"] .settings-row { padding-block:8px; }
 :root[data-density="compact"] .record-card { padding:12px; }
+/* Everyday browser chrome (#88, #91, #92, #93, #96) */
+.address-field {
+  position: relative;
+}
+.zoom-indicator {
+  width: auto !important;
+  padding: 0 var(--space-8);
+  color: var(--ink) !important;
+  font-size: var(--font-size-11);
+  border-left: 1px solid var(--border);
+}
+.omnibox-list {
+  position: absolute;
+  top: calc(100% + var(--space-4));
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 360px;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-8);
+  box-shadow: var(--shadow);
+  padding: var(--space-4);
+}
+.omnibox-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8);
+  border-radius: var(--radius-6);
+  cursor: default;
+  min-height: 32px;
+}
+.omnibox-option.selected,
+.omnibox-option:hover {
+  background: var(--brand-soft);
+}
+.omnibox-option.selected {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.omnibox-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.omnibox-text strong,
+.omnibox-text small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.omnibox-text small,
+.omnibox-kind {
+  color: var(--muted);
+  font-size: var(--font-size-11);
+}
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-16);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.find-bar[hidden] {
+  display: none;
+}
+.find-bar input[type="text"] {
+  width: min(320px, 40vw);
+  height: 28px;
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-6);
+  padding: 0 var(--space-8);
+  background: var(--surface);
+  color: var(--ink);
+}
+.find-count {
+  min-width: 80px;
+  color: var(--muted);
+  font-size: var(--font-size-12);
+}
+#find-previous svg {
+  transform: rotate(180deg);
+}
+.pinned-tabs {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.tab.dragging {
+  opacity: 0.5;
+}
+.tab.drop-before {
+  box-shadow: inset 0 2px 0 var(--focus-ring);
+}
+.tab.drop-after {
+  box-shadow: inset 0 -2px 0 var(--focus-ring);
+}
+.drop-into {
+  outline: 2px dashed var(--focus-ring);
+  outline-offset: -2px;
+}
+.recently-closed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-top: var(--space-4);
+  color: var(--muted);
+  font-size: var(--font-size-12);
+}
+.closed-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.closed-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-8) 0;
+  border-bottom: 1px solid var(--border);
+}
+.closed-list .record-text {
+  flex: 1;
+  min-width: 0;
+}
+.shortcut-list dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4) var(--space-16);
+  margin: var(--space-8) 0 0;
+}
+.shortcut-list dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
+.shortcut-list dd {
+  margin: 0;
+}
+
+/* External-application approvals show the whole target address. */
+.launch-url {
+  max-height: 12em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: var(--font-size-13);
+}
+.launch-url mark {
+  background: var(--clay-soft);
+  color: inherit;
+}
+
+/* High-contrast support: Windows/OS forced colors keep every state cue visible with system colors,
+   and a "more contrast" preference strengthens muted text, borders and focus rings. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  button,
+  input,
+  select,
+  textarea,
+  .state-badge,
+  .tag {
+    border: 1px solid ButtonText;
+  }
+  [aria-current="true"],
+  [aria-current="page"],
+  [aria-selected="true"],
+  [aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  dialog,
+  .trusted-section {
+    border: 2px solid CanvasText;
+  }
+  mark {
+    background: Highlight;
+    color: HighlightText;
+  }
+  button:disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+}
+@media (prefers-contrast: more) {
+  :root {
+    --muted: var(--ink);
+    --border: var(--border-strong);
+  }
+  :focus-visible {
+    outline-width: 3px;
+  }
+}
+/* Browser-owned site indicators in the address field: pop-ups blocked, permissions in use, saved sign-ins, extensions (#90, #95, #97, #98). */
+.site-indicators {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.address-field .site-indicators .indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: auto;
+  min-width: 28px;
+  min-height: 24px;
+  padding: 0 var(--space-4);
+  color: var(--muted);
+  font-size: var(--font-size-11);
+}
+.address-field .site-indicators .indicator.in-use {
+  color: var(--brand);
+  font-weight: var(--font-weight-semibold);
+}
+.share-sources {
+  display: grid;
+  gap: var(--space-8);
+  border: 0;
+  padding: 0;
+}
+.share-source {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.share-source img {
+  width: 120px;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4, 4px);
+}
+.extension-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.secret-reveal {
+  font-family: ui-monospace, monospace;
+  user-select: all;
+}
+
+
+/* Everything workspace (issue 99) and workspaces shown in another window (issue 100). */
+.workspace-dot.everything {
+  border-style: dashed;
+  border-width: 2px;
+}
+.workspace-dot.everything svg {
+  width: 20px;
+  height: 20px;
+}
+.workspace-dot.elsewhere {
+  opacity: 0.72;
+}
+.workspace-dot .window-mark {
+  position: absolute;
+  right: -2px;
+  bottom: -4px;
+  font-size: var(--font-size-11);
+  line-height: 1;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  padding: 1px 2px;
+}
+.scope-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0 0 var(--space-12);
+  font-size: var(--font-size-13);
+}
+
+/* 1–4 pane layouts (issue 101): headers, document panes and resizable dividers. */
+.pane-header .pane-close {
+  margin-left: auto;
+  padding: 0 var(--space-4);
+}
+.pane-header .pane-close svg {
+  width: 14px;
+  height: 14px;
+}
+.pane-doc {
+  position: absolute;
+  overflow: auto;
+  padding: var(--space-12);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-sizing: border-box;
+}
+.pane-doc:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+.pane-doc .artifact-image {
+  max-width: 100%;
+}
+.pane-doc-meta {
+  color: var(--muted);
+  font-size: var(--font-size-12);
+}
+.pane-divider {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+.pane-divider.vertical {
+  cursor: col-resize;
+}
+.pane-divider.horizontal {
+  cursor: row-resize;
+}
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--focus-ring);
+  outline: none;
+}
+.external-label code {
+  word-break: break-all;
+}

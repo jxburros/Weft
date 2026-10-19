@@ -27,7 +27,7 @@ export const PAYMENT_STATUSES = Object.freeze(['proposed', 'submitting', 'submit
 export const PAYMENT_REASONS = Object.freeze(['terms_changed', 'merchant_changed', 'exceeds_ceiling', 'currency_unknown', 'currency_mismatch', 'currency_not_shown', 'amount_missing',
   'amount_ambiguous', 'amount_unparseable', 'recurrence_mismatch', 'recurrence_not_shown', 'insecure_checkout', 'checkout_frame_missing', 'checkout_element_missing',
   'checkout_element_ambiguous', 'submit_unavailable', 'already_submitted', 'submission_in_flight', 'externally_uncertain', 'voided', 'invalidated', 'outside_recurrence',
-  'task_closed', 'tab_mismatch', 'not_proposer', 'payment_class_not_granted', 'not_clicked', 'unprotected_storage', 'invalid_provider_url', 'no_virtual_card', ...PROVIDER_REASONS]);
+  'task_closed', 'tab_mismatch', 'not_proposer', 'payment_class_not_granted', 'not_clicked', 'unprotected_storage', 'invalid_provider_url', 'no_virtual_card', 'card_filled', ...PROVIDER_REASONS]);
 /** Words that may appear in error.details.changed for terms_changed / merchant_changed. */
 export const PAYMENT_CHANGES = Object.freeze(['merchant_origin', 'checkout_frame', 'destination', 'checkout_element', 'total', 'subtotal', 'tax', 'shipping', 'currency',
   'exceeds_ceiling', 'recurrence', 'submit_control']);
