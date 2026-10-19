@@ -139,12 +139,18 @@
             ></button
             ><input
               id="address"
+              role="combobox"
               aria-label="Website URL or search"
               aria-keyshortcuts="Control+L F6"
+              aria-autocomplete="list"
+              aria-expanded="false"
+              aria-controls="omnibox-list"
               placeholder="Search the web or enter a URL"
               autocomplete="off"
               spellcheck="false"
-            /><kbd aria-hidden="true">Ctrl L</kbd>
+            /><button type="button" id="zoom-indicator" class="zoom-indicator" hidden></button
+            ><kbd aria-hidden="true">Ctrl L</kbd>
+            <div id="omnibox-list" class="omnibox-list" role="listbox" aria-label="Address suggestions" hidden></div>
           </div>
           <button type="button" id="send-to-weft" hidden>Send to Weft</button>
           <span id="page-owner" class="owner-chip" hidden></span>
@@ -170,6 +176,14 @@
             aria-label="Page tools"
           ></button>
         </form>
+        <div id="find-bar" class="find-bar" role="search" aria-label="Find in page" hidden>
+          <input id="find-input" type="text" aria-label="Find in page" placeholder="Find in page" autocomplete="off" spellcheck="false" />
+          <span id="find-count" class="find-count"></span>
+          <button type="button" id="find-previous" class="icon-button" aria-label="Previous match"></button
+          ><button type="button" id="find-next" class="icon-button" aria-label="Next match"></button>
+          <label class="inline-check"><input type="checkbox" id="find-case" /> Match case</label>
+          <button type="button" id="find-close" class="icon-button" aria-label="Close find bar" aria-keyshortcuts="Escape"></button>
+        </div>
         <section id="safety-notices" aria-label="Workspace safety notices" hidden></section>
         <div class="work-area">
           <main id="content" tabindex="-1"></main>

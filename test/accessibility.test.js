@@ -170,6 +170,7 @@ if (process.argv.includes("--a11y-child")) {
       ["subscribe to list", () => act("lists-subscribe"), "Subscribe to a community list"],
       ["agent input", () => act("automation-settings"), "Agent input"],
       ["page tools", () => run('document.getElementById("page-more").click()'), "Page tools"],
+      ["recently closed tabs", () => act("recently-closed"), "Recently closed tabs"],
     ];
     for (const theme of process.env.WEFT_A11Y_SKIP_VIEWS === "1" ? [] : ["light", "dark"]) {
       await execute("settings.update", { theme });
@@ -179,6 +180,19 @@ if (process.argv.includes("--a11y-child")) {
       await act("activate-tab", { id: String(live.id) });
       await until('document.getElementById("breadcrumb-section").textContent === "Live page"');
       await audit("live page chrome", theme);
+      // The find bar and address suggestions (#91, #93) are chrome around the live page.
+      await run('document.getElementById("address").blur()');
+      await press("F", ["control"]);
+      await until('!document.getElementById("find-bar").hidden && document.activeElement?.id === "find-input"', "find bar");
+      await audit("find bar", theme);
+      await press("Escape");
+      await until('document.getElementById("find-bar").hidden', "find bar closed");
+      await run('(() => { const a = document.getElementById("address"); a.focus(); a.value = "Reference"; a.dispatchEvent(new Event("input")); })()');
+      await until('!document.getElementById("omnibox-list").hidden', "address suggestions");
+      await audit("address suggestions", theme);
+      await press("Escape");
+      await until('document.getElementById("omnibox-list").hidden', "address suggestions closed");
+      await run('document.getElementById("address").blur()');
       await act("activate-tab", { id: String(checkout.result.id) });
       await run(`window.weft.execute("page.navigate", { url: ${JSON.stringify(`${origin}/blocked`)} }).catch(() => {})`);
       await until('document.getElementById("content").textContent.includes("restricted")', "stop page");

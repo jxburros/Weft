@@ -15,6 +15,17 @@ contextBridge.exposeInMainWorld('weft', {
     ipcRenderer.on('weft:chrome', listener);
     return () => ipcRenderer.off('weft:chrome', listener);
   },
+  onNotice: callback => {
+    const listener = (_event, message) => callback(String(message));
+    ipcRenderer.on('weft:notice', listener);
+    return () => ipcRenderer.off('weft:notice', listener);
+  },
+  chrome: async (action, args = {}) => {
+    const outcome = await ipcRenderer.invoke('weft:chromeAction', action, args);
+    if (outcome?.error) throw Object.assign(new Error(outcome.error.message), { code: outcome.error.code });
+    return outcome?.result;
+  },
+  platform: process.platform,
   executeOutcome: (name, args = {}) => ipcRenderer.invoke('weft:execute', name, args),
   execute: async (name, args = {}) => {
     const outcome = await ipcRenderer.invoke('weft:execute', name, args);

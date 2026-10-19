@@ -67,6 +67,9 @@ Human-only describes an unconditional administration gate. Every other non-human
 | tabs.move | Reopen a tab in another workspace isolated container | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.pin | Pin or unpin a tab | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.duplicate | Duplicate a tab in its workspace | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.reorder | Move a tab to a position among its workspace tabs; the order persists and is the order of tabs.list | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.closed | List recently closed tabs of a workspace, newest first (at most 25; cleared with history) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| tabs.reopen | Reopen a recently closed tab at its saved scroll position and zoom; it reopens without any agent control | external_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.group | Put a tab in a tab group of its workspace, or remove it from its group with null | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.search | Search open tab titles and URLs with group, ownership, task and suspension indicators | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.suspend | Release an idle background tab renderer, keeping its URL, scroll and records; refused for leased, task-bound, busy, playing or edited tabs | local_write | Policy checked | GUI IPC, CLI, REST, MCP |

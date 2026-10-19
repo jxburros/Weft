@@ -4,6 +4,7 @@ import { pageField } from './pagination.js';
 import { PHASES } from './task-phases.js';
 import { taskPlan, workflowParameter, workflowStep, credentialRef } from './task-commands.js';
 import { resourceSettingsShape } from './resources.js';
+import { SEARCH_ENGINES, templateProblem } from './search-engines.js';
 
 const id = z.string().min(1).max(128);
 const text = z.string().max(500000);
@@ -64,7 +65,14 @@ export const commandDefinitions = {
     automation: z.strictObject({ inputConcurrency: z.enum(['shared', 'exclusive']).optional().describe('shared lets agents act on available tabs; exclusive requires a lease.'),
       queueLimit: z.number().int().min(0).max(20).optional().describe('Agent input requests that may wait per tab; 0 rejects busy tabs immediately.'),
       queueTimeoutMs: z.number().int().min(0).max(60000).optional().describe('Longest wait for a queued input request.') }).optional().describe('Multi-agent input serialization settings.'),
-    resources: resourceSettingsShape.optional() }],
+    resources: resourceSettingsShape.optional(),
+    searchEngine: z.strictObject({ preset: z.enum([...Object.keys(SEARCH_ENGINES), 'custom']).describe('A preset engine, or custom with a template.'),
+      template: z.string().max(2048).optional().describe('custom only: an https:// search address containing %s exactly once, replaced by the search words.'),
+      name: z.string().min(1).max(60).optional().describe('custom only: a name shown in the address bar and menus.') })
+      .superRefine((value, context) => {
+        const problem = value.preset === 'custom' ? templateProblem(value.template) : value.template != null ? 'A template is only used with the custom preset' : null;
+        if (problem) context.addIssue({ code: 'custom', message: problem, path: ['template'] });
+      }).optional().describe('Address-bar search engine. Typed text is sent to it only when the person presses Enter; Weft requests no remote suggestions.') }],
   'search.query': ['Search project records and saved text locally (BM25, fused with opt-in local embeddings when enabled); page mode adds coverage and verified absence', { ...optionalWorkspace, query: z.string().max(1000), limit: z.number().int().min(1).max(200).optional(),
     passageChars: z.number().int().min(300).max(6000).optional().describe('Return a cited passage of this many characters instead of a short snippet.'),
     mode: z.enum(['auto', 'lexical', 'hybrid']).optional().describe('auto (default) fuses lexical and vector results when this workspace has embeddings enabled; lexical uses BM25 only; hybrid requires embeddings.') }],
