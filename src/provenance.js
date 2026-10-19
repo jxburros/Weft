@@ -28,7 +28,6 @@ export const originInput = z.strictObject({
   captureId: id.optional().describe('Capture (artifact) the content was taken from.'),
 }).describe('Descriptive provenance. Weft sets the actor from the authenticated caller; it cannot be supplied.');
 
-export const CITATION_STATUSES = Object.freeze(['verified', 'reanchored', 'stale', 'unverified']);
 export const citationInput = z.strictObject({
   type: z.enum(['capture', 'record', 'source']).describe('capture: an artifact version; record: a materials/context/tasks revision; source: a linked file or service reference version.'),
   captureId: id.optional().describe('Artifact ID for capture citations.'),
@@ -183,11 +182,4 @@ export function reanchorCitation(citation, latest, now = new Date().toISOString(
   const anchor = typeof current.text === 'string' ? anchorQuote(current.text, citation) : null;
   if (!anchor) return { ...next, status: 'stale', reason: typeof current.text === 'string' ? 'quote_removed' : 'source_changed', current: current.key };
   return { ...next, status: 'reanchored', current: { ...current.key, start: anchor.start, end: anchor.end, method: anchor.method } };
-}
-
-/** Compact counts for interfaces. */
-export function citationSummary(citations = []) {
-  const counts = Object.fromEntries(CITATION_STATUSES.map(status => [status, 0]));
-  for (const citation of citations) if (Object.hasOwn(counts, citation.status)) counts[citation.status]++;
-  return { total: citations.length, ...counts };
 }
