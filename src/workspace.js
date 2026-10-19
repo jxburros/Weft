@@ -22,6 +22,7 @@ import { RRF_K, documentKey, reciprocalRankFusion } from './retrieval.js';
 import { createKeyProtector, lockedError } from './encryption.js';
 import { ProfileEncryption } from './profile-encryption.js';
 import { encryptionSchemas } from './encryption-commands.js';
+import { EVERYTHING_ID, EVERYTHING_NAME, ensureEverything, everythingRecord, everythingRefusal, isEverything } from './everything.js';
 // Same registered symbol as commands.js PARTIAL_COVERAGE (not imported here to avoid an import cycle).
 const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
 import { applyTransition, appendTimeline, isHumanContext, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
@@ -40,7 +41,7 @@ const REPLAYED = Symbol.for('weft.replayed');
 const WORKFLOW_EXECUTABLE = ['watch', 'steps', 'parameters', 'allowedSites', 'materialIds', 'credentialRefs'];
 const urlSecret = /token|secret|password|credential|authorization|api.?key|session|signature|^code$|^key$/i;
 const fail = (code, message, extra = {}) => Object.assign(new Error(`${code.toUpperCase()}: ${message}`), { code, ...extra });
-const HUMAN_ADMIN = new Set(['memories.create', 'memories.update', 'memories.delete', 'search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
+const HUMAN_ADMIN = new Set(['memories.create', 'memories.update', 'memories.delete', 'search.configureEmbeddings', 'search.indexing', 'siteRules.review', 'settings.update', 'workspaces.delete', 'workspaces.moveRecord', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'workspaces.exportPackage', 'workspaces.importPackage', 'backups.create', 'backups.list', 'backups.verify', 'backups.restore', 'backups.delete',
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview']);
 // activity.list is served by the durable activity log (src/activity-log.js) through the dispatcher.
 const READS = new Set(['history.list', 'bookmarks.list', 'workspace.snapshot', 'settings.get', 'workspaces.list', 'workspaces.get', 'workspaces.export', 'artifacts.versions', 'conversations.messages',
@@ -120,7 +121,8 @@ function createWorkspace(name = 'My workspace') {
 }
 function initialState() {
   const initial = createWorkspace();
-  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [], tabGroups: [], resumeStates: [],
+  // Everything (#99) is built in and first in the rail; a new profile still opens on its own project workspace.
+  return { schemaVersion: CURRENT_SCHEMA_VERSION, activeWorkspaceId: initial.id, workspaces: [everythingRecord(initial.createdAt), initial], ...Object.fromEntries(collections.map(name => [name, []])), history: [], activity: [], settings: { theme: 'system', model: { provider: 'compatible', endpoint: 'http://localhost:11434/v1', model: '' }, sidebarCollapsed: false, agentPanelOpen: false }, browserSession: { tabs: [], activeId: null }, handoffs: [], tabGroups: [], resumeStates: [],
     ...Object.fromEntries(KNOWLEDGE_COLLECTIONS.map(name => [name, []])) };
 }
 /** Version metadata without content. Agents see restricted originals as withheld stubs that name their sanitized derivatives. */
@@ -268,6 +270,8 @@ export class WorkspaceService {
       for (const task of legacyTasks) { task.status = 'waiting_on_human'; appendTimeline(task, { type: 'transition', from: 'waiting', to: 'waiting_on_human', actor: 'system', reason: 'legacy', at: now() }); }
       // Tab groups and resume records (#24) likewise start empty in older stores.
       for (const key of VIEW_STATE) if (!Array.isArray(data[key])) data[key] = [];
+      // Profiles created before the built-in Everything workspace (#99) gain it, first in the rail.
+      const addedEverything = Array.isArray(data.workspaces) && ensureEverything(data, now());
       if (data.schemaVersion !== CURRENT_SCHEMA_VERSION) {
         const migrated = storage.reattach(migrateSchema(data, { validate: validateStoredState }));
         rejectSecretKeys(migrated);
@@ -278,7 +282,7 @@ export class WorkspaceService {
       rejectSecretKeys(data);
       this.storage = storage;
       this.data = data;
-      if (legacyTasks.length) this.save();
+      if (legacyTasks.length || addedEverything) this.save();
     } catch (error) { storage.close(); throw error; }
     this.startIndexing();
   }
@@ -905,7 +909,8 @@ export class WorkspaceService {
     if (collection === 'workspaces') return this.mutateWorkspace(action, args, actor, effects);
     if (name === 'settings.update') {
       this.data.settings = { ...this.data.settings, ...args, ...(args.appearance && { appearance: { ...this.data.settings.appearance, ...args.appearance } }), model: { ...this.data.settings.model, ...args.model }, ...(args.automation && { automation: { ...this.data.settings.automation, ...args.automation } }),
-        ...(args.resources && { resources: { ...this.data.settings.resources, ...args.resources } }) };
+        ...(args.resources && { resources: { ...this.data.settings.resources, ...args.resources } }),
+        ...(args.externalLinks && { externalLinks: { ...this.data.settings.externalLinks, ...args.externalLinks } }) };
       this.log(name, workspaceId, workspaceId, actor);
       return this.data.settings;
     }
@@ -948,6 +953,7 @@ export class WorkspaceService {
   touch(record) { record.updatedAt = now(); record.revision += 1; }
   mutateWorkspace(action, args, actor, effects) {
     const switchBrowser = () => this.browser?.switchWorkspace?.(this.activeWorkspaceId);
+    if (action === 'moveRecord') return this.moveRecord(args, actor);
     if (action === 'create') {
       const record = { ...createWorkspace(args.name), ...args };
       this.data.workspaces.push(record); this.data.activeWorkspaceId = record.id;
@@ -961,17 +967,23 @@ export class WorkspaceService {
       return { ...workspace, importReport: report };
     }
     const record = this.workspace(args.id);
+    if (isEverything(record.id)) {
+      if (action === 'delete' || action === 'archive') throw everythingRefusal(action);
+      if (action === 'update' && args.changes.name !== undefined && args.changes.name !== EVERYTHING_NAME) throw everythingRefusal('rename');
+    }
     if (action === 'update') {
       if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: workspace changed');
       Object.assign(record, args.changes); this.touch(record);
     } else if (action === 'switch') {
       if (record.archived) throw new Error('Restore this workspace before switching to it');
+      // A workspace shown in its own window (#100) is not also shown in the main window.
+      if (this.browser?.ownerOf && this.browser.ownerOf(record.id)?.id !== 1) throw fail('invalid_arguments', 'This workspace is open in its own window; focus that window, or move it back to the main window first', { field: 'id' });
       this.data.activeWorkspaceId = record.id;
       effects.push(switchBrowser);
     } else if (action === 'archive' || action === 'restore') {
       record.archived = action === 'archive'; this.touch(record);
       if (record.archived && record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
-      if (action === 'archive') effects.push(switchBrowser);
+      if (action === 'archive') effects.push(() => this.browser?.releaseWorkspace?.(record.id), switchBrowser);
     } else if (action === 'delete') {
       if (record.id === this.activeWorkspaceId) this.selectRemaining(record.id);
       this.data.workspaces = this.data.workspaces.filter(item => item.id !== record.id);
@@ -981,7 +993,15 @@ export class WorkspaceService {
       // Access granted to the deleted workspace ends with it; the membership stays as history.
       for (const shared of this.data.sharedCollections) for (const member of shared.members ?? []) if (member.workspaceId === record.id && !member.revokedAt) Object.assign(member, { revokedAt: now(), revokedBy: actor, reason: 'workspace deleted' });
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
-      effects.push(() => this.browser?.closeWorkspace?.(record.id), switchBrowser);
+      // A person who confirmed the list may keep the deleted workspace's open pages: they reopen in Everything (#99),
+      // in its own storage container, so sign-ins and page state do not move with them.
+      const rescued = args.moveTabsToEverything ? [...(this.browser?.tabs?.values() ?? [])].filter(tab => tab.workspaceId === record.id).map(tab => this.browser.describe(tab))
+        .filter(tab => tab.url && tab.url !== 'about:blank' && !tab.blocked).map(tab => ({ url: tab.url, pinned: tab.pinned })) : [];
+      effects.push(() => this.browser?.releaseWorkspace?.(record.id), () => this.browser?.closeWorkspace?.(record.id), async () => {
+        for (const tab of rescued) { try { await this.browser?.newTab?.(tab.url, EVERYTHING_ID, { pinned: tab.pinned }); } catch { /* a blocked or failed page is not reopened */ } }
+      }, switchBrowser);
+      this.log('workspaces.delete', record.id, record.id, actor, rescued.length ? `${rescued.length} open tab${rescued.length === 1 ? '' : 's'} reopened in Everything` : '');
+      return { deleted: true, id: record.id, ...(args.moveTabsToEverything && { movedTabsToEverything: rescued.length }) };
     } else if (action === 'duplicate') {
       const exported = this.exportWorkspace(record.id, undefined, { mode: 'package', keepLocalPaths: true, captures: 'all' });
       exported.workspace.name = args.name || `${record.name} copy`;
@@ -992,8 +1012,34 @@ export class WorkspaceService {
     this.log(`workspaces.${action}`, record.id, record.id, actor);
     return action === 'delete' ? { deleted: true, id: record.id } : record;
   }
+  /**
+   * Human-only move of a material or saved capture between workspaces (#99), for example out of Everything.
+   * The record keeps its id, revisions and versions; references that would point across workspaces are
+   * not rewritten, so the move is refused while a task, context record or shared collection in the source
+   * workspace still refers to it.
+   */
+  moveRecord(args, actor) {
+    const record = this.data[args.collection].find(item => item.id === args.id);
+    if (!record) throw new Error(`${args.collection === 'artifacts' ? 'Capture' : 'Material'} not found`);
+    const destination = this.workspace(args.workspaceId);
+    if (destination.archived) throw new Error('Restore the destination workspace before moving records into it');
+    if (record.workspaceId === destination.id) throw fail('invalid_arguments', 'The record is already in that workspace', { field: 'workspaceId' });
+    if (args.expectedRevision !== undefined && args.expectedRevision !== record.revision) throw new Error('STALE_STATE: record changed');
+    const source = record.workspaceId;
+    const referencedBy = [
+      ...this.data.tasks.filter(task => task.workspaceId === source && [...(task.evidence ?? []), ...(task.outputs ?? [])].includes(record.id)).map(task => `task ${task.id}`),
+      ...this.data.context.filter(item => item.workspaceId === source && (item.citations ?? []).some(citation => citation.id === record.id || citation.captureId === record.id || citation.recordId === record.id)).map(item => `context ${item.id}`),
+      ...(this.data.sharedCollections ?? []).filter(shared => (shared.items ?? []).some(item => item.id === record.id || item.itemId === record.id)).map(shared => `shared collection ${shared.id}`),
+    ];
+    if (referencedBy.length) throw fail('invalid_arguments', `Remove the references first: ${referencedBy.slice(0, 5).join(', ')}${referencedBy.length > 5 ? ', …' : ''}`, { field: 'id' });
+    record.workspaceId = destination.id; this.touch(record);
+    this.log('workspaces.moveRecord', source, record.id, actor, `Moved to ${destination.name}`);
+    this.log('workspaces.moveRecord', destination.id, record.id, actor, `Moved from another workspace`);
+    return args.collection === 'artifacts' ? artifactSummary(record) : withoutFile(record);
+  }
   selectRemaining(excluding) {
-    let next = this.data.workspaces.find(item => item.id !== excluding && !item.archived);
+    // A project workspace is preferred; the built-in Everything workspace is always there as the fallback.
+    let next = this.data.workspaces.find(item => item.id !== excluding && !item.archived && !isEverything(item.id)) ?? this.data.workspaces.find(item => item.id !== excluding && !item.archived);
     if (!next) { next = createWorkspace(); this.data.workspaces.push(next); }
     this.data.activeWorkspaceId = next.id;
   }
@@ -1342,7 +1388,7 @@ export class WorkspaceService {
         unavailable.push({ url: resource.url, status: error.code === 'COMPONENT_MISSING' ? 'missing' : 'corrupt' });
       }
     }
-    const opened = await this.browser.openArchivePreview({ artifactId: record.id, versionId: version.id, title: version.title || record.title, documentUrl: version.archive.documentUrl, resources });
+    const opened = await this.browser.openArchivePreview({ artifactId: record.id, workspaceId: record.workspaceId, versionId: version.id, title: version.title || record.title, documentUrl: version.archive.documentUrl, resources });
     return { ...opened, artifactId: record.id, versionId: version.id, number: version.number, unavailable,
       notStored: version.archive.resources.filter(item => item.status !== 'stored').length };
   }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell, nativeImage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, screen, shell, nativeImage } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
@@ -31,6 +31,8 @@ import { CredentialService, safeStorageProtector } from './credentials.js';
 import { promptCredentialSecret } from './credential-entry.js';
 import { PaymentService } from './payments.js';
 import { createMemoryPressureSource } from './memory-pressure.js';
+import { WindowManager } from './windows.js';
+import { ExternalOpener, externalItemsFromArgv } from './external-open.js';
 
 // Lock and unlock are published as metadata-only events so connected agents can pause instead of retrying.
 registerEventType('encryption');
@@ -52,6 +54,8 @@ let updates;
 let credentials;
 let retrieval;
 let display;
+let windows;
+let external;
 let quitting = false;
 const admission = new AutomationAdmission();
 const events = new EventEmitter();
@@ -71,6 +75,13 @@ if (!primary) {
   console.log(launchHeadless ? 'Weft is already running with this profile; nothing else was started.' : 'Weft is already running with this profile; its window was asked to show.');
   app.exit(0);
 }
+
+// Links and files other applications ask Weft to open (#99). They wait until the window is ready (and the
+// profile unlocked); a second launch hands its links to this session. Every one is untrusted data.
+const earlyExternal = primary ? externalItemsFromArgv(process.argv.slice(app.isPackaged ? 1 : 2)) : [];
+const receiveExternal = (items, source) => { if (external) external.receive(items, source); else earlyExternal.push(...items); };
+app.on('open-url', (event, url) => { event.preventDefault(); receiveExternal([{ kind: 'url', url }], 'open-url'); });
+app.on('open-file', (event, path) => { event.preventDefault(); receiveExternal([{ kind: 'file', path }], 'open-file'); });
 
 function createUpdates() {
   const install = detectInstall({ isPackaged: app.isPackaged, platform: process.platform, arch: process.arch, env: process.env, resourcesPath: process.resourcesPath });
@@ -93,11 +104,40 @@ function createUpdates() {
   });
 }
 
+/** Only the trusted GUI document of one of Weft's own windows may call the app; returns that window's id (#100). */
 function trusted(event) {
-  if (!window || window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== guiUrl) {
-    throw new Error('Unauthorized IPC sender');
-  }
+  const id = windows ? windows.windowIdFor(event.sender) : window && !window.isDestroyed() && event.sender === window.webContents ? 1 : null;
+  if (!id || event.senderFrame !== event.sender.mainFrame || event.senderFrame.url !== guiUrl) throw new Error('Unauthorized IPC sender');
+  return id;
 }
+
+/** A trusted GUI window: the same preload, isolation and navigation lockdown for the main and every second window. */
+function createGuiWindow({ show = true, ...bounds } = {}) {
+  const created = new BrowserWindow({
+    width: 1480, height: 960, ...bounds, minWidth: 1000, minHeight: 640,
+    title: 'Weft', backgroundColor: '#F4F1EA', show,
+    icon: fileURLToPath(new URL('../assets/logo/icons/app-icon-plum-512.png', import.meta.url)),
+    webPreferences: {
+      preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)),
+      nodeIntegration: false, contextIsolation: true, sandbox: true,
+    },
+  });
+  created.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  created.webContents.on('will-navigate', event => event.preventDefault());
+  created.webContents.on('will-attach-webview', event => event.preventDefault());
+  return created;
+}
+/** Commands from a second window default to the workspace and tab that window shows. */
+function windowDefaults(windowId, name, args) {
+  if (windowId === 1 || !args || typeof args !== 'object' || Array.isArray(args) || !browser.windows.has(windowId)) return args;
+  const state = browser.windowState(windowId);
+  const fields = commands[name]?.inputSchema?.properties ?? {};
+  const result = { ...args };
+  if (Object.hasOwn(fields, 'workspaceId') && result.workspaceId == null && name !== 'workspace.snapshot') result.workspaceId = browser.shownWorkspace(state);
+  if (Object.hasOwn(fields, 'tabId') && result.tabId == null && state.activeId != null && (name.startsWith('page.') || name.startsWith('tabs.') || name === 'artifacts.capture')) result.tabId = state.activeId;
+  return result;
+}
+const guiWindows = () => (windows ? windows.all() : window && !window.isDestroyed() ? [window] : []);
 
 if (primary) app.whenReady().then(async () => {
   const port = Number(process.env.WEFT_PORT ?? 9222);
@@ -149,23 +189,26 @@ if (primary) app.whenReady().then(async () => {
   // One retained, sanitized event log serves /v1/events replay and events.list for CLI/MCP.
   const eventLog = new EventLog();
   events.on('event', event => eventLog.append(sanitizeEvent(event)));
-  window = new BrowserWindow({
-    width: 1480, height: 960, minWidth: 1000, minHeight: 640,
-    title: 'Weft', backgroundColor: '#F4F1EA', show: !launchHeadless,
-    icon: fileURLToPath(new URL('../assets/logo/icons/app-icon-plum-512.png', import.meta.url)),
-    webPreferences: {
-      preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)),
-      nodeIntegration: false, contextIsolation: true, sandbox: true,
-    },
-  });
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('will-navigate', event => event.preventDefault());
-  window.webContents.on('will-attach-webview', event => event.preventDefault());
+  // The main window reopens where it was; a display that is gone falls back to the primary one (#100).
+  const windowStatePath = join(app.getPath('userData'), 'window-state.json');
+  const savedMain = launchHeadless ? null : new WindowManager({ browser: null, workspace, mainWindow: null, createWindow: null, screen, statePath: windowStatePath }).mainBounds();
+  window = createGuiWindow({ show: !launchHeadless, ...(savedMain && { x: savedMain.x, y: savedMain.y, width: savedMain.width, height: savedMain.height }) });
+  if (savedMain?.maximized) window.maximize();
   browser = new Browser({ window, workspaceService: workspace, admission });
+  windows = new WindowManager({ browser, workspace, mainWindow: window, screen, statePath: windowStatePath, headless: () => launchHeadless && !display?.visible,
+    createWindow: bounds => { const created = createGuiWindow(bounds); void created.loadURL(guiUrl); return created; },
+    audit: entry => activity.append(entry),
+    onChange: () => { for (const target of guiWindows()) target.webContents.send('weft:windows', { changed: true }); } });
+  browser.onWindowEmptied = id => windows.windowFor(id)?.close();
   browser.onAudit = entry => activity.append(entry);
   browser.onEvent = event => events.emit('event', event);
   // Browser-owned keys pressed inside a page return keyboard focus to the trusted chrome (#31).
-  browser.onChromeShortcut = ({ shortcut }) => { if (!window.isDestroyed()) { window.webContents.focus(); window.webContents.send('weft:chrome', shortcut); } };
+  // The keys go to the window that shows the page's workspace (#100).
+  browser.onChromeShortcut = ({ shortcut, tabId }) => {
+    const tab = tabId != null ? browser.tabs.get(tabId) : null;
+    const target = (tab && windows.windowFor(browser.ownerOf(tab.workspaceId).id)) || window;
+    if (target && !target.isDestroyed()) { target.webContents.focus(); target.webContents.send('weft:chrome', shortcut); }
+  };
   // A hidden window renders pages offscreen so captures keep working without a display (ADR 015).
   if (launchHeadless) { browser.hidden = true; browser.offscreen = true; }
   // Page renderer memory (the GUI renderer excluded) drives memory-pressure suspension when a budget is set (#30).
@@ -203,7 +246,23 @@ if (primary) app.whenReady().then(async () => {
     audit: entry => activity.append(entry), onEvent: event => events.emit('event', event) });
   // Payment authorization (ADR 019): records outside workspace-data, sealed with the workspace keys when encryption is on; virtual cards stay off until a person configures them.
   const payments = new PaymentService({ directory: join(app.getPath('userData'), 'payments'), browser, workspace, credentials, protector: safeStorageProtector(safeStorage) });
-  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, payments, knowledge, admission, transfers, eventLog, display, onEvent: event => events.emit('event', event) });
+  dispatch = createDispatcher({ workspace, browser, providers, clients, authority, lists, extensions, plugins, updates, credentials, payments, knowledge, admission, transfers, eventLog, display, windows, onEvent: event => events.emit('event', event) });
+  // Links from other applications open as data in the configured workspace, never as agent instructions (#99).
+  external = new ExternalOpener({
+    locked: () => workspace.locked,
+    destination: () => (workspace.locked ? 'everything' : workspace.data.settings.externalLinks?.destination ?? 'everything'),
+    lastUsed: () => workspace.activeWorkspaceId,
+    workspaceOpen: id => !workspace.locked && workspace.data.workspaces.some(item => item.id === id && !item.archived),
+    openUrl: async (url, workspaceId) => {
+      if (display.visible) await windows.show(workspaceId);
+      return browser.newTab(url, workspaceId);
+    },
+    importFile: (file, workspaceId) => workspace.execute('materials.create', { workspaceId, title: file.filename, kind: 'file', filename: file.filename, mimeType: file.mimeType,
+      fileBase64: file.bytes.toString('base64') }, { actor: 'human', source: 'external-app' }),
+    audit: entry => activity.append(entry),
+    notify: event => { if (window && !window.isDestroyed()) window.webContents.send('weft:external', event); },
+  });
+  external.receive(earlyExternal.splice(0), 'launch');
   // A headless session of a locked encrypted profile waits for a person: say so where the operator can see it.
   if (workspace.locked && !display.visible) console.log('Weft (headless): the encrypted workspace data is locked. Run "weft attach" or launch Weft again, then unlock it in the window.');
   // Startup sweep before any caller can reach the runtime: interrupted local work pauses, unknown external outcomes become uncertain.
@@ -217,23 +276,29 @@ if (primary) app.whenReady().then(async () => {
   await startTasks();
   workspace.encryptionHooks = {
     // Lock: stop model turns, plugin processes and upload sessions, then close tabs so no workspace page stays loaded.
-    beforeLock: async ({ persist = true } = {}) => { standby.close(); learning.close(); await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
+    beforeLock: async ({ persist = true } = {}) => { windows.closeAll(); standby.close(); learning.close(); await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
     afterUnlock: async () => {
       if (!extensionsRestored) { await extensions.restore(); extensionsRestored = true; }
       await browser.resume();
+      await windows.restore().catch(error => console.warn(`Weft windows: ${error.message}`));
       await startTasks();
       events.emit('event', { type: 'encryption', status: 'unlocked', createdAt: new Date().toISOString() });
       void retrieval.drain().catch(() => {});
+      void external.flush();
     },
   };
   // Launching Weft again attaches a person to this session; a second headless launch changes nothing.
-  app.on('second-instance', (_event, argv, _cwd, data) => {
+  app.on('second-instance', (_event, argv, cwd, data) => {
+    // Links and files on the second launch's command line open here as data (#99).
+    const items = externalItemsFromArgv(argv.slice(1), { cwd });
+    if (items.length) external.receive(items, 'second-instance');
     if (data?.show === false || argv.includes('--headless')) return;
     void display.show({ source: 'relaunch' }).catch(error => console.error('Weft display:', error.message));
   });
   // Closing the window of a session started headless detaches the person; Weft keeps running.
   window.on('close', event => {
-    if (!launchHeadless || quitting) return;
+    // Closing the main window quits Weft (#100): second windows close with it and reopen at the next launch.
+    if (!launchHeadless || quitting) { windows.closeAll(); return; }
     event.preventDefault();
     void display.hide({ source: 'window closed' }).catch(error => console.error('Weft display:', error.message));
   });
@@ -247,10 +312,31 @@ if (primary) app.whenReady().then(async () => {
   });
   browser.setLayout({ x: 0, y: 0, width: 1, height: 1, visible: false });
   // Streamed model deltas reach only the trusted GUI frame.
-  relay.on('frame', frame => { if (window && !window.isDestroyed()) window.webContents.send('weft:turn', frame); });
+  relay.on('frame', frame => { for (const target of guiWindows()) target.webContents.send('weft:turn', frame); });
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
-  ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
-  ipcMain.handle('weft:focusPage', event => { trusted(event); return browser.focusPage(); });
+  ipcMain.handle('weft:layout', (event, bounds) => browser.setLayout(bounds, trusted(event)));
+  ipcMain.handle('weft:focusPage', event => browser.focusPage(trusted(event)));
+  // Window arrangement (#100): what this window shows, and human-only moves between windows.
+  ipcMain.handle('weft:window', event => windows.info(trusted(event)));
+  ipcMain.handle('weft:windows', async (event, request) => {
+    const id = trusted(event);
+    const { action, workspaceId = null, windowId = null, x = null, y = null } = request && typeof request === 'object' ? request : {};
+    if (action === 'list') return windows.list();
+    if (action === 'show') return windows.show(String(workspaceId));
+    if (action === 'move') return windows.moveWorkspace(String(workspaceId), windowId == null ? { newWindow: true, x: Number(x), y: Number(y) } : { windowId: Number(windowId) });
+    if (action === 'focus') return windows.focus(Number(windowId));
+    if (action === 'showHere') return browser.showInWindow(id, String(workspaceId));
+    throw new Error('Unknown window action');
+  });
+  // Links waiting for a person to choose a workspace, and opt-in default-browser registration (#99).
+  ipcMain.handle('weft:external', async (event, request) => {
+    trusted(event);
+    const { action, id = null, workspaceId = null } = request && typeof request === 'object' ? request : {};
+    if (action === 'list') return external.list();
+    if (action === 'choose') return external.choose(String(id), workspaceId === null ? null : String(workspaceId));
+    throw new Error('Unknown action');
+  });
+  ipcMain.handle('weft:defaultBrowser', (event, action) => { trusted(event); return defaultBrowser(action, entry => activity.append(entry)); });
   // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
   ipcMain.handle('weft:pickPath', async (event, kind) => {
     trusted(event);
@@ -258,12 +344,14 @@ if (primary) app.whenReady().then(async () => {
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   ipcMain.handle('weft:execute', (event, name, args) => {
-    trusted(event);
-    return dispatch(name, args, { actor: 'human', source: 'gui' });
+    const id = trusted(event);
+    return dispatch(name, windowDefaults(id, name, args), { actor: 'human', source: 'gui' });
   });
   await browser.restore();
   browser.startResourceScheduler();
   await window.loadURL(guiUrl);
+  await windows.restore().catch(error => console.warn(`Weft windows: ${error.message}`));
+  void external.setReady(true);
   server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, turns: relay, eventLog, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -281,6 +369,29 @@ if (primary) app.whenReady().then(async () => {
   try { updates?.reportUnhealthy(`Startup failed: ${error.message}`); } catch { /* keep the original failure visible */ }
   app.exit(1);
 });
+
+/**
+ * Opt-in, reversible default-browser registration (#99). Never done silently; source runs cannot register
+ * (they would register the Electron binary). Linux and Windows may still require choosing Weft in the
+ * system's default-apps settings, and Linux cannot remove a registration programmatically.
+ */
+function defaultBrowser(action, audit) {
+  const supported = app.isPackaged;
+  const status = () => ({ supported, reason: supported ? null : 'Only an installed Weft build can become the default browser.',
+    http: supported && app.isDefaultProtocolClient('http'), https: supported && app.isDefaultProtocolClient('https'), canRemove: supported && process.platform !== 'linux', platform: process.platform,
+    notice: process.platform === 'win32' ? 'Windows asks you to confirm the default browser in Settings > Apps > Default apps.' : process.platform === 'linux' ? 'To stop using Weft as the default browser on Linux, choose another browser in your desktop settings.' : null });
+  if (action === 'status') return status();
+  if (!supported) throw Object.assign(new Error(status().reason), { code: 'unsupported' });
+  if (action === 'set') {
+    app.setAsDefaultProtocolClient('http'); app.setAsDefaultProtocolClient('https');
+    if (process.platform === 'win32') void shell.openExternal('ms-settings:defaultapps');
+  } else if (action === 'unset') {
+    if (process.platform === 'linux') throw Object.assign(new Error(status().notice), { code: 'unsupported' });
+    app.removeAsDefaultProtocolClient('http'); app.removeAsDefaultProtocolClient('https');
+  } else throw new Error('Unknown action');
+  audit({ type: 'policy', reason: action === 'set' ? 'default_browser_registered' : 'default_browser_removed', outcome: 'completed', actor: 'human' });
+  return status();
+}
 
 app.on('window-all-closed', () => app.quit());
 // A headless session stopped from a terminal or service manager still exits cleanly (lock, temporary data).

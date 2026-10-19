@@ -15,6 +15,22 @@ contextBridge.exposeInMainWorld('weft', {
     ipcRenderer.on('weft:chrome', listener);
     return () => ipcRenderer.off('weft:chrome', listener);
   },
+  // Windows (#100): what this window shows, and moving workspaces between windows.
+  window: () => ipcRenderer.invoke('weft:window'),
+  windows: request => ipcRenderer.invoke('weft:windows', request),
+  onWindows: callback => {
+    const listener = () => callback();
+    ipcRenderer.on('weft:windows', listener);
+    return () => ipcRenderer.off('weft:windows', listener);
+  },
+  // Links and files from other applications (#99), and opt-in default-browser registration.
+  external: request => ipcRenderer.invoke('weft:external', request),
+  onExternal: callback => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on('weft:external', listener);
+    return () => ipcRenderer.off('weft:external', listener);
+  },
+  defaultBrowser: action => ipcRenderer.invoke('weft:defaultBrowser', String(action)),
   executeOutcome: (name, args = {}) => ipcRenderer.invoke('weft:execute', name, args),
   execute: async (name, args = {}) => {
     const outcome = await ipcRenderer.invoke('weft:execute', name, args);

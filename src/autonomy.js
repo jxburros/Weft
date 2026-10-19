@@ -47,7 +47,10 @@ add('administration', 'tabs.setControlMode');
 add('cloud_spend', 'chat.send');
 add('administration', `clients.create clients.list clients.update clients.revoke lists.install lists.status lists.rollback lists.subscribe lists.preview lists.update lists.configure lists.exception lists.unsubscribe lists.check lists.matches approvals.approve approvals.reject autonomy.update activity.configure
   browser.emergencyStop browser.resumeAutomation downloads.approve tabs.takeover page.allowOnce cookies.list cookies.set cookies.clear storage.clear history.clear
-  settings.update workspaces.delete workspaces.import workspaces.export workspaces.switch models.save models.delete models.probe models.discover`);
+  settings.update workspaces.delete workspaces.moveRecord workspaces.import workspaces.export workspaces.switch models.save models.delete models.probe models.discover`);
+// Windows (#100): listing is an informational read; arranging windows is a person's display choice.
+add('local_read', 'windows.list');
+add('administration', 'windows.moveWorkspace windows.focus');
 // Site storage modes, rule explanations, threat intelligence, downloads and external launches (#18, #19, #20).
 add('local_read', 'siteRules.explain storage.policy threats.status launches.list');
 add('administration', 'siteRules.review storage.setSiteMode storage.setDefaultMode threats.install threats.remove threats.configureProvider threats.update downloads.configureScanner launches.approve launches.deny');
@@ -146,7 +149,7 @@ export function resourceForCommand(name) {
   const namespace = name.split('.')[0];
   if (['tabs', 'page', 'downloads', 'captures'].includes(namespace) || ['credentials.fill', 'payments.submit'].includes(name)) return 'tabs';
   if (['chat', 'models'].includes(namespace)) return 'models';
-  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions', 'display', 'browsingData'].includes(namespace)) return 'browser';
+  if (['browser', 'cookies', 'storage', 'clients', 'lists', 'approvals', 'autonomy', 'settings', 'plugins', 'extensions', 'display', 'browsingData', 'windows'].includes(namespace)) return 'browser';
   return 'records';
 }
 
@@ -165,7 +168,7 @@ const dataOverrides = {
   'weft.capabilities': [], 'search.status': [], 'events.list': ['activity'], 'transfers.list': [], 'conversations.messages': ['conversations'],
   'transfers.read': ['workspace_records', 'page_capture'],
   'encryption.status': [],
-  'tabs.search': ['workspace_records'], 'display.status': [], 'resources.status': [], 'captures.list': [],
+  'tabs.search': ['workspace_records'], 'display.status': [], 'windows.list': [], 'resources.status': [], 'captures.list': [],
   'payments.propose': ['page_content'], 'payments.status': [], 'payments.checkCharges': ['workspace_records'],
 };
 export function dataClassesForCommand(name) {

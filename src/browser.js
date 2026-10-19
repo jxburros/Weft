@@ -38,12 +38,18 @@ import { ruleSource } from './site-rules.js';
 import { sanitizeUrl } from './workspace.js';
 import { RECORDING_WORLD, recordingScript } from './recording-script.js';
 import { CAPTURE_LIMITS, resourceSettings } from './resources.js';
+import { MAX_PANES } from './panes.js';
 
 const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
 const HUMAN_GESTURE_MS = 2000;
 // Gap between split panes; the trusted GUI draws the divider and focused-pane frame in it (#36).
 export const SPLIT_GAP = 6;
+// A pane rectangle from the trusted GUI: a tab or the archive preview, integer bounds inside the window.
+const validPaneRect = pane => pane && typeof pane === 'object' && !Array.isArray(pane)
+  && Object.keys(pane).every(key => ['tabId', 'preview', 'x', 'y', 'width', 'height'].includes(key))
+  && ((Number.isInteger(pane.tabId) && pane.tabId > 0 && pane.preview == null) || (pane.preview === true && pane.tabId == null))
+  && ['x', 'y', 'width', 'height'].every(key => Number.isInteger(pane[key]) && pane[key] >= 0 && pane[key] <= 20000);
 /**
  * Browser-owned keys that always leave a page for the trusted chrome (#31): a page can never trap
  * keyboard focus. F6/Shift+F6 cycle between page and chrome, Ctrl/Cmd+L focuses the address bar,
@@ -143,7 +149,10 @@ export class Browser {
     this.nextLaunchId = 1;
     this.openExternal = url => this.electron.shell.openExternal(url);
     this.admission = admission;
-    this.window = window;
+    // Per-window display state (#100): the main window is id 1; further windows are added with addWindow().
+    this.main = { id: 1, window, viewport: null, attachedViews: new Set(), activeId: null, workspaces: null, current: null, focusedPaneKey: null };
+    this.windows = new Map([[1, this.main]]);
+    this.nextWindowId = 2;
     this.workspaceService = workspaceService;
     this.sessions = new Map();
     this.tabs = new Map();
@@ -151,9 +160,6 @@ export class Browser {
     this.downloadGrants = new Map();
     this.nextTabId = 1;
     this.nextDownloadId = 1;
-    this.activeId = null;
-    this.viewport = null;
-    this.attachedViews = new Set();
     // Display state (#11): a hidden window renders new pages offscreen so captures keep working.
     this.hidden = false;
     this.offscreen = false;
@@ -352,84 +358,260 @@ export class Browser {
     return url;
   }
 
-  setLayout(bounds) {
+  // ---- Windows and panes (#100, #101) ---------------------------------------------------
+  // Each window has its own viewport, attached views and active tab. The main window (id 1) shows the
+  // workspace that is active in the workspace service; every other window shows the workspaces moved into
+  // it. A workspace is shown in at most one window. Windows and panes are display state only: they never
+  // change which workspace or tab an agent is allowed to reach.
+  get window() { return this.main.window; }
+  get viewport() { return this.main.viewport; }
+  set viewport(value) { this.main.viewport = value; }
+  get attachedViews() { return this.main.attachedViews; }
+  get activeId() { return this.main.activeId; }
+  set activeId(value) { this.main.activeId = value; }
+
+  /** The workspace a window currently shows. */
+  shownWorkspace(state) { return state === this.main ? this.workspaceId : state.current; }
+  /** The window whose rail holds a workspace (the main window unless the workspace was moved out). */
+  ownerOf(workspaceId) {
+    for (const state of this.windows.values()) if (state !== this.main && state.workspaces.has(workspaceId)) return state;
+    return this.main;
+  }
+  /** The window that is showing a workspace right now, or null. */
+  shownIn(workspaceId) {
+    const state = this.ownerOf(workspaceId);
+    return this.shownWorkspace(state) === workspaceId ? state : null;
+  }
+  isAttached(view) { return [...this.windows.values()].some(state => state.attachedViews.has(view)); }
+  detachView(view) {
+    for (const state of this.windows.values()) if (state.attachedViews.has(view)) {
+      if (state.window && !state.window.isDestroyed()) state.window.contentView.removeChildView(view);
+      state.attachedViews.delete(view);
+    }
+  }
+  windowState(windowId = 1) {
+    const state = this.windows.get(windowId);
+    if (!state) throw failure('not_found', 'Window not found');
+    return state;
+  }
+  /** Remembered tab for a workspace (resume record), else its first tab. */
+  rememberedTab(workspaceId) {
+    const remembered = this.workspaceService?.locked ? null : this.workspaceService?.data?.resumeStates?.find(item => item.workspaceId === workspaceId)?.activeTabId;
+    return (this.tabs.get(remembered)?.workspaceId === workspaceId ? this.tabs.get(remembered) : null) ?? [...this.tabs.values()].find(tab => tab.workspaceId === workspaceId) ?? null;
+  }
+
+  /** A second window shows the given workspaces; their tabs keep running and their views move without reloading. */
+  addWindow(window, workspaceIds, current = workspaceIds[0]) {
+    if (this.hidden) throw failure('unsupported', 'Headless sessions show one window; attach a display first');
+    const id = this.nextWindowId++;
+    const state = { id, window, viewport: null, attachedViews: new Set(), activeId: null, workspaces: new Set(), current: null, focusedPaneKey: null };
+    this.windows.set(id, state);
+    state.onResize = () => this.layout();
+    window?.on?.('resize', state.onResize);
+    for (const workspaceId of workspaceIds) this.moveWorkspace(workspaceId, id, { show: workspaceId === current });
+    return state;
+  }
+  /** Close a second window: its workspaces return to the main window's rail. No tab is closed or reloaded. */
+  removeWindow(windowId) {
+    const state = this.windowState(windowId);
+    if (state === this.main) throw failure('invalid_arguments', 'The main window cannot be removed');
+    for (const view of [...state.attachedViews]) this.detachView(view);
+    state.window?.removeListener?.('resize', state.onResize);
+    this.windows.delete(windowId);
+    this.layout();
+    return { closed: windowId, returned: [...state.workspaces] };
+  }
+  /**
+   * Move a workspace into a window's rail (windowId 1 returns it to the main window). The receiving window
+   * shows it when `show` is set or when it has nothing else to show; a second window left with no
+   * workspaces is reported as emptied so the caller can close it.
+   */
+  moveWorkspace(workspaceId, windowId, { show = true } = {}) {
+    const target = this.windowState(windowId);
+    const source = this.ownerOf(workspaceId);
+    if (source !== this.main) {
+      source.workspaces.delete(workspaceId);
+      if (source.current === workspaceId) {
+        source.current = [...source.workspaces][0] ?? null;
+        source.activeId = source.current ? this.rememberedTab(source.current)?.id ?? null : null;
+      }
+    }
+    if (target !== this.main) {
+      target.workspaces.add(workspaceId);
+      if (show || !target.current) {
+        target.current = workspaceId;
+        const tab = this.rememberedTab(workspaceId);
+        target.activeId = tab?.id ?? null;
+        if (tab?.suspended) void this.resumeTab(tab, 'shown').catch(() => {});
+      }
+    }
+    this.layout();
+    this.persist();
+    return { workspaceId, windowId: target.id, emptied: source !== this.main && source !== target && !source.workspaces.size ? source.id : null };
+  }
+  /** Show one of a second window's workspaces in it. */
+  showInWindow(windowId, workspaceId) {
+    const state = this.windowState(windowId);
+    if (state === this.main) throw failure('invalid_arguments', 'Switch the main window with workspaces.switch');
+    if (!state.workspaces.has(workspaceId)) throw failure('invalid_arguments', 'That workspace is not in this window');
+    state.current = workspaceId;
+    const tab = this.rememberedTab(workspaceId);
+    state.activeId = tab?.id ?? null;
+    if (tab?.suspended) void this.resumeTab(tab, 'activated').catch(() => {});
+    this.layout();
+    return { windowId, workspaceId, activeTabId: state.activeId };
+  }
+  describeWindows() {
+    const live = window => Boolean(window && !window.isDestroyed?.());
+    return [...this.windows.values()].map(state => ({ windowId: state.id, main: state === this.main, workspaceId: this.shownWorkspace(state) ?? null,
+      workspaceIds: state === this.main ? null : [...state.workspaces], activeTabId: state.activeId ?? null,
+      bounds: live(state.window) ? state.window.getBounds?.() ?? null : null, focused: live(state.window) && Boolean(state.window.isFocused?.()) }));
+  }
+
+  setLayout(bounds, windowId = 1) {
+    const state = this.windowState(windowId);
     if (!bounds || typeof bounds !== 'object' || Array.isArray(bounds)
-      || Object.keys(bounds).some(key => !['x', 'y', 'width', 'height', 'visible', 'splitTabId', 'focusedPane'].includes(key))
+      || Object.keys(bounds).some(key => !['x', 'y', 'width', 'height', 'visible', 'splitTabId', 'focusedPane', 'panes', 'focusedTabId'].includes(key))
       || (bounds.focusedPane != null && !['primary', 'secondary'].includes(bounds.focusedPane))
       || typeof bounds.visible !== 'boolean'
       || !['x', 'y', 'width', 'height'].every(key => Number.isInteger(bounds[key]) && bounds[key] >= 0 && bounds[key] <= 20000)
-      || (bounds.splitTabId != null && (!Number.isInteger(bounds.splitTabId) || bounds.splitTabId < 1))) {
+      || (bounds.splitTabId != null && (!Number.isInteger(bounds.splitTabId) || bounds.splitTabId < 1))
+      || (bounds.focusedTabId != null && (!Number.isInteger(bounds.focusedTabId) || bounds.focusedTabId < 1))
+      || (bounds.panes != null && (!Array.isArray(bounds.panes) || bounds.panes.length > MAX_PANES || !bounds.panes.every(validPaneRect)))) {
       throw new Error('Invalid native page bounds');
     }
-    if (bounds.splitTabId != null && this.tab(bounds.splitTabId).workspaceId !== this.workspaceId) throw new Error('Split tabs must belong to this workspace');
-    this.viewport = { ...bounds };
-    this.layout();
+    const shown = this.shownWorkspace(state);
+    if (bounds.splitTabId != null && this.tab(bounds.splitTabId).workspaceId !== shown) throw new Error('Split tabs must belong to this workspace');
+    // A pane can show only a tab of the workspace this window shows, and each tab in one pane only.
+    const paneTabs = (bounds.panes ?? []).filter(pane => pane.tabId != null).map(pane => pane.tabId);
+    if (new Set(paneTabs).size !== paneTabs.length) throw new Error('A tab can be shown in one pane only');
+    for (const tabId of paneTabs) if (this.tab(tabId).workspaceId !== shown) throw new Error('Pane tabs must belong to this workspace');
+    state.viewport = { ...bounds, ...(bounds.panes && { panes: bounds.panes.map(pane => ({ ...pane })) }) };
+    this.layoutWindow(state);
     return { success: true };
   }
 
   layout() {
-    if (!this.window || this.window.isDestroyed()) return;
-    if (this.hidden) return this.layoutHidden();
-    const [width, height] = this.window.getContentSize();
-    const requested = this.viewport ?? { x: 0, y: 112, width: Math.max(1, width - 360), height: Math.max(1, height - 112), visible: true };
-    const x = Math.min(requested.x, Math.max(0, width - 1));
-    const y = Math.min(requested.y, Math.max(0, height - 1));
-    const bounds = { x, y, width: Math.max(1, Math.min(requested.width, width - x)), height: Math.max(1, Math.min(requested.height, height - y)) };
-    const active = this.tabs.get(this.activeId);
-    const split = this.tabs.get(requested.splitTabId);
-    const wanted = requested.visible && requested.width > 0 && requested.height > 0 && !active?.blocked && active?.workspaceId === this.workspaceId
-      ? [active, ...(split && !split.blocked && split.id !== active.id && split.workspaceId === this.workspaceId ? [split] : [])] : [];
+    for (const state of this.windows.values()) this.layoutWindow(state);
+  }
+
+  /** Tabs a window should show: the pane tabs, or the active tab plus the legacy split tab. */
+  wantedTabs(state) {
+    const requested = state.viewport;
+    const shown = this.shownWorkspace(state);
+    const usable = tab => tab && !tab.blocked && tab.workspaceId === shown;
+    if (requested?.panes) return requested.panes.filter(pane => pane.tabId != null).map(pane => this.tabs.get(pane.tabId)).filter(usable);
+    const active = this.tabs.get(state.activeId);
+    const split = this.tabs.get(requested?.splitTabId);
+    return usable(active) ? [active, ...(usable(split) && split.id !== active.id ? [split] : [])] : [];
+  }
+
+  layoutWindow(state) {
+    const window = state.window;
+    if (!window || window.isDestroyed()) return;
+    if (state === this.main && this.hidden) return this.layoutHidden();
+    const [width, height] = window.getContentSize();
+    const requested = state.viewport ?? { x: 0, y: 112, width: Math.max(1, width - 360), height: Math.max(1, height - 112), visible: true };
+    const fit = rect => {
+      const x = Math.min(rect.x, Math.max(0, width - 1));
+      const y = Math.min(rect.y, Math.max(0, height - 1));
+      return { x, y, width: Math.max(1, Math.min(rect.width, width - x)), height: Math.max(1, Math.min(rect.height, height - y)) };
+    };
+    const showing = requested.visible && requested.width > 0 && requested.height > 0;
+    const wanted = showing ? this.wantedTabs(state) : [];
+    const previewHere = this.preview && (this.preview.workspaceId == null ? state === this.main : this.ownerOf(this.preview.workspaceId) === state) ? this.preview : null;
     // Suspended tabs reload first; pages rendered offscreen while headless are re-created on screen when shown.
-    if (!this.preview) for (const tab of wanted) {
+    if (!previewHere || requested.panes) for (const tab of wanted) {
       if (tab.suspended) void this.resumeTab(tab, 'shown').catch(() => {});
       else if (tab.renderMode === 'offscreen') void this.convertRenderMode(tab, 'display attached').catch(() => {});
     }
-    // The offline archive preview replaces the live tabs while it is open.
-    const visible = this.preview && requested.visible && requested.width > 0 && requested.height > 0 ? [this.preview]
-      : wanted.filter(tab => !tab.suspended && !tab.view.placeholder && tab.renderMode !== 'offscreen');
-    for (const view of this.attachedViews) if (!visible.some(tab => tab.view === view)) {
-      this.window.contentView.removeChildView(view);
-      this.attachedViews.delete(view);
+    const live = wanted.filter(tab => !tab.suspended && !tab.view.placeholder && tab.renderMode !== 'offscreen');
+    const placed = [];
+    if (requested.panes) {
+      // Pane layout (#101): each pane rectangle comes from the trusted GUI; the archive preview may occupy one pane.
+      for (const pane of requested.panes) {
+        const item = pane.preview ? previewHere : live.find(tab => tab.id === pane.tabId);
+        if (showing && item) placed.push([item, fit(pane)]);
+      }
+    } else if (previewHere && showing) placed.push([previewHere, fit(requested)]);
+    else {
+      // The offline archive preview replaces the live tabs while it is open; split panes leave a thin gap the GUI draws (#36).
+      const bounds = fit(requested);
+      const gap = live.length === 2 ? SPLIT_GAP : 0;
+      live.forEach((tab, index) => {
+        const half = Math.floor((bounds.width - gap) / live.length);
+        placed.push([tab, { ...bounds, x: bounds.x + index * (half + gap), width: index === live.length - 1 ? bounds.width - index * (half + gap) : half }]);
+      });
     }
-    // Split panes leave a thin gap the GUI draws as a divider and as the focused-pane frame (#36).
-    const gap = visible.length === 2 ? SPLIT_GAP : 0;
-    visible.forEach((tab, index) => {
-      if (!this.attachedViews.has(tab.view)) { this.window.contentView.addChildView(tab.view); this.attachedViews.add(tab.view); }
-      const half = Math.floor((bounds.width - gap) / visible.length);
-      tab.view.setBounds({ ...bounds, x: bounds.x + index * (half + gap), width: index === visible.length - 1 ? bounds.width - index * (half + gap) : half });
-    });
-    // The focused split pane (#24) receives keyboard focus once when it changes, never on every layout.
-    const pane = visible.length === 2 ? requested.focusedPane ?? 'primary' : null;
-    const focusKey = pane ? `${visible[0].id}:${visible[1].id}:${pane}` : null;
-    if (focusKey && focusKey !== this.focusedPaneKey) visible[pane === 'secondary' ? 1 : 0].view.webContents.focus?.();
-    this.focusedPaneKey = focusKey;
+    for (const view of [...state.attachedViews]) if (!placed.some(([item]) => item.view === view)) {
+      window.contentView.removeChildView(view);
+      state.attachedViews.delete(view);
+    }
+    for (const [item, rect] of placed) {
+      // A view shown in another window moves here without reloading (#100).
+      if (!state.attachedViews.has(item.view)) { this.detachView(item.view); window.contentView.addChildView(item.view); state.attachedViews.add(item.view); }
+      item.view.setBounds(rect);
+    }
+    // The focused pane receives keyboard focus once when it changes, never on every layout.
+    let focusKey = null, focusTab = null;
+    if (requested.panes && placed.length > 1) {
+      focusTab = placed.find(([item]) => item.id === requested.focusedTabId)?.[0] ?? null;
+      focusKey = focusTab ? `${placed.map(([item]) => item.id ?? 'preview').join(':')}:${focusTab.id}` : null;
+    } else if (!requested.panes && placed.length === 2) {
+      const pane = requested.focusedPane ?? 'primary';
+      focusTab = placed[pane === 'secondary' ? 1 : 0][0];
+      focusKey = `${placed[0][0].id}:${placed[1][0].id}:${pane}`;
+    }
+    if (focusKey && focusKey !== state.focusedPaneKey) focusTab.view.webContents.focus?.();
+    state.focusedPaneKey = focusKey;
   }
 
   /** Hidden window: keep the active tab (and any tab being captured) attached so offscreen rendering has a size. */
   layoutHidden() {
-    const [width, height] = this.window.getContentSize();
+    const state = this.main;
+    const [width, height] = state.window.getContentSize();
     const keep = new Set(this.renderingFor);
-    const active = this.tabs.get(this.activeId);
+    const active = this.tabs.get(state.activeId);
     if (active && active.workspaceId === this.workspaceId && !active.blocked) keep.add(active);
     const views = [...keep].filter(tab => !tab.suspended && !tab.view.placeholder).map(tab => tab.view);
-    for (const view of this.attachedViews) if (!views.includes(view)) { this.window.contentView.removeChildView(view); this.attachedViews.delete(view); }
+    for (const view of [...state.attachedViews]) if (!views.includes(view)) { state.window.contentView.removeChildView(view); state.attachedViews.delete(view); }
     for (const view of views) {
-      if (!this.attachedViews.has(view)) { this.window.contentView.addChildView(view); this.attachedViews.add(view); }
+      if (!state.attachedViews.has(view)) { this.detachView(view); state.window.contentView.addChildView(view); state.attachedViews.add(view); }
       view.setBounds({ x: 0, y: 0, width: Math.max(1, width), height: Math.max(1, height) });
     }
   }
 
-  /** Move keyboard focus from the trusted chrome into the visible page (the focused split pane). */
-  focusPage() {
-    const panes = [...this.attachedViews];
-    if (!panes.length || this.hidden) return { focused: false, reason: 'No page is shown' };
-    const active = this.tabs.get(this.activeId);
-    const split = this.viewport?.splitTabId != null ? this.tabs.get(this.viewport.splitTabId) : null;
-    const target = this.preview && panes.includes(this.preview.view) ? this.preview
-      : this.viewport?.focusedPane === 'secondary' && split && panes.includes(split.view) ? split : active && panes.includes(active.view) ? active : null;
+  /** Move keyboard focus from the trusted chrome into the visible page (the focused pane). */
+  focusPage(windowId = 1) {
+    const state = this.windowState(windowId);
+    const panes = [...state.attachedViews];
+    if (!panes.length || (state === this.main && this.hidden)) return { focused: false, reason: 'No page is shown' };
+    const viewport = state.viewport;
+    const active = this.tabs.get(state.activeId);
+    const shown = tab => tab && panes.includes(tab.view);
+    const preview = this.preview && panes.includes(this.preview.view) ? this.preview : null;
+    let target;
+    if (viewport?.panes) {
+      const focusedTab = viewport.focusedTabId != null ? this.tabs.get(viewport.focusedTabId) : null;
+      target = shown(focusedTab) ? focusedTab : preview ?? (shown(active) ? active : null);
+    } else {
+      const split = viewport?.splitTabId != null ? this.tabs.get(viewport.splitTabId) : null;
+      target = preview ?? (viewport?.focusedPane === 'secondary' && shown(split) ? split : shown(active) ? active : null);
+    }
     if (!target) return { focused: false, reason: 'No page is shown' };
     target.view.webContents.focus();
     return { focused: true, tabId: target.id ?? null };
+  }
+
+  /** Tabs visible in any window right now (active, split or pane tabs); suspension never takes these (#101). */
+  visibleTabIds() {
+    const ids = new Set();
+    for (const state of this.windows.values()) {
+      if (state.activeId != null && this.tabs.get(state.activeId)?.workspaceId === this.shownWorkspace(state)) ids.add(state.activeId);
+      if (state.viewport?.splitTabId != null) ids.add(state.viewport.splitTabId);
+      for (const pane of state.viewport?.panes ?? []) if (pane.tabId != null) ids.add(pane.tabId);
+    }
+    return ids;
   }
 
   tab(tabId = this.activeId) {
@@ -442,7 +624,9 @@ export class Browser {
     const contents = tab.view.webContents;
     const rule = this.workspaceService?.matchSiteRule(contents.getURL() || tab.url, tab.workspaceId);
     return { id: tab.id, workspaceId: tab.workspaceId, url: tab.blocked?.url || contents.getURL() || tab.url || 'about:blank',
-      title: pageString(contents.getTitle() || tab.title || 'New tab', 1000), active: tab.id === this.activeId,
+      title: pageString(contents.getTitle() || tab.title || 'New tab', 1000), active: this.shownIn(tab.workspaceId)?.activeId === tab.id,
+      // Informational only (#100): which window shows this tab's workspace. It is never a grant.
+      windowId: this.ownerOf(tab.workspaceId).id,
       pinned: !!tab.pinned, controller: tab.controller ?? 'available', controlMode: this.controlMode(tab), assistant: tab.assistant ?? null,
       rawInput: !!tab.rawInput, version: tab.version ?? 1,
       activity: tab.inFlight ? { command: tab.inFlight.command, actor: tab.inFlight.actor, startedAt: tab.inFlight.startedAt } : null,
@@ -510,7 +694,7 @@ export class Browser {
     // The offline archive preview holds decrypted archive bodies in memory; it closes with the lock.
     if (this.preview) { try { this.closeArchivePreview(); } catch { /* closing anyway */ } }
     for (const id of [...this.tabs.keys()]) { try { this.closeTab(id); } catch { /* keep closing */ } }
-    this.activeId = null;
+    for (const state of this.windows.values()) state.activeId = null;
     this.layout();
   }
   /** After unlock: restore the saved tabs of the unlocked profile. */
@@ -521,18 +705,19 @@ export class Browser {
   }
 
   async switchWorkspace(workspaceId) {
-    if (this.preview) this.closeArchivePreview();
+    if (this.preview && this.ownerOf(this.preview.workspaceId) === this.main) this.closeArchivePreview();
     // Resume the tab this workspace last showed (#24), else its first tab.
-    const remembered = this.workspaceService?.locked ? null : this.workspaceService?.data?.resumeStates?.find(item => item.workspaceId === workspaceId)?.activeTabId;
-    const selected = (this.tabs.get(remembered)?.workspaceId === workspaceId ? this.tabs.get(remembered) : null) ?? [...this.tabs.values()].find(tab => tab.workspaceId === workspaceId);
+    const selected = this.rememberedTab(workspaceId);
     this.session = this.sessionFor(workspaceId);
     return selected ? this.activate(selected.id) : this.newTab('about:blank', workspaceId);
   }
 
   activate(tabId) {
     const tab = this.tab(tabId);
-    if (tab.workspaceId !== this.workspaceId && this.workspaceService) throw new Error('Switch to the tab workspace before activating it');
-    this.activeId = tabId;
+    // The tab becomes the active tab of the window that shows its workspace (#100).
+    const state = this.shownIn(tab.workspaceId);
+    if (!state && this.workspaceService) throw new Error('Switch to the tab workspace before activating it');
+    (state ?? this.main).activeId = tabId;
     tab.lastActiveAt = Date.now();
     if (tab.suspended) void this.resumeTab(tab, 'activated').catch(() => {});
     this.layout();
@@ -562,7 +747,7 @@ export class Browser {
       return this.describe(tab);
     }
     this.createView(tab);
-    if (workspaceId === this.workspaceId) this.activate(tab.id);
+    if (this.shownIn(workspaceId)) this.activate(tab.id);
     this.persist();
     try { await tab.view.webContents.loadURL(this.allowedUrl(url, workspaceId, tab)); }
     catch (error) {
@@ -670,18 +855,18 @@ export class Browser {
 
   closeTab(tabId) {
     const tab = this.tab(tabId);
-    if (this.attachedViews.has(tab.view)) {
-      if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(tab.view);
-      this.attachedViews.delete(tab.view);
-    }
-    if (this.activeId === tabId) this.activeId = null;
+    this.detachView(tab.view);
+    const orphaned = [...this.windows.values()].filter(state => state.activeId === tabId);
+    for (const state of orphaned) state.activeId = null;
     this.renderingFor.delete(tab);
     this.cancelQueue(tab, 'tab closed');
     this.tabs.delete(tabId);
     const contents = tab.view.webContents;
     if (contents && !contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
-    if (!this.closing && !this.suspended && this.activeId === null) {
-      const next = [...this.tabs.values()].find(candidate => candidate.workspaceId === this.workspaceId);
+    // Each window that showed the closed tab moves to another tab of the workspace it shows.
+    if (!this.closing && !this.suspended) for (const state of orphaned) {
+      const shown = this.shownWorkspace(state);
+      const next = [...this.tabs.values()].find(candidate => candidate.workspaceId === shown);
       if (next) this.activate(next.id);
     }
     this.persist();
@@ -737,8 +922,10 @@ export class Browser {
 
   quickBlockers(tab) {
     const reasons = [];
-    if (tab.id === this.activeId && tab.workspaceId === this.workspaceId) reasons.push('active');
-    if (this.viewport?.splitTabId === tab.id) reasons.push('split_view');
+    if ([...this.windows.values()].some(state => state.activeId === tab.id && tab.workspaceId === this.shownWorkspace(state))) reasons.push('active');
+    if ([...this.windows.values()].some(state => state.viewport?.splitTabId === tab.id)) reasons.push('split_view');
+    // A tab visible in a pane of any window is never suspended (#101); hidden tabs follow the usual rules.
+    if ([...this.windows.values()].some(state => (state.viewport?.panes ?? []).some(pane => pane.tabId === tab.id))) reasons.push('visible_pane');
     if (this.renderingFor.has(tab)) reasons.push('capturing');
     if (tab.pinned) reasons.push('pinned');
     if (tab.controller && !['human', 'available'].includes(tab.controller)) reasons.push('agent_lease');
@@ -766,10 +953,7 @@ export class Browser {
     tab.url = tab.blocked?.url || contents.getURL() || tab.url;
     tab.title = contents.getTitle() || tab.title;
     const zoom = contents.getZoomFactor?.() ?? 1;
-    if (this.attachedViews.has(tab.view)) {
-      if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(tab.view);
-      this.attachedViews.delete(tab.view);
-    }
+    this.detachView(tab.view);
     tab.suspended = { at: new Date().toISOString(), reason, ...scroll, zoom };
     tab.view = this.placeholderView(tab);
     tab.observations = null;
@@ -944,7 +1128,7 @@ export class Browser {
 
   /** While headless, attach a tab long enough to render one capture. */
   async renderForCapture(tab) {
-    if (!this.hidden || this.attachedViews.has(tab.view)) return () => {};
+    if (!this.hidden || this.isAttached(tab.view)) return () => {};
     if ((tab.renderMode ?? 'onscreen') !== 'offscreen') await this.convertRenderMode(tab, 'offscreen capture');
     this.renderingFor.add(tab);
     this.layout();
@@ -1150,7 +1334,7 @@ export class Browser {
     return new Response(request.method === 'HEAD' ? null : entry.bytes, { status: 200, headers });
   }
   /** Open an archived version with JavaScript disabled, all network refused and navigation, popups, downloads and form submission blocked. */
-  async openArchivePreview({ artifactId, versionId, title, documentUrl, resources }) {
+  async openArchivePreview({ artifactId, versionId, title, documentUrl, resources, workspaceId = null }) {
     if (!this.electron.WebContentsView) throw failure('unsupported', 'The offline preview needs the Weft browser window');
     if (this.preview) this.closeArchivePreview();
     const session = this.previewSession();
@@ -1162,7 +1346,8 @@ export class Browser {
       webgl: false, plugins: false, spellcheck: false, navigateOnDragDrop: false, disableDialogs: true, autoplayPolicy: 'document-user-activation-required', images: true } });
     const contents = view.webContents;
     const stats = { served: 0, refused: 0, refusedUrls: [], navigationsBlocked: 0, popupsBlocked: 0, downloadsBlocked: 0 };
-    this.preview = { id: `preview_${randomUUID().slice(0, 12)}`, artifactId, versionId, title: String(title || '').slice(0, 240), view, byUrl, byCid, stats, openedAt: new Date().toISOString() };
+    // The preview shows in the window whose rail holds the capture's workspace (#100).
+    this.preview = { id: `preview_${randomUUID().slice(0, 12)}`, workspaceId, artifactId, versionId, title: String(title || '').slice(0, 240), view, byUrl, byCid, stats, openedAt: new Date().toISOString() };
     contents.on('will-navigate', event => { event.preventDefault(); stats.navigationsBlocked++; });
     contents.on('before-input-event', (event, input) => { const shortcut = chromeShortcut(input); if (shortcut) { event.preventDefault(); this.onChromeShortcut?.({ shortcut, preview: true }); } });
     contents.on('will-redirect', event => { event.preventDefault(); stats.navigationsBlocked++; });
@@ -1197,10 +1382,7 @@ export class Browser {
     if (!state) return { open: false, closed: false };
     const summary = this.describePreview();
     this.preview = null;
-    if (this.attachedViews.has(state.view)) {
-      if (this.window && !this.window.isDestroyed()) this.window.contentView.removeChildView(state.view);
-      this.attachedViews.delete(state.view);
-    }
+    this.detachView(state.view);
     const contents = state.view.webContents;
     if (contents && !contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
     this.layout();
@@ -1951,7 +2133,7 @@ export class Browser {
   async screenshot(tab, args, context) {
     const edge = resourceSettings(this.workspaceService?.data?.settings).maxCaptureEdge ?? CAPTURE_LIMITS.defaultMaxEdge;
     const limited = { ...args, maxWidth: Math.min(args.maxWidth ?? edge, edge), maxHeight: Math.min(args.maxHeight ?? edge, edge) };
-    if (!this.hidden && !this.attachedViews.has(tab.view)) throw new Error('Show the tab before capturing a screenshot');
+    if (!this.hidden && !this.isAttached(tab.view)) throw new Error('Show the tab before capturing a screenshot');
     const before = tab.version;
     const release = await this.renderForCapture(tab);
     try {
@@ -2322,6 +2504,14 @@ export class Browser {
     } finally { this.releaseInput(tab, slot); }
   }
 
+  /** A deleted or archived workspace leaves any second window it was in; an emptied window is closed by the app (#100). */
+  releaseWorkspace(workspaceId) {
+    if (this.ownerOf(workspaceId) === this.main) return null;
+    const result = this.moveWorkspace(workspaceId, 1, { show: false });
+    if (result.emptied) this.onWindowEmptied?.(result.emptied);
+    return result;
+  }
+
   closeWorkspace(workspaceId) {
     for (const tab of [...this.tabs.values()]) if (tab.workspaceId === workspaceId) this.closeTab(tab.id);
   }
@@ -2333,6 +2523,7 @@ export class Browser {
     try { this.closeArchivePreview(); } catch { /* window already gone */ }
     clearInterval(this.resourceTimer);
     this.window?.removeListener('resize', this.onResize);
+    for (const state of this.windows.values()) if (state !== this.main) state.window?.removeListener?.('resize', state.onResize);
     for (const id of [...this.tabs.keys()]) this.closeTab(id);
     for (const { item } of this.downloads.values()) item?.cancel();
     for (const { session, onDownload, detachStorage } of this.sessions.values()) {

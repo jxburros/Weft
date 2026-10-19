@@ -106,7 +106,9 @@ test('resume records restore section, split panes, panels and pinned resources w
   assert.equal(handoff.error, null, JSON.stringify(handoff.error));
   const saved = (await f.dispatch('resume.save', { workspaceId: first, section: 'tasks', activeTabId: 2, split: { tabId: 1, focusedPane: 'secondary' },
     panels: { agentPanelOpen: true, sidebarCollapsed: true, conversationId: conversation.id }, pinned: [{ type: 'material', id: note.id }, { type: 'tab', id: 1 }, { type: 'task', id: blocked.id }] }, human)).result;
-  assert.deepEqual(saved.view, { section: 'tasks', activeTabId: 2, split: { tabId: 1, focusedPane: 'secondary' }, panels: { agentPanelOpen: true, sidebarCollapsed: true, conversationId: conversation.id } });
+  assert.deepEqual(saved.view, { section: 'tasks', activeTabId: 2, split: { tabId: 1, focusedPane: 'secondary' }, panels: { agentPanelOpen: true, sidebarCollapsed: true, conversationId: conversation.id },
+    // An older split-view record reads as a two-pane layout (#101).
+    panes: { layout: '2-columns', items: [{ type: 'tab', id: 2 }, { type: 'tab', id: 1 }], focused: 1, sizes: [0.5], migratedFromSplit: true } });
   assert.equal((await f.dispatch('resume.save', { workspaceId: first, pinned: [{ type: 'task', id: 'task_missing' }] }, human)).error.code, 'not_found');
   assert.equal((await f.dispatch('resume.save', { workspaceId: first, activeTabId: 99 }, human)).error.code, 'not_found');
   // A restart: the record persists; live links are recomputed from current records and tabs.
@@ -129,4 +131,31 @@ test('resume records restore section, split panes, panels and pinned resources w
   assert.equal((await g.dispatch('resume.get', { workspaceId: first }, grant)).result.view.section, 'tasks');
   assert.equal((await g.dispatch('resume.save', { workspaceId: first, section: 'overview' }, grant)).error.code, 'permission_required');
   g.browser.close(); g.workspace.close();
+});
+
+test('pane layouts hold 1 to 4 tabs, captures and documents of one workspace and drop items that are gone (#101)', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-panes-'));
+  const f = await fixture(t, directory);
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const first = f.workspace.activeWorkspaceId;
+  addTab(f.browser, 1, first, 'https://alpha.example/', 'Alpha');
+  addTab(f.browser, 2, first, 'https://beta.example/', 'Beta');
+  const note = (await f.dispatch('materials.create', { title: 'Notes', content: 'Side by side' }, human)).result;
+  const task = (await f.dispatch('tasks.create', { title: 'Compare' }, human)).result;
+  const other = (await f.dispatch('workspaces.create', { name: 'Other' }, human)).result;
+  const elsewhere = (await f.dispatch('materials.create', { workspaceId: other.id, title: 'Elsewhere' }, human)).result;
+  const panes = { layout: '4-grid', items: [{ type: 'tab', id: 1 }, { type: 'material', id: note.id }, { type: 'tab', id: 2 }, { type: 'task', id: task.id }], focused: 2, sizes: [0.4, 0.6] };
+  const saved = (await f.dispatch('resume.save', { workspaceId: first, panes }, human)).result;
+  assert.deepEqual(saved.view.panes, { ...panes, migratedFromSplit: false });
+  // Records from another workspace, repeated items and too many panes are refused.
+  assert.equal((await f.dispatch('resume.save', { workspaceId: first, panes: { layout: '2-columns', items: [{ type: 'material', id: elsewhere.id }] } }, human)).error.code, 'not_found');
+  assert.equal((await f.dispatch('resume.save', { workspaceId: first, panes: { layout: '2-columns', items: [{ type: 'tab', id: 1 }, { type: 'tab', id: 1 }] } }, human)).error.code, 'invalid_arguments');
+  assert.equal((await f.dispatch('resume.save', { workspaceId: first, panes: { layout: '2-rows', items: [{ type: 'tab', id: 1 }, null, { type: 'tab', id: 2 }] } }, human)).error.code, 'invalid_arguments');
+  assert.equal((await f.dispatch('resume.save', { workspaceId: first, panes: { layout: '5-grid', items: [] } }, human)).error.code, 'invalid_arguments');
+  // With tab 2 closed, its pane is empty and counted as missing; the rest of the layout stays.
+  f.browser.tabs.delete(2);
+  const resume = (await f.dispatch('resume.get', { workspaceId: first }, human)).result;
+  assert.deepEqual(resume.view.panes.items, [{ type: 'tab', id: 1 }, { type: 'material', id: note.id }, null, { type: 'task', id: task.id }]);
+  assert.equal(resume.view.panes.layout, '4-grid');
+  assert.equal(resume.missing.panes, 1);
 });

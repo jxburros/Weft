@@ -27,6 +27,7 @@ import { encryptionCommandDefinitions } from './encryption-commands.js';
 import { resourceCommandDefinitions } from './resources.js';
 import { resumeCommandDefinitions } from './resume.js';
 import { displayCommandDefinitions } from './display.js';
+import { windowCommandDefinitions } from './windows.js';
 import { browsingCommandDefinitions } from './browsing-import.js';
 import { paymentCommandDefinitions, PAYMENT_ADMIN_COMMANDS, PAYMENT_REASONS, PAYMENT_CHANGES } from './payments.js';
 
@@ -150,6 +151,7 @@ const definitions = {
   ...resourceCommandDefinitions,
   ...resumeCommandDefinitions,
   ...displayCommandDefinitions,
+  ...windowCommandDefinitions,
   ...browsingCommandDefinitions,
   ...paymentCommandDefinitions,
 };
@@ -160,7 +162,7 @@ for (const [name, [, shape]] of Object.entries(definitions)) if (name.startsWith
 
 const humanOnly = new Set(['learning.status', 'learning.configure', 'learning.erase', 'memories.create', 'memories.update', 'memories.delete', 'page.message', 'browser.resumeAutomation', 'browser.emergencyStop', 'downloads.approve', 'tabs.takeover', 'tabs.setControlMode', 'page.allowOnce',
   'cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear', 'history.clear', 'settings.update',
-  'workspaces.delete', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete', 'models.probe', 'models.discover',
+  'workspaces.delete', 'workspaces.moveRecord', 'workspaces.import', 'workspaces.export', 'workspaces.switch', 'models.save', 'models.delete', 'models.probe', 'models.discover',
   'siteRules.create', 'siteRules.update', 'siteRules.delete', 'clients.create', 'clients.list', 'clients.update', 'clients.revoke', 'lists.install', 'lists.status', 'lists.rollback',
   'lists.subscribe', 'lists.preview', 'lists.update', 'lists.configure', 'lists.exception', 'lists.unsubscribe', 'lists.check', 'lists.matches',
   'approvals.approve', 'approvals.reject', 'autonomy.update', 'activity.configure',
@@ -173,12 +175,12 @@ const humanOnly = new Set(['learning.status', 'learning.configure', 'learning.er
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview', 'search.configureEmbeddings', 'search.indexing',
   ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status'),
   'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop',
-  'display.hide', ...Object.keys(browsingCommandDefinitions)]);
+  'display.hide', 'windows.moveWorkspace', 'windows.focus', ...Object.keys(browsingCommandDefinitions)]);
 const readOnly = new Set(['learning.status', 'page.message', 'browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'collections.read', 'sources.read', 'services.read',
   'artifacts.compare', 'artifacts.verify', 'artifacts.review', 'artifacts.readOriginal',
-  'search.status', 'transfers.read', 'events.list', 'weft.capabilities', 'conversations.messages', 'artifacts.versions', 'encryption.status', 'encryption.checkRecoveryKey', 'workflows.validate', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
+  'search.status', 'transfers.read', 'events.list', 'weft.capabilities', 'conversations.messages', 'artifacts.versions', 'encryption.status', 'encryption.checkRecoveryKey', 'windows.list', 'workflows.validate', ...Object.keys(pluginCommandDefinitions).filter(name => ['local_read', 'external_read'].includes(actionClassForCommand(name)))]);
 const descriptions = {
   tabId: 'Tab identifier; omit to use the active tab when supported.',
   workspaceId: 'Workspace identifier; omit to use the current workspace when supported.',
