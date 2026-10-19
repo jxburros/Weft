@@ -143,7 +143,7 @@ if (process.argv.includes('--headless-harness')) {
         const second = await run('workspaces.create', { name: 'Isolated project' });
         const b1 = await run('tabs.new', { url: `${origin}/a`, workspaceId: second.id });
         const bInspect = await run('page.inspect', { tabId: b1.id, workspaceId: second.id });
-        assert.equal(await run('page.evaluate', { tabId: b1.id, workspaceId: second.id, expectedVersion: bInspect.version, expression: 'document.cookie' }), '');
+        assert.deepEqual(await run('page.evaluate', { tabId: b1.id, workspaceId: second.id, expectedVersion: bInspect.version, expression: 'document.cookie' }), { value: '', contentTrust: 'untrusted' });
         // The person lowers the second workspace to "assist"; opening a page there then needs a human decision.
         await weft.gui(`window.weft.execute('autonomy.update', { workspaceId: ${JSON.stringify(second.id)}, level: 'assist' })`);
         const opening = { url: `${origin}/b`, workspaceId: second.id };
@@ -202,9 +202,9 @@ if (process.argv.includes('--headless-harness')) {
         assert.equal(tabs.find(tab => tab.id === a1.id).controller, 'available', 'agent leases end with the session');
         assert.equal(tabs.find(tab => tab.id === a2.id).controlMode, 'you-drive', 'human ownership persists');
         const cookie = await run('page.evaluate', { tabId: a1.id, workspaceId: first.id, expectedVersion: (await run('page.inspect', { tabId: a1.id, workspaceId: first.id })).version, expression: 'document.cookie' });
-        assert.match(cookie, /isolated=alpha/, 'the persistent workspace container survives restart');
+        assert.match(cookie.value, /isolated=alpha/, 'the persistent workspace container survives restart');
         const isolated = await run('page.evaluate', { tabId: b1.id, workspaceId: second.id, expectedVersion: (await run('page.inspect', { tabId: b1.id, workspaceId: second.id })).version, expression: 'document.cookie' });
-        assert.equal(isolated, '', 'the other workspace never sees the cookie');
+        assert.equal(isolated.value, '', 'the other workspace never sees the cookie');
         // Only this profile's workspace containers exist: no unrelated browser profile was created.
         const partitions = readdirSync(join(profile, 'Partitions')).sort();
         assert.deepEqual(partitions, [`weft-${first.id}`, `weft-${second.id}`].map(name => name.toLowerCase()).sort());
