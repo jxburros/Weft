@@ -20,6 +20,23 @@ instructions; it does not override them or add a separate approval process.
   `docs/decisions/018-integration-contracts-and-hybrid-retrieval.md`.
 - GUI/style change: `Weft-Visual-Style-Guide.md` and GUI tests.
 
+Large modules are split by feature; look in the feature module first:
+
+- GUI: `src/gui.js` holds state, polling, layout and the shell; button actions
+  are in `src/gui-actions-*.js` (looked up by `data-action`) and larger views
+  and dialogs in `src/gui-views-*.js`, both reaching gui.js state through one
+  live-binding context object. Feature UIs (`gui-chrome`, `gui-site`,
+  `gui-panes`, `gui-knowledge`, `gui-lists`) take explicit dependencies.
+- Browser: `src/browser.js` keeps tabs, windows, views, sessions and command
+  admission; `src/browser-commands.js` holds the command handlers it dispatches
+  to; `src/browser-chrome.js`, `src/browser-credentials.js` and
+  `src/browser-captures.js` hold methods installed on `Browser.prototype`;
+  shared constants are in `src/browser-support.js`.
+- Workspace: `src/workspace.js` keeps storage, transactions, records and
+  search; `src/workspace-artifacts.js`, `src/workspace-transfer.js` and
+  `src/workspace-encryption.js` hold `WorkspaceService` methods; shared schemas
+  and helpers are in `src/workspace-support.js`.
+
 ## Invariants
 
 - The control API is authenticated and loopback-only. Never silently enable a
