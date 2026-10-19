@@ -10,6 +10,7 @@ const POLICY_COMMANDS = new Set(['siteRules.create', 'siteRules.update', 'siteRu
   'lists.exception', 'lists.unsubscribe', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'extensions.install', 'extensions.enable', 'extensions.disable',
   'extensions.remove', 'plugins.enable', 'plugins.disable', 'downloads.configureScanner', 'downloads.approve', 'launches.approve', 'launches.deny', 'activity.configure', 'settings.update',
   'search.configureEmbeddings', 'tabs.setControlMode', 'browser.emergencyStop', 'browser.resumeAutomation', 'update.configure',
+  'permissions.respond', 'permissions.set', 'permissions.configure', 'permissions.stop', 'popups.allow',
   'credentials.create', 'credentials.update', 'credentials.revoke', 'credentials.delete', 'credentials.grantTask', 'credentials.revokeGrant', 'credentials.configureProvider',
   'services.setCredential', 'services.revoke', 'freshness.configure']);
 const WORKSPACE_COMMANDS = /^workspaces\.(create|update|archive|restore|duplicate|delete|import|importPackage|switch)$/;

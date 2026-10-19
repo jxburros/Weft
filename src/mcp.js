@@ -12,6 +12,8 @@ const groups = {
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],
   // Shared context, linked sources, services, citations, freshness and conflicts (ADR 013): split out so every tool stays under the size budget.
   knowledge: ['collections', 'sources', 'services', 'citations', 'freshness', 'conflicts'],
+  // Per-site permissions, popups and the person's saved passwords (#90, #95, #97): decisions are human-only.
+  site: ['permissions', 'popups'],
   artifacts: ['artifacts', 'captures'], browser: ['browser', 'downloads', 'cookies', 'storage', 'clients', 'approvals', 'autonomy', 'extensions', 'threats', 'launches', 'update', 'credentials', 'payments'], models: ['models', 'chat'],
 };
 export const mcpTools = Object.entries(groups).map(([group, namespaces]) => {

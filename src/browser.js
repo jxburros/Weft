@@ -38,10 +38,13 @@ import { ruleSource } from './site-rules.js';
 import { sanitizeUrl } from './workspace.js';
 import { RECORDING_WORLD, recordingScript } from './recording-script.js';
 import { CAPTURE_LIMITS, resourceSettings } from './resources.js';
+import { SitePermissions, topOrigin } from './site-permissions.js';
 
 const humanOnlyBrowserCommands = new Set(['storage.setSiteMode', 'storage.setDefaultMode', 'threats.install', 'threats.remove', 'threats.configureProvider', 'threats.update', 'downloads.configureScanner', 'launches.approve', 'launches.deny']);
 const navigationCommands = new Set(['page.click', 'page.fill', 'page.navigate', 'page.forward', 'page.reload', 'page.allowOnce']);
 const HUMAN_GESTURE_MS = 2000;
+// Popups follow Chromium's transient user activation lifespan (about 5 s after a click or key press in the tab).
+const POPUP_GESTURE_MS = 5000;
 // Gap between split panes; the trusted GUI draws the divider and focused-pane frame in it (#36).
 export const SPLIT_GAP = 6;
 /**
@@ -141,6 +144,10 @@ export class Browser {
     this.downloadSafety = downloadSafety ?? new DownloadSafety({ path: directory && join(directory, 'download-safety.json') });
     this.launches = new Map();
     this.nextLaunchId = 1;
+    // Per-site permission prompts and popup allowances (#90, #97): a policy file outside workspace records.
+    this.permissions = new SitePermissions({ path: directory && join(directory, 'site-permissions.json'), browser: this, audit: entry => this.onAudit?.(entry) });
+    // Tab ids reserved by private windows (#94): never reachable through tab commands.
+    this.privateTabIds = new Set();
     this.openExternal = url => this.electron.shell.openExternal(url);
     this.admission = admission;
     this.window = window;
@@ -194,12 +201,17 @@ export class Browser {
   configureSession(session, workspaceId) {
     // Every web permission is denied. External-protocol launches become pending
     // browser-owned requests; repeated or deceptive prompts never reach the person.
+    // Web permissions get a browser-owned prompt only a person can answer (#90); everything else is denied.
+    // External-protocol launches become pending browser-owned requests; repeated or deceptive prompts never reach the person.
     session.setPermissionRequestHandler((contents, permission, callback, details) => {
-      if (permission === 'openExternal') this.requestLaunch(contents, details?.externalURL, details?.isMainFrame === false ? 'subframe' : 'main-frame', details?.requestingUrl);
-      else this.notePermission(contents, permission);
-      callback(false);
+      if (permission === 'openExternal') { this.requestLaunch(contents, details?.externalURL, details?.isMainFrame === false ? 'subframe' : 'main-frame', details?.requestingUrl); callback(false); return; }
+      this.permissions.request(this.tabFor(contents), permission, details, callback);
     });
-    session.setPermissionCheckHandler(() => false);
+    session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
+      try { return this.permissions.check(contents && this.tabFor(contents), permission, requestingOrigin, details); } catch { return false; }
+    });
+    // Screen sharing: the person picks a screen or window in Weft's prompt; no system picker, no audio loopback.
+    session.setDisplayMediaRequestHandler?.((request, callback) => { void this.requestDisplay(request, callback); }, { useSystemPicker: false });
     const onDownload = (_event, item, contents) => this.trackDownload(item, workspaceId, contents);
     session.on('will-download', onDownload);
     // Chromium's request interception covers navigations, redirects, frames and
@@ -272,14 +284,23 @@ export class Browser {
     this.sessions.set(workspaceId, { session, onDownload, detachStorage });
   }
 
-  notePermission(contents, permission) {
-    const tab = [...this.tabs.values()].find(candidate => candidate.view.webContents === contents);
-    if (!tab) return;
-    tab.permissionDenials ??= {};
-    tab.permissionDenials[permission] = (tab.permissionDenials[permission] ?? 0) + 1;
+  tabFor(contents) { return [...this.tabs.values()].find(candidate => candidate.view.webContents === contents) ?? null; }
+
+  /** getDisplayMedia: requires a user gesture and a visible tab; the source is chosen in the browser-owned prompt. */
+  async requestDisplay(request, callback) {
+    let answered = false;
+    const respond = value => { if (answered) return; answered = true; try { callback(value && typeof value === 'object' ? value : {}); } catch { /* the page went away */ } };
+    let contents = null;
+    try { contents = this.electron.webContents?.fromFrame?.(request.frame) ?? null; } catch { contents = null; }
+    const tab = contents ? this.tabFor(contents) : null;
+    if (!tab || !request.videoRequested || !request.userGesture) { this.permissions.denied(tab, ['display-capture'], 'auto'); return respond({}); }
+    let sources = [];
+    try { sources = await this.electron.desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 240, height: 150 } }); } catch { sources = []; }
+    if (!sources.length) { this.permissions.denied(tab, ['display-capture'], 'auto'); return respond({}); }
+    this.permissions.request(tab, 'display-capture', { requestingUrl: request.securityOrigin || request.frame?.origin }, respond, { sources, display: true });
   }
 
-  recentHumanInput(tab) { return Boolean(tab?.lastHumanInput && Date.now() - tab.lastHumanInput < HUMAN_GESTURE_MS); }
+  recentHumanInput(tab, within = HUMAN_GESTURE_MS) { return Boolean(tab?.lastHumanInput && Date.now() - tab.lastHumanInput < within); }
 
   requestLaunch(contents, target, frame, requestingUrl) {
     let scheme;
@@ -434,6 +455,7 @@ export class Browser {
 
   tab(tabId = this.activeId) {
     const tab = this.tabs.get(tabId);
+    if (!tab && this.privateTabIds.has(tabId)) throw failure('permission_required', 'That page is in a private window. Private windows are never available to agents, automation or tab commands.', { authority: { decision: 'deny', reason: 'private_window' } });
     if (!tab) throw new Error('Tab not found');
     return tab;
   }
@@ -451,7 +473,7 @@ export class Browser {
       loading: contents.isLoading?.() ?? false, canGoBack: contents.navigationHistory?.canGoBack() ?? false,
       canGoForward: contents.navigationHistory?.canGoForward() ?? false, zoom: contents.getZoomFactor?.() ?? 1,
       blocked: tab.blocked ?? null, error: tab.error ?? null, warning: rule?.behavior === 'warn' ? `${rule.hostname}: ${rule.reason}` : null,
-      groupId: tab.groupId ?? null, renderMode: tab.suspended ? null : tab.renderMode ?? 'onscreen',
+      groupId: tab.groupId ?? null, opener: tab.openerTabId ? { tabId: tab.openerTabId, openedBy: tab.openedBy ?? null, scriptable: Boolean(tab.popup) } : null, renderMode: tab.suspended ? null : tab.renderMode ?? 'onscreen',
       suspended: tab.suspended ? { at: tab.suspended.at, reason: tab.suspended.reason, scrollX: tab.suspended.scrollX, scrollY: tab.suspended.scrollY, zoom: tab.suspended.zoom } : null,
       restored: tab.restoredFrom ?? null, lastActiveAt: tab.lastActiveAt ? new Date(tab.lastActiveAt).toISOString() : null,
       communityLabels: this.communityLabels(contents.getURL() || tab.url, tab.workspaceId), protection: this.protection(tab), protectedOperation: this.protectedReason(tab) };
@@ -471,7 +493,9 @@ export class Browser {
     try { hostname = new URL(tab.view.webContents.getURL() || tab.url).hostname || null; } catch { /* about:blank */ }
     return { storageMode: hostname && this.siteStorage ? this.siteStorage.modeFor(hostname, tab.workspaceId) : null,
       storageActivity: this.siteStorage?.activityFor(tab.view.webContents.id) ?? {}, blockedPopups: tab.blockedPopups ?? [],
-      permissionDenials: tab.permissionDenials ?? {}, pendingLaunches: [...this.launches.values()].filter(item => item.tabId === tab.id && item.state === 'pending').length,
+      permissionDenials: tab.permissionDenials ?? {}, permissionUserDenials: tab.permissionUserDenials ?? {}, permissionPrompt: this.permissions.promptFor(tab.id),
+      permissionUses: tab.permissionUses?.document === (tab.documentSerial ?? 0) ? tab.permissionUses.permissions : [], sharing: tab.sharing ?? null,
+      popupsAllowed: this.permissions.popupsAllowed(tab), pendingLaunches: [...this.launches.values()].filter(item => item.tabId === tab.id && item.state === 'pending').length,
       securityWarning: tab.securityWarning ?? null, exception: tab.allowUrl ? { url: sanitizeUrl(tab.allowUrl) || null, security: Boolean(tab.allowSecurity) } : null };
   }
 
@@ -575,9 +599,11 @@ export class Browser {
   }
 
   /** Create and wire a page view for a tab, on screen or (while the window is hidden) offscreen. */
-  createView(tab) {
-    const offscreen = this.offscreen;
-    const view = new this.electron.WebContentsView({
+  createView(tab, adopted = null) {
+    const offscreen = adopted ? false : this.offscreen;
+    // A popup (#97) adopts the WebContents Chromium created for window.open, so it keeps its opener; it
+    // inherits the opener's session partition and sandboxed, context-isolated preferences.
+    const view = new this.electron.WebContentsView(adopted ? { webContents: adopted } : {
       webPreferences: {
         session: this.sessions.get(tab.workspaceId)?.session ?? this.sessionFor(tab.workspaceId), nodeIntegration: false, contextIsolation: true,
         sandbox: true, webSecurity: true, allowRunningInsecureContent: false, ...(offscreen ? { offscreen: true } : {}),
@@ -618,6 +644,7 @@ export class Browser {
     contents.on('did-navigate', () => {
       // A new document: credential residue protections keyed to the filled document end here.
       tab.documentSerial = (tab.documentSerial ?? 0) + 1;
+      this.permissions.documentChanged(tab);
       tab.version++; tab.popupAudits = 0; this.stateBoundary(tab, 'navigation'); tab.observations = null; tab.error = null; tab.blocked = null; tab.securityWarning = null;
       // A gesture authorizes downloads/popups for the document it happened in, not the next page.
       if (typeof this.downloadGrants.get(tab.id) === 'number') this.downloadGrants.delete(tab.id);
@@ -649,23 +676,45 @@ export class Browser {
       if (isMainFrame && code !== -3) { tab.error = description; this.persist(); }
     });
     contents.setWindowOpenHandler(({ url: target, disposition }) => {
-      // Native windows are never created. A page may open a tab only during a
-      // human gesture in this tab or an automation action in flight on it.
-      const actor = this.recentHumanInput(tab) ? 'human' : tab.inFlight ? 'automation' : null;
+      // Native windows are never created. A page may open a tab only within Chromium's transient-activation
+      // window after a human gesture in this tab, during an automation action in flight on it, or on a site
+      // the person allowed popups for in this workspace (#97).
+      const actor = this.recentHumanInput(tab, POPUP_GESTURE_MS) ? 'human' : tab.inFlight ? 'automation' : this.permissions.popupsAllowed(tab) ? 'site-allowed' : null;
       if (!actor) {
-        tab.blockedPopups = [...(tab.blockedPopups ?? []), { url: sanitizeUrl(target) || String(target).slice(0, 200), disposition, at: new Date().toISOString(), reason: 'Opened without recent input in this tab' }].slice(-20);
+        const id = `pop_${this.nextPopupId = (this.nextPopupId ?? 0) + 1}`;
+        // The unsanitized address stays in memory only, so "Allow once" can open exactly what the page asked for.
+        (this.popupTargets ??= new Map()).set(id, String(target).slice(0, 16384));
+        if (this.popupTargets.size > 400) this.popupTargets.delete(this.popupTargets.keys().next().value);
+        tab.blockedPopups = [...(tab.blockedPopups ?? []), { id, url: sanitizeUrl(target) || String(target).slice(0, 200), disposition, at: new Date().toISOString(), reason: 'Opened without recent input in this tab' }].slice(-20);
         // Bounded per document so a popup-spamming page cannot flood durable activity.
         if ((tab.popupAudits = (tab.popupAudits ?? 0) + 1) <= 20) this.onAudit?.({ type: 'block', reason: 'popup_without_input', outcome: 'recorded', workspaceId: tab.workspaceId, tabId: tab.id, version: tab.version, summary: { url: sanitizeUrl(target) || null, disposition } });
         this.persist();
         return { action: 'deny' };
       }
-      try {
-        this.allowedUrl(target, tab.workspaceId);
+      try { this.allowedUrl(target, tab.workspaceId); } catch (error) { tab.error = error.message; this.persist(); return { action: 'deny' }; }
+      // Offscreen (headless) pages cannot adopt a popup renderer: the destination opens as an ordinary tab without an opener.
+      if (this.offscreen || this.suspended) {
         void this.newTab(target, tab.workspaceId, { openerTabId: tab.id, openedBy: actor }).catch(error => { tab.error = error.message; });
-      } catch (error) { tab.error = error.message; }
-      return { action: 'deny' };
+        return { action: 'deny' };
+      }
+      return { action: 'allow', outlivesOpener: true, createWindow: options => this.adoptPopup(tab, target, options.webContents, actor, disposition) };
     });
+    // A script-opened page that calls window.close() (for example a 3-D Secure or sign-in popup) closes its tab.
+    contents.on('close', () => { if (tab.popup && this.tabs.get(tab.id) === tab) { try { this.closeTab(tab.id); } catch { /* already closed */ } } });
     return view;
+  }
+
+  /** Turn the WebContents Chromium created for window.open into a tab. It inherits no agent control. */
+  adoptPopup(opener, url, webContents, actor, disposition) {
+    if (!webContents) throw new Error('Popup contents unavailable');
+    const id = this.nextTabId++;
+    const tab = { id, workspaceId: opener.workspaceId, view: null, url: sanitizeUrl(url) || 'about:blank', title: undefined, pinned: false, version: 1,
+      controller: 'available', assistant: null, openerTabId: opener.id, openedBy: actor, groupId: opener.groupId ?? null, lastActiveAt: Date.now(), popup: true };
+    this.tabs.set(id, tab);
+    this.createView(tab, webContents);
+    if (disposition !== 'background-tab' && tab.workspaceId === this.workspaceId) this.activate(id);
+    this.persist();
+    return tab.view.webContents;
   }
 
   closeTab(tabId) {
@@ -678,6 +727,7 @@ export class Browser {
     this.renderingFor.delete(tab);
     this.cancelQueue(tab, 'tab closed');
     this.tabs.delete(tabId);
+    this.permissions.documentChanged(tab, true);
     const contents = tab.view.webContents;
     if (contents && !contents.isDestroyed()) contents.close({ waitForBeforeUnload: false });
     if (!this.closing && !this.suspended && this.activeId === null) {
@@ -1623,6 +1673,25 @@ export class Browser {
     } finally { release(); }
   }
 
+  /** Human-only: open one blocked popup as a new tab, optionally allowing the site's popups from now on (#97). */
+  async allowPopup(args, context) {
+    if (!isHuman(context.actor)) throw failure('permission_required', 'popups.allow requires the trusted browser interface');
+    const tab = this.tab(args.tabId);
+    const entry = (tab.blockedPopups ?? []).find(item => item.id === args.popupId);
+    const target = entry && this.popupTargets?.get(entry.id);
+    if (!entry || !target) throw failure('not_found', 'Blocked popup not found; it may be from before Weft restarted');
+    const site = topOrigin(tab.view.webContents.getURL?.() || tab.url);
+    if (args.always) {
+      if (!site) throw failure('invalid_arguments', 'Popups can be allowed only for http(s) sites');
+      this.permissions.execute('permissions.set', { workspaceId: tab.workspaceId, origin: site, permission: 'popups', decision: 'allow' }, context);
+    }
+    tab.blockedPopups = tab.blockedPopups.filter(item => item !== entry);
+    this.popupTargets.delete(entry.id);
+    const opened = await this.newTab(target, tab.workspaceId, { openerTabId: tab.id, openedBy: 'human' });
+    return { opened, always: args.always, origin: site,
+      notice: 'Opened in a new tab. A popup opened from this list cannot message the page that tried to open it; once popups are allowed for the site, later ones can.' };
+  }
+
   async executeSecurity(name, args, context, workspaceId) {
     const human = ['human', 'admin'].includes(context.actor);
     if (!human && humanOnlyBrowserCommands.has(name)) throw new Error(`${name} requires the trusted browser interface`);
@@ -1666,6 +1735,8 @@ export class Browser {
     if (!human && name === 'page.allowOnce') throw new Error('Site exceptions require the trusted browser interface');
     if (mutatingCommands.has(name)) this.checkControl(this.tab(args.tabId), args, context, name);
     if (/^(storage\.(policy|setSiteMode|setDefaultMode)|threats\.|launches\.|downloads\.configureScanner$|siteRules\.explain$)/.test(name)) return this.executeSecurity(name, args, context, workspaceId);
+    if (name.startsWith('permissions.')) return this.permissions.execute(name, { ...args, workspaceId }, context);
+    if (name === 'popups.allow') return this.allowPopup(args, context);
 
     switch (name) {
       case 'browser.emergencyStop': {
@@ -1779,6 +1850,8 @@ export class Browser {
           }
           await session().clearData?.({ dataTypes: ['cache'], origins: [origin] }).catch(() => {});
         } else await session().clearCache();
+        // Clearing site data also forgets that site's (or the workspace's) permission and popup decisions.
+        this.permissions.forget(workspaceId, origin ?? null);
         return { success: true, workspaceId, origin: origin ?? null, notice: 'Site data cleared. Existing pages may recreate data; reload or close them. Server sessions are not revoked.' };
       }
       case 'cookies.list':
