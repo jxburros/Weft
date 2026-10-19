@@ -162,7 +162,7 @@ if (process.argv.includes('--second-launch')) {
     const port = reservation.address().port;
     await new Promise(resolve => reservation.close(resolve));
     writeFileSync(join(profile, '.keep'), '');
-    const child = launch(['--windows-smoke'], { WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: 'windows-fixture-token' });
+    const child = launch(['--windows-smoke'], { WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: 'windows-fixture-token-0123456789abcdef' });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });
     child.stderr.on('data', chunk => { output += chunk; });

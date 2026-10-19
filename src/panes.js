@@ -12,7 +12,6 @@ export const PANE_LAYOUTS = Object.freeze({
   '3-columns': { panes: 3, label: 'Three columns' },
   '4-grid': { panes: 4, label: 'Four in a grid' },
 });
-export const PANE_TYPES = Object.freeze(['tab', 'artifact', 'material', 'task', 'preview']);
 export const MAX_PANES = 4;
 // Below this size a pane is unusable: the layout collapses (for example 4 → 2) with a notice.
 export const MIN_PANE = Object.freeze({ width: 320, height: 200 });

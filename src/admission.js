@@ -39,7 +39,7 @@ export function resolveCommandTargets(name, input, context, { workspace, browser
   }
   const implicitTab = pageTarget && args.tabId == null;
   if (implicitTab) args.tabId = browser.activeId;
-  let tab = args.tabId != null ? browser.tab(args.tabId) : null;
+  const tab = args.tabId != null ? browser.tab(args.tabId) : null;
   if (!human && implicitTab && tab && isEverything(tab.workspaceId)) fail('The current tab is in Everything; specify tabId to act on it');
   if (Object.hasOwn(fields, 'workspaceId') && args.workspaceId == null && !(human && name === 'workspace.snapshot')) {
     args.workspaceId = tab?.workspaceId ?? workspace.activeWorkspaceId;

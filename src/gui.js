@@ -8,7 +8,7 @@ import { listsUI } from "./gui-lists.js";
 import { chromeUI } from "./gui-chrome.js";
 import { searchUrl } from "./search-engines.js";
 import { siteUI } from "./gui-site.js";
-import { panesUI, PANE_HEADER, PANE_NAMES } from "./gui-panes.js";
+import { panesUI, PANE_NAMES } from "./gui-panes.js";
 import { EVERYTHING_ID } from "./everything.js";
 const $ = (id) => document.getElementById(id);
 // Errors thrown across the preload bridge keep only their message, so the outcome is unwrapped here:
