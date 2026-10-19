@@ -168,7 +168,7 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
       catch (error) { authority.restoreApproval(decision, { command, context, target, error }); throw error; }
     }
     authority.recordAttempt({ command, args, context, target, decision });
-    const scopedWorkspaces = () => workspace.snapshot().workspaces.filter(item => context.workspaceIds.includes(item.id));
+    const scopedWorkspaces = () => structuredClone((workspace.data ?? workspace.snapshot()).workspaces.filter(item => context.workspaceIds.includes(item.id)));
     // Workspace-queued commands mark their own start when dequeued; everything else starts here.
     const queued = Object.hasOwn(workspaceCommands, command) || command.startsWith('handoffs.');
     const start = () => {

@@ -8,6 +8,8 @@ import { acquireProfileLock, storageWarnings, syncDirectory } from './storage-sa
 import { CURRENT_SCHEMA_VERSION, migrateSchema } from './migrations.js';
 import { secretKey, rejectSecretKeys, inspectExportResidue } from './export-safety.js';
 import { MetadataStore, OMITTED_RESULT, RECOVERY_DIR, STORE_FILE, canonicalJson } from './store.js';
+import { trackChanges, untracked } from './change-tracker.js';
+import { serialize } from './helpers.js';
 import { componentPath, sha256 } from './components.js';
 import { cleanupBackupTemporary, createBackup, deleteBackup, listBackups, pruneBackups, recoverInterruptedRestore, restoreBackup, verifyBackup } from './backups.js';
 import { executeHandoffCommand, importHandoffs, recordTakeover } from './handoffs.js';
@@ -25,11 +27,11 @@ import { AutoLockSettings } from './auto-lock.js';
 import { encryptionSchemas } from './encryption-commands.js';
 // Same registered symbol as commands.js PARTIAL_COVERAGE (not imported here to avoid an import cycle).
 const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
-import { applyTransition, appendTimeline, isHumanContext, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
+import { applyTransition, appendTimeline, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();
-const clone = value => structuredClone(value);
+const clone = value => structuredClone(untracked(value));
 const uuid = prefix => `${prefix}_${randomUUID()}`;
 const digest = value => sha256(value);
 const MAX_FILE = 100 * 1024 * 1024;
@@ -235,15 +237,19 @@ export class WorkspaceService {
       setImmediate(() => this.runAutomaticBackup());
     }
   }
-  get data() { if (this.locked) throw lockedError(this.encryption.lockReason ?? 'locked'); return this._data; }
+  /** Workspace state; during a transaction, a change-tracking view of it (#108). */
+  get data() { if (this.locked) throw lockedError(this.encryption.lockReason ?? 'locked'); return this.tracking?.proxy ?? this._data; }
   // Restoring a structuredClone of state must keep component-backed fields.
-  set data(value) { this._data = this.storage ? this.storage.reattach(value) : value; }
+  set data(value) {
+    // Replacing the whole state mid-transaction makes its change hints meaningless: that commit diffs everything.
+    if (this.tracking) { this.tracking.finish(); this.tracking = null; }
+    this._data = this.storage ? this.storage.reattach(untracked(value)) : untracked(value);
+    this.revision = (this.revision ?? 0) + 1;
+  }
   assertUnlocked() { if (this.locked) throw lockedError(this.encryption.lockReason ?? 'locked'); }
   /** Run work after every queued workspace operation, alone. */
   exclusive(work) {
-    const run = this.queue.then(work);
-    this.queue = run.catch(() => {});
-    return run;
+    return serialize(this, work);
   }
   openStorage() {
     const assertOwned = () => this.lock.assertOwned();
@@ -438,7 +444,15 @@ export class WorkspaceService {
   save(options = {}) {
     this.assertUnlocked();
     this.lock.assertOwned();
-    return this.storage.commit(this.data, options);
+    const { hints, ...rest } = options;
+    // Hinted commits (#108) diff only what the transaction touched. A stale tracking view used after its transaction,
+    // and every 64th commit, fall back to a full diff so a change made outside the tracked path is still written.
+    this.hintedCommits = ((this.hintedCommits ?? 0) + 1) % 64;
+    const full = !hints || this.fullDiffNext || this.hintedCommits === 0;
+    const result = this.storage.commit(this._data, full ? rest : { ...rest, hints });
+    if (full) this.fullDiffNext = false;
+    this.revision = (this.revision ?? 0) + 1;
+    return result;
   }
   /**
    * Discard uncommitted in-memory changes by returning to the last committed
@@ -473,7 +487,8 @@ export class WorkspaceService {
     try { this.save({ only: ['browserSession'] }); } catch (error) { this.data.browserSession = before; throw error; }
   }
   snapshot({ agent = false } = {}) {
-    const { learning, ...visible } = this.data;
+    this.assertUnlocked();
+    const { learning, ...visible } = this._data;
     return { ...clone(visible), storageWarnings: clone(this.refreshStorageWarnings()), artifacts: this.data.artifacts.map(item => artifactSummary(item, { agent })), materials: this.data.materials.map(withoutFile) };
   }
   workspace(id = this.activeWorkspaceId) {
@@ -487,7 +502,10 @@ export class WorkspaceService {
    * people, internal models and agents meet the same collection boundary.
    */
   record(collection, id, context = {}, { shared = false } = {}) {
-    const record = this.data[collection]?.find(item => item.id === id);
+    // Search the plain array so only the record found counts as read by change tracking (#108).
+    const list = this.data[collection];
+    const index = untracked(list)?.findIndex(item => item.id === id) ?? -1;
+    const record = index >= 0 ? list[index] : undefined;
     if (!record) throw new Error(`${collection} record not found`);
     if (context.workspaceId && record.workspaceId && record.workspaceId !== context.workspaceId && !(shared && sharedAccess(this.data, collection, record, context.workspaceId))) throw new Error('PERMISSION_REQUIRED: record is outside the authorized workspace');
     return record;
@@ -499,9 +517,7 @@ export class WorkspaceService {
   }
   /** Run a module command inside the mutation queue; it commits atomically or rolls back with its activity. */
   executeModule(work, context = {}) {
-    const run = this.queue.then(() => { context.assertAuthorized?.(); this.assertUnlocked(); this.storage.assertOpen(); return this.transact(work, { context }); });
-    this.queue = run.catch(() => {});
-    return run;
+    return serialize(this, () => { context.assertAuthorized?.(); this.assertUnlocked(); this.storage.assertOpen(); return this.transact(work, { context }); });
   }
   /** Insert a record created by a trusted module path (promotion, merge) with its server-set origin. */
   insertRecord(collection, fields, workspaceId, origin) {
@@ -519,15 +535,13 @@ export class WorkspaceService {
   }
   /** Ordinary activity retention (age/count). Records and artifacts are never removed by retention. */
   pruneActivity({ cutoff = null, maxEntries = null } = {}) {
-    const run = this.queue.then(() => {
+    return serialize(this, () => {
       const before = this.data.activity;
       let kept = cutoff ? before.filter(item => String(item.createdAt) >= cutoff) : before;
       if (maxEntries && kept.length > maxEntries) kept = kept.slice(-maxEntries);
       if (kept.length === before.length) return 0;
       return this.commitChange(() => { this.data.activity = kept; return before.length - kept.length; });
     });
-    this.queue = run.catch(() => {});
-    return run;
   }
   matchSiteRule(value, workspaceId) {
     // While locked, no workspace page may load: fail closed.
@@ -542,7 +556,7 @@ export class WorkspaceService {
   getConversation(id) { return clone(this.record('conversations', id)); }
   appendMessage(id, message) { return this.execute('conversations.message', { id, ...message }); }
   recordTurnManifest(id, manifest) {
-    const run = this.queue.then(() => {
+    return serialize(this, () => {
       rejectSecretKeys(manifest);
       return this.transact(() => {
         const record = this.record('conversations', id);
@@ -553,18 +567,14 @@ export class WorkspaceService {
         this.log('chat.turn', record.workspaceId, id, 'model', JSON.stringify(manifest));
       }).then(() => undefined);
     });
-    this.queue = run.catch(() => {});
-    return run;
   }
 
   executeHandoff(name, args = {}, context = {}) {
-    const run = this.queue.then(() => {
+    return serialize(this, () => {
       if (context.signal?.aborted) throw Object.assign(new Error('The request deadline passed before the command started'), { code: context.signal.reason?.code === 'deadline_exceeded' ? 'deadline_exceeded' : 'cancelled', notStarted: true, details: { started: false, effect: 'not_started' } });
       context.markStarted?.();
       return executeHandoffCommand(this, name, args, context);
     });
-    this.queue = run.catch(() => {});
-    return run;
   }
   /**
    * Create the target of a verified chunked upload (src/transfers.js). Runs the same apply/transact
@@ -572,7 +582,7 @@ export class WorkspaceService {
    * only the per-request JSON size cap, never the stored-content limits.
    */
   commitUpload(name, args, context = {}, requestId) {
-    const run = this.queue.then(() => {
+    return serialize(this, () => {
       context.assertAuthorized?.();
       this.assertUnlocked();
       this.storage.assertOpen();
@@ -584,13 +594,9 @@ export class WorkspaceService {
       const effects = [];
       return this.transact(() => this.apply(name, { ...fields }, context, effects), { context, request, effects });
     });
-    this.queue = run.catch(() => {});
-    return run;
   }
   recordTakeover(details) {
-    const run = this.queue.then(() => recordTakeover(this, details));
-    this.queue = run.catch(() => {});
-    return run;
+    return serialize(this, () => recordTakeover(this, details));
   }
   /** Task transitions committed by the last transaction are reported after commit (activity log, events). */
   flushNotices() {
@@ -606,14 +612,12 @@ export class WorkspaceService {
   }
   /** Runtime-owned change to one task, committed in its own transaction through the mutation queue. */
   mutateTask(id, mutate) {
-    const run = this.queue.then(() => this.transact(() => {
+    return serialize(this, () => this.transact(() => {
       const record = this.record('tasks', id);
       const result = mutate(record, this);
       this.touch(record);
       return result === undefined ? record : result;
     }));
-    this.queue = run.catch(() => {});
-    return run;
   }
   execute(name, args = {}, context = {}) {
     // Search reads and embedding administration wait on local model endpoints; they never hold the write queue.
@@ -622,9 +626,7 @@ export class WorkspaceService {
       return this.learning.execute(name, workspaceSchemas[name].parse(args), context);
     }
     if (name.startsWith('search.')) return this.searchCommand(name, args, context);
-    const run = this.queue.then(() => this.run(name, args, context));
-    this.queue = run.catch(() => {});
-    return run;
+    return serialize(this, () => this.run(name, args, context));
   }
   async run(name, input, context) {
     // A command whose deadline passed while it waited in the queue never starts.
@@ -677,24 +679,35 @@ export class WorkspaceService {
   async transact(work, { context = {}, dryRun = false, request = null, effects = [], checkpoint = null } = {}) {
     let output;
     let released = [];
+    // Note what the change reads and writes so the commit diffs only that (#108). A nested transaction commits in full.
+    const tracker = this.tracking || !this._data ? null : trackChanges(this._data, { onLate: () => { this.fullDiffNext = true; } });
+    if (tracker) this.tracking = tracker;
+    let hints = null;
+    const stop = () => {
+      if (!tracker) return;
+      const found = tracker.finish();
+      if (this.tracking === tracker) { this.tracking = null; hints = found; }
+    };
     try {
       const result = await work();
+      stop();
       context.assertAuthorized?.();
       // A deadline that passed while the change was prepared rolls it back instead of committing late.
       if (context.signal?.aborted && context.signal.reason?.code === 'deadline_exceeded') throw Object.assign(new Error('The request deadline passed before the change committed; nothing was saved'), { code: 'deadline_exceeded', details: { started: true, effect: 'rolled_back' } });
       if (dryRun) {
-        const preview = { dryRun: true, applied: false, result: this.output(result), changes: this.storage.changes(this.data) };
-        this.data = this.storage.revert(this.data);
+        const preview = { dryRun: true, applied: false, result: this.output(result), changes: this.storage.changes(this._data) };
+        this.data = this.storage.revert(this._data, hints);
         this.notices = [];
         return preview;
       }
       output = this.output(result);
-      ({ released } = this.save({ requests: request ? [{ ...request.record, result: output }] : [], deferCollection: effects.length > 0 }));
+      ({ released } = this.save({ requests: request ? [{ ...request.record, result: output }] : [], deferCollection: effects.length > 0, hints }));
     } catch (error) {
+      stop();
       this.notices = [];
       // The profile locked while this change was prepared (ADR 014): nothing is open to revert or commit.
       if (this.locked || !this.storage?.db) throw this.locked ? lockedError(this.encryption.lockReason ?? 'locked') : error;
-      this.data = this.storage.revert(this.data);
+      this.data = this.storage.revert(this._data, hints);
       throw error;
     }
     this.flushNotices();
@@ -768,7 +781,11 @@ export class WorkspaceService {
     }
     if (name === 'bookmarks.list') return this.data.materials.filter(item => item.workspaceId === workspaceId && item.kind === 'website' && item.pinned).map(withoutFile);
     if (name === 'workspace.snapshot') {
+      // A cheap change marker (#109): every commit or state replacement moves it, as does a change in storage warnings.
+      const revision = `${this.revision ?? 0}.${digest(JSON.stringify(this.refreshStorageWarnings())).slice(0, 12)}`;
+      if (args.ifRevision === revision) return { unchanged: true, revision };
       const snapshot = this.snapshot({ agent: isAgent(context) });
+      snapshot.revision = revision;
       if (!context.workspaceId && !args.workspaceId) return snapshot;
       delete snapshot.storageWarnings;
       if (snapshot.siteLists) snapshot.siteLists = snapshot.siteLists.filter(item => item.workspaceId === workspaceId);
@@ -1828,7 +1845,7 @@ export class WorkspaceService {
     });
   }
   runAutomaticBackup() {
-    const run = this.queue.then(() => {
+    return serialize(this, () => {
       if (this.closed || this.locked || !this.backupPolicy.automatic) return;
       try {
         const latest = listBackups(this.directory).find(item => item.kind === 'automatic' && item.status !== 'invalid');
@@ -1843,8 +1860,6 @@ export class WorkspaceService {
         this.onWarning({ code: 'BACKUP_FAILED', message: `Automatic backup failed: ${error.message}` });
       }
     });
-    this.queue = run.catch(() => {});
-    return run;
   }
 
   // ---- Workspace encryption (ADR 014) ------------------------------------------------

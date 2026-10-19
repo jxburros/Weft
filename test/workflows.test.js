@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRuntimeFixture, human } from './fixtures/task-runtime-fixture.mjs';
+import { createRuntimeFixture } from './fixtures/task-runtime-fixture.mjs';
 import { matchUrlPattern, normalizeParameters, substitute } from '../src/task-runtime.js';
 
 function setup(t, options = {}) {

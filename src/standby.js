@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { WATCH_EXECUTOR } from './task-runtime.js';
+import { readCappedBody } from './helpers.js';
 
 // Adapted from AI Server Studio's scheduledInternTurnBlocker (Apache-2.0).
 // Busy, waiting and paused work must not be stacked or implicitly resumed.
@@ -47,10 +48,7 @@ export class Standby {
     try {
       const response = await this.fetch(w.watch.url, { redirect: 'error', credentials: 'omit', signal: controller.signal, headers: { accept: 'text/plain, text/html, application/json, application/rss+xml' } });
       if (!response.ok) { await response.body?.cancel(); throw new Error(`HTTP ${response.status}`); }
-      const reader = response.body.getReader(); const chunks = []; let bytes = 0;
-      try { for (;;) { const { value, done } = await reader.read(); if (done) break; bytes += value.byteLength; if (bytes > 1024 * 1024) throw new Error('Watch response exceeded 1 MiB'); chunks.push(Buffer.from(value)); } }
-      finally { await reader.cancel().catch(() => {}); }
-      const body = Buffer.concat(chunks).toString('utf8');
+      const body = (await readCappedBody(response, 1024 * 1024, { fail: () => new Error('Watch response exceeded 1 MiB') })).toString('utf8');
       const digest = createHash('sha256').update(body).digest('hex');
       const matches = !w.watch.contains || body.includes(w.watch.contains);
       // GWatch's per-trigger cooldown pattern: reserve a firing before dispatch, never on every poll.

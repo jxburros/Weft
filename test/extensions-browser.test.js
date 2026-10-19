@@ -88,8 +88,12 @@ if (smoke) {
       matrix.serverHits = hits.filter(url => /^\/(allowed|blocked|ungranted)/.test(url));
       ok(await dispatch('extensions.disable', { id: installed.id }, human));
       matrix.loadedAfterDisable = session.extensions.getAllExtensions().length;
+      // Wait for the reload itself rather than a fixed 1.5 s (#121); document_idle scripts run by shortly after
+      // load, so a short settle after it is enough to show that none ran.
+      const reloaded = new Promise(resolve => browser.tab(tab.id).view.webContents.once('did-finish-load', resolve));
       browser.tab(tab.id).view.webContents.reload();
-      await sleep(1500);
+      await reloaded;
+      await sleep(300);
       matrix.injectedAfterDisable = await read(tab.id);
       ok(await dispatch('extensions.enable', { id: installed.id }, human));
       browser.tab(tab.id).view.webContents.reload();

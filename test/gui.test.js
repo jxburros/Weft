@@ -108,6 +108,7 @@ if (process.argv.includes("--gui-workflows")) {
     await click('[data-action="edit-workspace"]');
     await fill('memory', 'Remember this across polls');
     await fill('instructions', 'Use concise prose');
+    // A negative check that must span two 1.5 s background polls, so it is time-based by nature: nothing to poll for.
     await new Promise(resolve => setTimeout(resolve, 3400));
     assert.equal(await run('document.getElementById("dialog").open'), true);
     assert.equal(await run('document.querySelector(\'[name="memory"]\').value'), 'Remember this across polls');

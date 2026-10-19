@@ -16,7 +16,17 @@ node node_modules/electron/install.js
 npm start
 ```
 
-The API binds only to `127.0.0.1:9222`. Without `WEFT_TOKEN`, the browser generates
+The API binds only to `127.0.0.1:9222`.
+
+**Port 9222 is also Chrome's conventional DevTools remote-debugging port.** If
+Chrome or a tool that drives it (Puppeteer, Playwright, chrome-devtools MCP servers)
+already uses 9222, Weft cannot start its API there, and such tools may try to talk to
+Weft as if it were Chrome; Weft never speaks the DevTools protocol and refuses those
+requests without a token. Set `WEFT_PORT` (and the same port in `WEFT_API_URL`) to
+use another port, for example `WEFT_PORT=9333`. The API is IPv4-only: the CLI and
+MCP bridge connect `localhost` to `127.0.0.1` and refuse `[::1]`.
+
+Without `WEFT_TOKEN`, the browser generates
 a random token and prints it to the local terminal; set `WEFT_TOKEN_FILE` to a path
 instead and the generated token is written there (owner-only) rather than printed,
 which keeps it out of service-manager logs. The CLI and MCP bridge read the same
@@ -162,7 +172,8 @@ endpoint; local connection failures never silently select a cloud provider.
 Text, explicit project context, and enabled read-only tool results may be sent.
 Read-only tools require both an enabled model profile and the message's explicit
 opt-in. They are limited to the selected tab and conversation workspace, allow
-at most five calls, and cannot click, fill forms, change policies, or execute
+at most five calls per turn (twenty, shared with app tools, when app tools are
+on), and cannot click, fill forms, change policies, or execute
 arbitrary code. Tool results retain their source and are expandable in chat.
 
 Replies stream as they are written. **Attach** adds a tab snapshot, materials,

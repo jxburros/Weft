@@ -29,7 +29,7 @@ export function pngSize(base64) {
   return bytes.length >= 24 ? { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) } : null;
 }
 
-/* eslint-disable no-undef -- executed inside the page's isolated world. */
+ 
 function weftObservation(op, args) {
   const state = globalThis.__weftObservation ??= { next: 1, nextFrame: 1, refs: new Map(), ids: new WeakMap(), frames: new WeakMap() };
   const nameLimit = 200;
@@ -204,7 +204,8 @@ function weftObservation(op, args) {
     if (!el) return { ok: false, reason: 'not_found' };
   }
   if (op === 'box') {
-    let rect = el.getBoundingClientRect(), x = rect.x, y = rect.y;
+    const rect = el.getBoundingClientRect();
+    let x = rect.x, y = rect.y;
     for (let frame = el.ownerDocument.defaultView?.frameElement; frame; frame = frame.ownerDocument.defaultView?.frameElement) {
       const frameRect = frame.getBoundingClientRect(); x += frameRect.x + frame.clientLeft; y += frameRect.y + frame.clientTop;
     }
@@ -234,7 +235,7 @@ function weftObservation(op, args) {
   if (op === 'focus') { el.focus?.(); return { ok: true }; }
   return { ok: false, reason: 'unsupported' };
 }
-/* eslint-enable no-undef */
+ 
 
 export function observationScript(op, args = {}) {
   return `(${weftObservation.toString()})(${JSON.stringify(op)}, ${JSON.stringify(args)})`;
@@ -243,7 +244,7 @@ export function observationScript(op, args = {}) {
 /** Sensitive-focus probe for image observation routes. */
 export const SENSITIVE_FOCUS_SCRIPT = `(() => { const el = document.activeElement; return !!el && el.matches?.(${JSON.stringify(SENSITIVE_FIELD_CSS)}); })()`;
 
-/* eslint-disable no-undef -- executed inside a page frame (isolated world for the top frame). */
+ 
 /**
  * Login-form probe and protected credential fill (ADR-017). `probe` and the
  * residue checks never see secret values. `fill` receives one secret for one
@@ -392,13 +393,13 @@ async function weftCredential(op, args) {
   }
   return { ok: true, filled, submitted };
 }
-/* eslint-enable no-undef */
+ 
 
 export function credentialScript(op, args = {}) {
   return `(${weftCredential.toString()})(${JSON.stringify(op)}, ${JSON.stringify(args)})`;
 }
 
-/* eslint-disable no-undef -- executed in the checkout frame (isolated world for the top frame). */
+ 
 function weftPayment(op, args) {
   const clean = (value, limit = 300) => String(value ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim().slice(0, limit);
   const visible = el => el.isConnected && el.getClientRects().length > 0
@@ -454,7 +455,7 @@ function weftPayment(op, args) {
   }
   return { ok: false, reason: 'unsupported' };
 }
-/* eslint-enable no-undef */
+ 
 
 export function paymentScript(op, args = {}) {
   return `(${weftPayment.toString()})(${JSON.stringify(op)}, ${JSON.stringify(args)})`;

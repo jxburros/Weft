@@ -1,5 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, rmSync } from 'node:fs';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID, scryptSync } from 'node:crypto';
+import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { writeJsonDurable } from './atomic-json.js';
@@ -53,7 +53,6 @@ export function open(key, sealed, aad) {
   } catch { return null; }
 }
 const hkdf = (key, info) => Buffer.from(hkdfSync('sha256', key, Buffer.alloc(0), Buffer.from(info), 32));
-export const isSealed = value => typeof value === 'string' && value.startsWith(SEALED_PREFIX);
 
 // ---- Recovery keys and KDF -------------------------------------------------------------
 function base32(bytes) {
@@ -159,7 +158,6 @@ export function readKeyring(directory) {
 }
 export function writeKeyring(directory, keyring) { writeJsonDurable(join(directory, KEYRING_FILE), keyringSchema.parse(keyring)); }
 export function removeKeyring(directory) { rmSync(join(directory, KEYRING_FILE), { force: true }); }
-export const keyringExists = directory => existsSync(join(directory, KEYRING_FILE));
 
 function wrapSecret(profileId, kind, profileKey, secret, params, clock) {
   const salt = randomBytes(16);
@@ -365,4 +363,3 @@ export function checkRecoveryKey(keyring, recoveryKey) {
   wipe(key);
   return true;
 }
-export const sameKey = (a, b) => Buffer.isBuffer(a) && Buffer.isBuffer(b) && a.length === b.length && timingSafeEqual(a, b);

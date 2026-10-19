@@ -136,7 +136,7 @@ export function installChecks() {
       if (document.documentElement.scrollWidth > innerWidth + 1) problems.push(`document overflows horizontally: ${document.documentElement.scrollWidth} > ${innerWidth}`);
       // Only the part of a control that its scroll containers actually show can overlap anything.
       const shown = (el) => {
-        let r = el.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
         let box = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
         for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
           const s = getComputedStyle(n);

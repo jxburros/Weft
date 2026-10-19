@@ -3,6 +3,7 @@ import { createReadStream, mkdirSync, readFileSync } from 'node:fs';
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
+import { typedError } from './helpers.js';
 
 /**
  * Permission-scoped linked files/folders and refreshable service references (#22).
@@ -23,9 +24,7 @@ const FOLDER_LIMIT = { entries: 5000, depth: 8 };
 const SEARCH_LIMIT = { entries: 5000, depth: 3 };
 const SERVICE_LIMIT = 2 * 1024 * 1024;
 const SERVICE_TIMEOUT = 15000;
-export const LINK_STATUSES = Object.freeze(['available', 'changed', 'moved', 'missing', 'inaccessible', 'unlinked']);
-export const SERVICE_AUTHORIZATION = Object.freeze(['none', 'authorized', 'unauthorized', 'revoked']);
-const fail = (code, message) => Object.assign(new Error(message), { code });
+const fail = typedError;
 
 async function hashFile(path, limit = HASH_LIMIT) {
   const info = await stat(path);
@@ -236,7 +235,6 @@ export const serviceAdapters = Object.freeze({ http: httpAdapter });
  * Optional integrations evaluated in ADR-013 (ByAuthorX, Vixl, AI Server Studio, QAI-ality) are not built in:
  * ordinary files and documented HTTP APIs work without them. A future adapter implements the same contract.
  */
-export const EVALUATED_ADAPTERS = Object.freeze(['byauthorx', 'vixl', 'ai-server-studio', 'qai-ality']);
 
 export async function fetchService(service, { credential, fetchImpl, timeout = SERVICE_TIMEOUT, signal = null } = {}) {
   const adapter = serviceAdapters[service.adapter];

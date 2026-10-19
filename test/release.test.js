@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderInstallerArt } from '../scripts/generate-installer-art.js';
 import { changelogSection, releaseMetadata } from '../scripts/release/metadata.js';
@@ -126,9 +126,63 @@ test('packaging policy: per-user assisted installer, data kept, stable GitHub ch
   assert.equal(config.win.signtoolOptions, undefined);
   assert.equal(config.mac.notarize, false);
   assert.ok(!config.files.some(pattern => /^(test|docs|evals|perf|scripts)\b/.test(pattern)), 'tests and docs are not shipped');
+  // Electron fuses (#117): no NODE_OPTIONS or inspector flags, app code only from a verified asar.
+  assert.deepEqual(config.electronFuses, { ...require('../scripts/release/fuses.cjs'), resetAdHocDarwinSignature: true });
+  assert.deepEqual([config.electronFuses.enableNodeOptionsEnvironmentVariable, config.electronFuses.enableNodeCliInspectArguments, config.electronFuses.onlyLoadAppFromAsar, config.electronFuses.enableEmbeddedAsarIntegrityValidation], [false, false, true, true]);
+  assert.equal(config.electronFuses.runAsNode, true, 'the plugin sandbox and credential broker still run the binary as Node (docs/RELEASING.md)');
   const signed = load({ AZURE_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net', AZURE_SIGNING_ACCOUNT: 'weft', AZURE_SIGNING_PROFILE: 'release', WEFT_WINDOWS_PUBLISHER: 'Weft Contributors', APPLE_API_KEY: '/k.p8', APPLE_API_KEY_ID: 'id', APPLE_API_ISSUER: 'issuer' });
   assert.equal(signed.win.azureSignOptions.publisherName, 'Weft Contributors');
   assert.equal(signed.mac.notarize, true);
+});
+
+test('packaged builds ship only the runtime packages that shipped code imports (#126)', () => {
+  const config = require('../electron-builder.config.cjs');
+  const shipped = ['zod'];
+  assert.ok(config.files.includes('!**/node_modules/**/*'));
+  for (const name of shipped) assert.ok(config.files.includes(`**/node_modules/${name}/**/*`), name);
+  const imports = new Map();
+  const walk = directory => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) { walk(path); continue; }
+      if (!/\.[cm]?js$/.test(entry.name)) continue;
+      for (const [, specifier] of readFileSync(path, 'utf8').matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([@a-z0-9][\w@./-]*)['"]/g)) {
+        if (!specifier.startsWith('node:')) imports.set(specifier, [...(imports.get(specifier) ?? []), relative(root, path).replaceAll('\\', '/')]);
+      }
+    }
+  };
+  walk(join(root, 'src'));
+  for (const [specifier, files] of imports) {
+    const name = specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0];
+    if (name === 'electron' || shipped.includes(name)) continue;
+    // The MCP bridge is reached only through bin/weft.js, which is not packaged.
+    assert.equal(name, '@modelcontextprotocol/sdk', `${name} is imported by ${files.join(', ')} but excluded from packaged builds`);
+    assert.deepEqual([...new Set(files)], ['src/mcp.js']);
+  }
+  assert.ok(!config.files.some(pattern => pattern.startsWith('bin')), 'bin/ (the CLI and MCP bridge) is not packaged');
+});
+
+test('the release label and the packaging config make one signing decision (#123)', () => {
+  const { signingDecision, azureSigning } = require('../scripts/release/signing.cjs');
+  const azure = { AZURE_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net', AZURE_SIGNING_ACCOUNT: 'weft', AZURE_SIGNING_PROFILE: 'release', WEFT_WINDOWS_PUBLISHER: 'Weft Contributors' };
+  assert.equal(signingDecision('windows-x64', azure), true);
+  // A partial Azure configuration builds unsigned, so it must also be labelled unsigned.
+  for (const missing of Object.keys(azure)) {
+    const partial = { ...azure, [missing]: '' };
+    assert.equal(azureSigning(partial), false, missing);
+    assert.equal(signingDecision('windows-x64', partial), false, missing);
+  }
+  assert.equal(signingDecision('windows-x64', { WIN_CSC_LINK: 'base64-pfx' }), true);
+  const mac = { MAC_CSC_LINK: 'base64-p12', APPLE_API_KEY_P8: 'key', APPLE_API_KEY_ID: 'id', APPLE_API_ISSUER: 'issuer' };
+  assert.equal(signingDecision('macos', mac), true);
+  for (const missing of Object.keys(mac)) assert.equal(signingDecision('macos', { ...mac, [missing]: '' }), false, missing);
+  assert.equal(signingDecision('linux-x64', { ...azure, ...mac }), false);
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  assert.match(workflow, /node scripts\/release\/signing\.cjs/, 'the release workflow labels builds with the shared decision');
+  for (const file of ['ci.yml', 'release.yml']) {
+    const text = readFileSync(join(root, '.github/workflows', file), 'utf8');
+    for (const [, ref] of text.matchAll(/(?<!\w)uses:\s*([^\s#]+)/g)) assert.match(ref, /@[0-9a-f]{40}$/, `${file}: ${ref} is pinned by commit SHA`);
+  }
 });
 
 test('the profile folder the uninstaller may remove is the one packaged Weft uses', () => {

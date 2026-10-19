@@ -82,7 +82,8 @@ node node_modules/electron/install.js
 npm start
 ```
 
-The control API listens only on `127.0.0.1:9222`. Weft prints a random access
+The control API listens only on `127.0.0.1:9222` (Chrome's usual DevTools port;
+set `WEFT_PORT` if something else uses it, see [Using Weft](docs/USING-WEFT.md)). Weft prints a random access
 token to the terminal at startup, or you can set your own with `WEFT_TOKEN`. Use
 `npm start -- --user-data-dir=/absolute/path` for a separate profile, and see
 [Using Weft](docs/USING-WEFT.md) for headless mode, installers, updates,

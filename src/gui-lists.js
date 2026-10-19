@@ -18,9 +18,8 @@ const groupText = { "private-group": "Private group", public: "Public list" };
 const checkText = { "update-available": "Update available (not applied)", unchanged: "No new release", rejected: "Release rejected", error: "Could not reach the source" };
 
 export function listsUI(ui) {
-  const { esc, action, heading, empty, openDialog, formDialog, closeDialog, field, area, choice, execute, toast, errorMessage, ws } = ui;
+  const { esc, action, heading, empty, formDialog, field, area, choice, execute, toast, errorMessage, ws } = ui;
   const when = (value) => (value ? new Date(value).toLocaleString() : "never");
-  const lines = (value) => String(value || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const readFile = async (input) => (input?.files?.[0] ? await input.files[0].text() : "");
 
   function view() {

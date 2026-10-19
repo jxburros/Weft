@@ -14,6 +14,10 @@ export function createClient({
       || base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
     throw new Error('WEFT_API_URL must be a loopback HTTP origin');
   }
+  // The server listens only on 127.0.0.1 (#126): `localhost` may resolve to ::1 first, so it is
+  // pinned to IPv4 loopback, and an IPv6 address is refused with the reason instead of failing to connect.
+  if (base.hostname === '[::1]') throw new Error('WEFT_API_URL: Weft listens only on 127.0.0.1, not on IPv6 [::1]; use http://127.0.0.1:<port>');
+  if (base.hostname === 'localhost') base.hostname = '127.0.0.1';
   if (!token?.trim()) throw new Error('Set WEFT_TOKEN (or WEFT_TOKEN_FILE) to the browser API token');
   async function request(path, body, allowOutcome = false, { deadlineMs } = {}) {
     const response = await fetch(new URL(path, base), {

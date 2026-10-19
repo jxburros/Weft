@@ -5,7 +5,7 @@
  * changes, as a CSS selector, an accessible label and a sensitivity hint.
  * Field values are never read.
  */
-/* eslint-disable no-undef */
+ 
 function weftRecorder(nonce) {
   if (window.__weftRecorderNonce === nonce) return true;
   window.__weftRecorderNonce = nonce;
@@ -48,6 +48,6 @@ function weftRecorder(nonce) {
   }, true);
   return true;
 }
-/* eslint-enable no-undef */
+ 
 export const RECORDING_WORLD = 1207;
 export const recordingScript = nonce => `(${weftRecorder.toString()})(${JSON.stringify(nonce)})`;

@@ -1,7 +1,11 @@
 # Validation and supported test coverage
 
 `npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
-once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
+once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript,
+fails on exports nothing in the repository uses (`scripts/unused-exports.mjs`) and runs ESLint with
+the small rule set in `eslint.config.js` (`npm run lint` runs ESLint alone): unused variables, empty
+blocks without a comment, unreachable code, `==` other than against `null`, and `let` that is never
+reassigned. `no-shadow` is deliberately not enabled (see the comment in the config).
 `npm run test:unit` runs non-GUI tests with a three-minute per-file cap (multiplied, like
 every explicit per-test timeout, by `WEFT_TEST_TIME_SCALE`; CI sets 4 on Windows, whose synced
 disk writes are several times slower) and
@@ -24,6 +28,10 @@ leaked handle shows up before Windows CI. Crash tests accept Windows termination
 `SIGKILL`; AppImage replacement tests run only off Windows, and the open-database
 replacement scenario asserts that Windows refuses the replacement instead.
 
+`npm test` runs exactly the files matching `test/**/*.test.js`; helpers and
+fixtures under `test/` and `scripts/test-unit.mjs` are never collected as tests
+(#122), so a new helper with top-level side effects cannot run by accident.
+
 The separate Linux Chromium job runs **all** tests under `xvfb-run -a npm test`,
 including native browser isolation and GUI workflows, then compares the GUI
 goldens (`WEFT_VISUAL=1`; `test/visual.test.js` skips without it; see
@@ -34,7 +42,9 @@ Weft startup retains Chromium sandboxing. Fixture tokens are disposable local-on
 values; CI has read-only repository permissions and uses no production secrets.
 
 `npm run test:docs`, `npm run evals`, and `npm run test:perf` exercise published
-examples, scripted MCP tasks, and generous local performance budgets respectively.
+examples, scripted MCP tasks, and local performance budgets respectively. CI runs
+`test:perf` on the Linux unit job and an `npm audit --omit=dev --audit-level=high` job
+on every pull request; workflow actions are pinned by commit SHA.
 Performance budgets are regression thresholds, not a throughput guarantee.
 
 Hostile-input tests use fixed random seeds, compare record operations against a

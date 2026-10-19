@@ -146,7 +146,7 @@ test('an interrupted plaintext rebuild resumes from its saved position after a r
 test('an encrypted profile rebuilds its in-memory index in the background after unlock', { timeout: budget(120000) }, async t => {
   const directory = profile(t);
   const keyProtector = createKeyProtector({ safeStorage: fakeSafeStorage(), platform: 'linux' });
-  let service = new WorkspaceService({ directory, onWarning() {}, keyProtector, encryption: { kdf: kdfParams } });
+  const service = new WorkspaceService({ directory, onWarning() {}, keyProtector, encryption: { kdf: kdfParams } });
   await seed(service, RECORDS);
   await service.executeEncryption('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' }, human);
   await service.indexingIdle();

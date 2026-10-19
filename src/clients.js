@@ -142,7 +142,7 @@ export class ClientGrants {
     for (const workspaceId of fields.workspaceIds) this.workspace.workspace(workspaceId);
     if (new Set(fields.workspaceIds).size > 1 && !fields.crossWorkspace) throw Object.assign(new Error('Granting more than one workspace requires an explicit cross-workspace grant (crossWorkspace: true)'), { code: 'invalid_arguments' });
     if (fields.taskId) {
-      const task = this.workspace.snapshot?.().tasks?.find(item => item.id === fields.taskId);
+      const task = (this.workspace.data ?? this.workspace.snapshot?.())?.tasks?.find(item => item.id === fields.taskId);
       if (!task || !fields.workspaceIds.includes(task.workspaceId)) throw Object.assign(new Error('Task-bound grants require a task inside a granted workspace'), { code: 'invalid_arguments' });
     }
   }

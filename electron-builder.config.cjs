@@ -2,8 +2,11 @@
 // signing setup. Signing is enabled only when the corresponding secrets are present;
 // otherwise the release workflow produces builds labelled "unsigned".
 const env = process.env;
-const azure = env.AZURE_SIGNING_ENDPOINT && env.AZURE_SIGNING_ACCOUNT && env.AZURE_SIGNING_PROFILE && env.WEFT_WINDOWS_PUBLISHER;
+// The release workflow labels builds from the same conditions (scripts/release/signing.cjs).
+const { azureSigning, macNotarization } = require('./scripts/release/signing.cjs');
+const azure = azureSigning(env);
 const icon = 'assets/logo/icons/app-icon-plum-1024.png';
+const fuses = require('./scripts/release/fuses.cjs');
 
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
@@ -19,8 +22,15 @@ module.exports = {
     'assets/logo/icons/favicon.ico', 'assets/logo/icons/app-icon-plum-512.png',
     'assets/logo/dark/mark-dark.svg', 'assets/logo/dark/horizontal-dark.svg',
     'assets/graphics/motion/**/*',
+    // The MCP bridge runs only from a source checkout (`node bin/weft.js mcp`), and bin/ is not packaged, so
+    // the MCP SDK and the HTTP transports it depends on (express, hono, cors, jose, ...) are unreachable in
+    // the app. Only zod is used at runtime (#126); test/release.test.js checks this list against src imports.
+    '!**/node_modules/**/*', '**/node_modules/zod/**/*',
   ],
   asar: true,
+  // No NODE_OPTIONS, no --inspect, app code only from a verified app.asar (#117). Checked by
+  // scripts/release/check-fuses.js; the ad-hoc signature is redone for unsigned macOS builds.
+  electronFuses: { ...fuses, resetAdHocDarwinSignature: true },
   // Stable channel only. The updater ignores this provider's URLs and uses the fixed
   // repository in src/updater.js; this entry only makes electron-builder emit latest*.yml.
   publish: [{ provider: 'github', owner: 'jxburros', repo: 'Weft', releaseType: 'draft', channel: 'latest' }],
@@ -58,7 +68,7 @@ module.exports = {
     hardenedRuntime: true,
     gatekeeperAssess: false,
     // Notarization runs only when Apple credentials are present in the environment.
-    notarize: Boolean(env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER),
+    notarize: macNotarization(env),
   },
   linux: {
     target: [{ target: 'AppImage', arch: ['x64'] }, { target: 'deb', arch: ['x64'] }],

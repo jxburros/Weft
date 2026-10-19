@@ -9,6 +9,7 @@ import { ADAPTERS, buildRequest, requestHeaders, readStreamedReply, parseJsonRep
 import { IMAGE_LIMITS, boundImage, imageTokenEstimate, regionSummary } from './model-media.js';
 import { reportedCapabilities } from './provider-presets.js';
 import { TurnRelay } from './turn-relay.js';
+import { readCappedBody } from './helpers.js';
 
 const INITIAL_PROFILES = [
   { id: 'openai', name: 'OpenAI', provider: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', apiKeyEnv: 'OPENAI_API_KEY' },
@@ -259,39 +260,13 @@ export class Providers {
 
   async responseJSON(response) {
     if (!response.ok) {
-      let detail = '';
-      if (response.body) {
-        const reader = response.body.getReader();
-        const chunks = [];
-        let bytes = 0;
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const chunk = Buffer.from(value).subarray(0, Math.max(0, 32768 - bytes));
-            chunks.push(chunk); bytes += chunk.length;
-            if (bytes >= 32768) break;
-          }
-          detail = Buffer.concat(chunks).toString('utf8');
-        } finally { await reader.cancel().catch(() => {}); }
-      }
+      const detail = (await readCappedBody(response, 32768, { truncate: true })).toString('utf8');
       throw new Error(formatProviderError(detail, response.status));
     }
     if (!response.body) throw new Error('Model endpoint returned an empty response');
-    const reader = response.body.getReader();
-    const chunks = [];
-    let bytes = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        bytes += value.byteLength;
-        if (bytes > 2 * 1024 * 1024) throw new Error('Model response exceeded the 2 MB limit');
-        chunks.push(Buffer.from(value));
-      }
-      try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-      catch { throw new Error('Model endpoint did not return valid JSON'); }
-    } finally { await reader.cancel().catch(() => {}); }
+    const body = await readCappedBody(response, 2 * 1024 * 1024, { fail: () => new Error('Model response exceeded the 2 MB limit') });
+    try { return JSON.parse(body.toString('utf8')); }
+    catch { throw new Error('Model endpoint did not return valid JSON'); }
   }
 
   async discover(args) {

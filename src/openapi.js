@@ -22,7 +22,7 @@ export function createOpenApiDocument(catalog = commands) {
   }]));
   return {
     openapi: '3.1.0',
-    info: { title: 'Weft local browser API', version: WEFT_VERSION, description: 'Authenticated loopback control plane. The token grants broad local automation access; human-only operations remain unavailable. Browser-origin requests are rejected. No remote TLS service or per-client scopes are provided.' },
+    info: { title: 'Weft local browser API', version: WEFT_VERSION, description: 'Authenticated loopback control plane on 127.0.0.1 only. The bootstrap token grants broad local automation access; scoped client tokens (clients.create) are limited to their granted workspaces, scopes, data classes and expiry. Human-only operations remain unavailable to every token. Browser-origin requests are rejected. No remote or TLS listener is provided.' },
     servers: [{ url: 'http://127.0.0.1:9222', description: 'Default; WEFT_PORT may change the port' }],
     security: [{ localBearer: [] }],
     paths: {

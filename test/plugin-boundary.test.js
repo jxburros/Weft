@@ -17,7 +17,7 @@ const KNOWN_COUPLINGS = [
 // The one door from core into the plugin layer.
 const BOUNDARY = new Set(['src/plugins/registry.js']);
 // Plugin infrastructure may use pure core helpers, never services or the catalog.
-const INFRA_MAY_IMPORT = new Set(['src/autonomy.js', 'src/storage-safety.js']);
+const INFRA_MAY_IMPORT = new Set(['src/autonomy.js', 'src/storage-safety.js', 'src/helpers.js']);
 const LOADER = /\b(?:createRequire|require\s*\(|import\s*\(|new\s+Function\b|eval\s*\()|['"]node:vm['"]/;
 
 export function importsOf(source) {

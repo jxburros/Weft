@@ -9,6 +9,7 @@ async function capture(fixture, bytes = png(), extra = {}) {
   const artifact = await fixture.workspace.execute('artifacts.create', { title: 'Checkout page', text: 'Order total 42', pngBase64: bytes.toString('base64'), url: 'https://shop.example/checkout' });
   const versionId = fixture.workspace.data.artifacts.find(item => item.id === artifact.id).versions.at(-1).id;
   Object.assign(fixture.workspace.data.artifacts.find(item => item.id === artifact.id).versions.at(-1), extra);
+  fixture.workspace.save();
   return { id: artifact.id, versionId, image: `artifact:${artifact.id}:${versionId}:image`, text: `artifact:${artifact.id}:${versionId}:text` };
 }
 const outcomeOf = (fixture, args) => executeOutcome((name, input) => fixture.providers.execute(name, input, { actor: 'human', source: 'gui' }), 'chat.send', { conversationId: fixture.conversation.id, text: 'What does the screenshot show?', ...args });

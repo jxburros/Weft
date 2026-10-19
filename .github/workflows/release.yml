@@ -26,8 +26,8 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -52,9 +52,11 @@ jobs:
       - run: npm run evals
       - name: Supply-chain audit of shipped runtime dependencies
         run: npm audit --omit=dev --audit-level=high
+      - name: Performance budgets
+        run: npm run test:perf
       - name: Full suite with real Chromium
         run: xvfb-run -a npm test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: release-notes
           path: release-notes.md
@@ -70,16 +72,19 @@ jobs:
             os: windows-latest
             builder: --win nsis --x64
             smoke: dist/win-unpacked/Weft.exe
+            fuses: dist/win-unpacked/Weft.exe
             kind: nsis
           - name: macos
             os: macos-latest
             builder: --mac dmg zip --arm64 --x64
             smoke: dist/mac-arm64/Weft.app/Contents/MacOS/Weft
+            fuses: dist/mac-arm64/Weft.app/Contents/MacOS/Weft dist/mac/Weft.app/Contents/MacOS/Weft
             kind: dmg
           - name: linux-x64
             os: ubuntu-latest
             builder: --linux AppImage deb --x64
             smoke: dist/Weft-${{ needs.verify.outputs.version }}-x86_64.AppImage
+            fuses: dist/linux-unpacked/weft
             kind: appimage
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -88,8 +93,8 @@ jobs:
       # packaging: the verify job runs the same suite as CI, which asserts the source-run update state.
       WEFT_DISABLE_UPDATES: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -97,19 +102,20 @@ jobs:
       - name: Decide signing from available secrets
         id: signing
         shell: bash
+        # The same conditions electron-builder.config.cjs uses to enable signing (scripts/release/signing.cjs).
+        # Linux packages are never signed; they are verified by SHA-512 manifests and SHA256SUMS.txt only.
         env:
           AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ secrets.AZURE_SIGNING_PROFILE }}
+          WEFT_WINDOWS_PUBLISHER: ${{ secrets.WEFT_WINDOWS_PUBLISHER }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
-          signed=false
-          case "${{ matrix.name }}" in
-            windows-*) [[ -n "$AZURE_SIGNING_ENDPOINT" && -n "$AZURE_CLIENT_ID" || -n "$WIN_CSC_LINK" ]] && signed=true ;;
-            macos) [[ -n "$MAC_CSC_LINK" && -n "$APPLE_API_KEY_P8" ]] && signed=true ;;
-            linux-*) signed=false ;; # Linux packages are verified by SHA-512 manifests and SHA256SUMS.txt only.
-          esac
+          signed=$(node scripts/release/signing.cjs "${{ matrix.name }}")
           echo "signed=$signed" >> "$GITHUB_OUTPUT"
           if [[ "$signed" == true ]]; then echo "${{ matrix.name }}: signed" > "signing-${{ matrix.name }}.txt"; else echo "${{ matrix.name }}: UNSIGNED (no signing credentials configured)" > "signing-${{ matrix.name }}.txt"; fi
           cat "signing-${{ matrix.name }}.txt"
@@ -145,6 +151,9 @@ jobs:
       - name: Verify update manifests and checksums
         shell: bash
         run: node scripts/release/verify-assets.js dist "${{ needs.verify.outputs.version }}"
+      - name: Verify Electron fuses
+        shell: bash
+        run: for executable in ${{ matrix.fuses }}; do node scripts/release/check-fuses.js "$executable"; done
       - name: Verify Windows Authenticode signatures
         if: matrix.name == 'windows-x64' && steps.signing.outputs.signed == 'true'
         shell: pwsh
@@ -189,7 +198,7 @@ jobs:
           cp dist/*.exe dist/*.blockmap dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb dist/latest*.yml "signing-${{ matrix.name }}.txt" release-assets/
           ls -l release-assets
           compgen -G 'release-assets/latest*.yml' > /dev/null || { echo "::error::No latest*.yml staged"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: weft-${{ matrix.name }}
           if-no-files-found: error
@@ -209,19 +218,19 @@ jobs:
       VERSION: ${{ needs.verify.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
       - name: Install verification dependencies only
         run: npm ci --ignore-scripts --omit=dev
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: weft-*
           path: release
           merge-multiple: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: release-notes
       - name: Verify manifests and write SHA256SUMS.txt
@@ -248,6 +257,9 @@ jobs:
             sed 's/^/- /' release/signing-*.txt
             if grep -q '^windows-x64: UNSIGNED' release/signing-*.txt; then
               echo "- The Windows installer is not code-signed, so Microsoft Defender SmartScreen may show \"Windows protected your PC\". Check \`Weft-Setup-$VERSION-x64.exe\` against SHA256SUMS.txt (\`Get-FileHash -Algorithm SHA256\`), then choose **More info** > **Run anyway**."
+            fi
+            if grep -q '^macos: UNSIGNED' release/signing-*.txt; then
+              echo "- The macOS app is not signed or notarized, so Gatekeeper refuses to open it on first launch (\"Apple could not verify Weft is free of malware\"). Check the \`.dmg\` or \`.zip\` against SHA256SUMS.txt (\`shasum -a 256\`), drag Weft to Applications and try to open it once, then open **System Settings** > **Privacy & Security** and choose **Open Anyway** (on macOS 14 and earlier you can instead Control-click Weft, choose **Open**, then **Open** again)."
             fi
             echo "- Every asset is listed in SHA256SUMS.txt$( [[ -f release/SHA256SUMS.txt.asc ]] && echo ' (GPG-signed: SHA256SUMS.txt.asc)')."
             echo "- In-app updates verify size and SHA-512 from latest*.yml and only accept stable releases from this repository."
