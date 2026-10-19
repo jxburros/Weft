@@ -259,6 +259,12 @@ test('download safety classifies risky files, records OS origin metadata and rep
   assert.deepEqual(fileCategory('run.PS1'), { category: 'script', risky: true });
   assert.deepEqual(fileCategory('bundle.tar.gz'), { category: 'archive', risky: true });
   assert.equal(fileCategory('notes.pdf').risky, false);
+  // Windows file types that can run code (#116): each must carry the "can run code" warning.
+  const windowsCodeTypes = { 'help.chm': 'executable', 'console.msc': 'executable', 'addin.xll': 'executable', 'launch.jnlp': 'executable', 'app.appref-ms': 'executable',
+    'patch.msp': 'installer', 'transform.mst': 'installer', 'component.wsc': 'script', 'scriptlet.sct': 'script', 'types.ps1xml': 'script', 'folder.library-ms': 'script',
+    'shortcut.settingcontent-ms': 'script', 'query.iqy': 'script', 'sheet.slk': 'script', 'UPPER.CHM': 'executable' };
+  for (const [name, category] of Object.entries(windowsCodeTypes)) assert.deepEqual(fileCategory(name), { category, risky: true }, name);
+  assert.equal(fileCategory('notes.mst.txt').risky, false, 'only the final extension counts');
   const writes = [];
   const windows = await applyOriginMetadata('C:\\Downloads\\a.exe', { url: 'https://user:pw@files.test/a.exe?token=secret#x', referrer: 'https://page.test/' }, { platform: 'win32', writeFileImpl: (path, value) => writes.push([path, value]) });
   assert.equal(windows.status, 'applied');
