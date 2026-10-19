@@ -329,7 +329,18 @@ export class Knowledge {
       if (action === 'update') {
         if (args.changes.title) record.title = args.changes.title;
         if (args.changes.autoRefresh !== undefined) service.autoRefresh = args.changes.autoRefresh;
-        if (args.changes.url) { service.url = validateServiceUrl(args.changes.url); if (service.credentialState === 'stored') service.access = 'unknown'; }
+        if (args.changes.url) {
+          const next = validateServiceUrl(args.changes.url);
+          // A stored credential is scoped to its origin: a new host must never receive it (#115). Store it again for the new host.
+          if (service.credentialState === 'stored' && new URL(next).origin !== new URL(service.url).origin) {
+            this.credentials.delete(record.id);
+            Object.assign(service, { credentialState: 'none', access: 'none' });
+            delete service.credentialHeader;
+            delete service.credentialSetAt;
+            service.credentialClearedAt = now();
+          } else if (service.credentialState === 'stored') service.access = 'unknown';
+          service.url = next;
+        }
       } else if (action === 'setCredential') {
         this.credentials.set(record.id, args.header, args.secretValue);
         Object.assign(service, { credentialState: 'stored', credentialHeader: args.header, access: 'unknown', credentialSetAt: now() });

@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
+import { writeJsonDurable } from './atomic-json.js';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -52,12 +53,34 @@ export function capRetrieved(items, budgetTokens, wrap = kept => kept) {
 }
 const digest = value => createHash('sha256').update(value).digest('hex');
 
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+/** Loopback, private-network (RFC 1918, link-local, IPv6 ULA/link-local) and mDNS `.local` hosts. Only literal addresses count; `10.example.com` is a public name. */
+function privateHost(host) {
+  const v4 = IPV4.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
+  }
+  if (host.startsWith('[')) { const v6 = host.slice(1, -1).toLowerCase(); return v6 === '::1' || /^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6); }
+  return host === 'localhost' || host.endsWith('.local');
+}
 export function locality(endpoint) {
   const host = new URL(endpoint).hostname;
   if (['localhost', '127.0.0.1', '[::1]'].includes(host)) return 'on-device endpoint';
-  if (/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) || host.endsWith('.local')) return 'local-network endpoint';
+  if (privateHost(host)) return 'local-network endpoint';
   return 'external endpoint';
 }
+/**
+ * Bearer keys and prompts never travel unencrypted to a public host: plain `http:` is accepted only
+ * for loopback and private-network endpoints (#115).
+ */
+export function assertSecureTransport(endpoint) {
+  const url = new URL(endpoint);
+  if (url.protocol === 'http:' && !privateHost(url.hostname)) {
+    throw Object.assign(new Error(`Plain HTTP is accepted only for on-device and private-network model endpoints; use https:// for ${url.host}`), { code: 'invalid_arguments', details: { reason: 'insecure_transport' } });
+  }
+}
+const originOf = endpoint => { try { return new URL(endpoint).origin; } catch { return null; } };
 const onDevice = endpoint => locality(endpoint) === 'on-device endpoint';
 const typed = (message, code, details) => Object.assign(new Error(message), { code, ...(details ? { details } : {}) });
 
@@ -74,7 +97,8 @@ export class Providers {
     this.searchWorkspace = searchWorkspace;
     this.audit = entry => { try { audit(entry); } catch { /* Audit failure must not change the model decision. */ } };
     this.env = env;
-    this.fetch = fetchImpl;
+    // Backstop for profiles saved before the transport rule: nothing is sent over plain HTTP to a public host.
+    this.fetch = (url, init) => { assertSecureTransport(String(url)); return fetchImpl(url, init); };
     // timeoutMs is the total turn deadline; first-token and idle deadlines bound silent endpoints.
     this.timeoutMs = timeoutMs;
     this.deadlines = { firstTokenMs: 120000, idleMs: 60000, ...deadlines };
@@ -165,9 +189,8 @@ export class Providers {
   }
 
   async persist(profiles, acknowledgements = this.acknowledgements) {
-    const temporary = `${this.file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, profiles, acknowledgements }, null, 2), { mode: 0o600 });
-    await rename(temporary, this.file);
+    // Synced file and directory, like every other durable JSON file (#114): a crash cannot leave it empty or partial.
+    writeJsonDurable(this.file, { version: 1, profiles, acknowledgements });
     this.profiles = profiles;
     this.acknowledgements = acknowledgements;
   }
@@ -180,7 +203,8 @@ export class Providers {
 
   async save(args) {
     return this.mutate(async () => {
-      const { apiKey, clearApiKey, ...fields } = args;
+      const { apiKey, clearApiKey, confirmKeyDestination, ...fields } = args;
+      assertSecureTransport(fields.endpoint);
       if (fields.tools && !ADAPTERS[fields.provider].tools) throw new Error('Read-only tools currently require an OpenAI-compatible connection');
       const previous = fields.id ? this.profiles.find(profile => profile.id === fields.id) : undefined;
       if (fields.id && !previous) throw new Error('Model connection not found');
@@ -192,6 +216,13 @@ export class Providers {
         // A key is scoped to its endpoint. Changing destination must not forward an old key.
         if (previous.endpoint === profile.endpoint) profile.encryptedKey = previous.encryptedKey;
       }
+      // The same holds for an environment-variable key: moving the connection to another origin stops using it
+      // unless the caller confirms that key is meant for the new destination (#115).
+      let keyNotice = null;
+      if (previous?.apiKeyEnv && profile.apiKeyEnv === previous.apiKeyEnv && originOf(previous.endpoint) !== originOf(profile.endpoint) && !confirmKeyDestination) {
+        delete profile.apiKeyEnv;
+        keyNotice = `The endpoint moved to another host, so ${previous.apiKeyEnv} is no longer sent; save again with confirmKeyDestination to use it there`;
+      }
       // Probe results describe one exact endpoint/model; they never carry over to a new destination.
       if (previous?.probed && previous.endpoint === profile.endpoint && previous.model === profile.model && previous.provider === profile.provider) profile.probed = previous.probed;
       if (apiKey) {
@@ -202,7 +233,7 @@ export class Providers {
       await this.persist(previous
         ? this.profiles.map(item => item.id === profile.id ? profile : item)
         : [...this.profiles, profile]);
-      return this.describe(profile);
+      return { ...this.describe(profile), ...(keyNotice ? { keyNotice } : {}) };
     });
   }
 
@@ -263,6 +294,7 @@ export class Providers {
     if (args.modelId && !saved) throw new Error('Model connection not found');
     const profile = saved || { provider: args.provider, endpoint: args.endpoint?.replace(/\/+$/, ''), apiKeyEnv: args.apiKeyEnv };
     if (!profile.provider || !profile.endpoint) throw new Error('Choose an API format and endpoint first');
+    assertSecureTransport(profile.endpoint);
     const key = saved ? this.key(saved) : args.apiKey || this.key(profile);
     if (key) rememberProviderSecret(key);
     const headers = requestHeaders(profile, key);

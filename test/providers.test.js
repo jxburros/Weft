@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Providers } from '../src/providers.js';
+import { Providers, locality } from '../src/providers.js';
 import { budget } from './time-budget.js';
 
 async function fixture(t, handler, options = {}) {
@@ -444,18 +444,18 @@ test('only normalized loopback allowlist endpoints bypass cloud disclosure', { t
     ['http://[::1]:11434/v1', false],
     ['http://[0:0:0:0:0:0:0:1]:11434/v1', false],
     ['http://127.1:11434/v1', false], // WHATWG URL canonicalizes this to 127.0.0.1.
-    ['http://localhost.:11434/v1', true],
+    ['https://localhost.:11434/v1', true],
     ['http://127.0.0.2:11434/v1', true],
-    ['http://[::ffff:127.0.0.1]:11434/v1', true],
+    ['https://[::ffff:127.0.0.1]:11434/v1', true],
     ['http://10.0.0.1:11434/v1', true],
     ['http://192.168.1.1:11434/v1', true],
     ['http://172.16.0.1:11434/v1', true],
     ['http://[fc00::1]:11434/v1', true],
     ['http://[fe80::1]:11434/v1', true],
     ['http://model.local:11434/v1', true],
-    ['http://127.0.0.1.nip.io:11434/v1', true],
-    ['http://localhost.example:11434/v1', true],
-    ['http://10.attacker.example:11434/v1', true],
+    ['https://127.0.0.1.nip.io:11434/v1', true],
+    ['https://localhost.example:11434/v1', true],
+    ['https://10.attacker.example:11434/v1', true],
     ['https://models.example/v1', true],
     ['https://8.8.8.8/v1', true],
     ['https://[2001:4860:4860::8888]/v1', true],
@@ -466,4 +466,41 @@ test('only normalized loopback allowlist endpoints bypass cloud disclosure', { t
     assert.equal(disclosure.requiresAcknowledgement, requiresAcknowledgement, endpoint);
     assert.equal(disclosure.locality === 'on-device endpoint', !requiresAcknowledgement, endpoint);
   }
+});
+
+test('plain HTTP is refused for public model hosts, and environment keys do not follow an endpoint to another host (#115)', { timeout: budget(10000) }, async t => {
+  const env = { WEFT_TEST_PROVIDER_KEY: 'env-secret-key' };
+  const { providers, model } = await fixture(t, (_req, res) => reply(res, { choices: [{ message: { content: 'ok' } }] }), { env });
+  for (const endpoint of ['http://models.example/v1', 'http://8.8.8.8/v1', 'http://10.attacker.example/v1', 'http://127.0.0.1.nip.io/v1']) {
+    await assert.rejects(providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint, model: model.model }),
+      error => error.code === 'invalid_arguments' && /Plain HTTP/.test(error.message), endpoint);
+    await assert.rejects(providers.execute('models.discover', { provider: 'openai', endpoint }), /Plain HTTP/, endpoint);
+  }
+  for (const endpoint of ['http://192.168.1.20:11434/v1', 'http://10.0.0.5/v1', 'http://172.20.0.1/v1', 'http://studio.local:1234/v1', 'http://[fd00::1]:8080/v1', 'https://models.example/v1']) {
+    await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint, model: model.model });
+  }
+  assert.equal(locality('http://10.attacker.example/v1'), 'external endpoint', 'only literal private addresses are local-network');
+  const local = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: model.endpoint, model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(local.hasApiKey, true);
+  const sameHost = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: `${model.endpoint}/`, model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(sameHost.apiKeyEnv, 'WEFT_TEST_PROVIDER_KEY', 'the same origin keeps the variable');
+  const moved = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://moved.example/v1', model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(moved.apiKeyEnv, undefined, 'a new host stops receiving the environment key');
+  assert.equal(moved.hasApiKey, false);
+  assert.match(moved.keyNotice, /confirmKeyDestination/);
+  const reentered = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: model.endpoint, model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY' });
+  assert.equal(reentered.apiKeyEnv, 'WEFT_TEST_PROVIDER_KEY', 'a newly entered variable is used');
+  const kept = await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://third.example/v1', model: model.model, apiKeyEnv: 'WEFT_TEST_PROVIDER_KEY', confirmKeyDestination: true });
+  assert.equal(kept.apiKeyEnv, 'WEFT_TEST_PROVIDER_KEY', 'an explicit confirmation keeps it');
+});
+
+test('model connections are written durably and survive a reopen (#114)', async t => {
+  const { providers, model, directory } = await fixture(t, (_req, res) => reply(res, { choices: [{ message: { content: 'ok' } }] }));
+  await providers.execute('models.save', { id: model.id, name: 'Renamed', provider: model.provider, endpoint: model.endpoint, model: model.model });
+  const disk = JSON.parse(await readFile(join(directory, 'model-connections.json'), 'utf8'));
+  assert.equal(disk.profiles.find(item => item.id === model.id).name, 'Renamed');
+  assert.deepEqual((await readdir(directory)).filter(name => name.endsWith('.tmp')), [], 'no temporary files are left behind');
+  const reopened = await new Providers({ directory, workspace: { getConversation() {}, async appendMessage() {} }, env: {} }).init();
+  t.after(() => reopened.close());
+  assert.equal((await reopened.execute('models.list', {})).find(item => item.id === model.id).name, 'Renamed');
 });

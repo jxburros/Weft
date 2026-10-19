@@ -2500,6 +2500,7 @@ function modelForm(id) {
         "password",
       ) +
       field("Or environment variable name", "apiKeyEnv", r?.apiKeyEnv || "") +
+      (r?.apiKeyEnv ? choice("If you change the endpoint to another host", "keyDestination", [["drop", "Stop sending this environment key"], ["send", "Send this environment key to the new host"]], "drop") : "") +
       "<p>Keys are stored separately from project files. Saving a key requires OS secure storage. Local models may not require a key.</p>" +
       `<fieldset><legend>Capabilities</legend><p>Your settings take priority over what the endpoint reports.${r?.probed ? ` Last discovery: ${esc(date(r.probed.probedAt))}.` : ""}</p>` +
       choice("Image input", "imageInput", [["auto", `Use discovered or default (${r?.capabilities?.images ? "images" : "text only"})`], ["true", "Accepts images"], ["false", "Text only"]],
@@ -2515,6 +2516,8 @@ function modelForm(id) {
       values.tools = values.tools === "true";
       if (!values.apiKey) delete values.apiKey;
       if (!values.apiKeyEnv) delete values.apiKeyEnv;
+      if (values.keyDestination === "send") values.confirmKeyDestination = true;
+      delete values.keyDestination;
       const capabilities = {};
       if (values.imageInput !== "auto") capabilities.images = values.imageInput === "true";
       if (values.streaming === "false") capabilities.streaming = false;
