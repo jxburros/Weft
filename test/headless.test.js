@@ -92,7 +92,7 @@ if (process.argv.includes('--headless-harness')) {
       await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
       const origin = `http://127.0.0.1:${fixture.address().port}`;
       const profile = mkdtempSync(join(tmpdir(), 'weft-headless-'));
-      const token = 'headless-fixture-token';
+      const token = 'headless-fixture-token-0123456789abcdef';
       const port = await freePort();
       const api = createClient({ url: `http://127.0.0.1:${port}`, token });
       const run = async (command, args = {}) => {

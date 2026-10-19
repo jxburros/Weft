@@ -13,7 +13,8 @@ import { ServiceCredentials, createLink, detectStatus, fetchService, readLinked,
  * for promotion, revision checks and evidence preservation.
  */
 const now = () => new Date().toISOString();
-const human = context => ['human', 'admin'].includes(context.actor ?? 'human');
+// A missing actor is never a person (#126): only an explicit human or admin context passes.
+const human = context => ['human', 'admin'].includes(context.actor);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const denied = message => fail('permission_required', `PERMISSION_REQUIRED: ${message}`);
 const stale = message => fail('stale_state', `STALE_STATE: ${message}`);
@@ -329,7 +330,18 @@ export class Knowledge {
       if (action === 'update') {
         if (args.changes.title) record.title = args.changes.title;
         if (args.changes.autoRefresh !== undefined) service.autoRefresh = args.changes.autoRefresh;
-        if (args.changes.url) { service.url = validateServiceUrl(args.changes.url); if (service.credentialState === 'stored') service.access = 'unknown'; }
+        if (args.changes.url) {
+          const next = validateServiceUrl(args.changes.url);
+          // A stored credential is scoped to its origin: a new host must never receive it (#115). Store it again for the new host.
+          if (service.credentialState === 'stored' && new URL(next).origin !== new URL(service.url).origin) {
+            this.credentials.delete(record.id);
+            Object.assign(service, { credentialState: 'none', access: 'none' });
+            delete service.credentialHeader;
+            delete service.credentialSetAt;
+            service.credentialClearedAt = now();
+          } else if (service.credentialState === 'stored') service.access = 'unknown';
+          service.url = next;
+        }
       } else if (action === 'setCredential') {
         this.credentials.set(record.id, args.header, args.secretValue);
         Object.assign(service, { credentialState: 'stored', credentialHeader: args.header, access: 'unknown', credentialSetAt: now() });

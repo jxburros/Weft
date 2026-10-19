@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +16,7 @@ import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { createApiServer } from '../src/server.js';
 import { budget } from './time-budget.js';
+import { redactPaths } from '../src/activity-log.js';
 
 const human = { actor: 'human', source: 'gui' };
 const cliPath = fileURLToPath(new URL('../bin/weft.js', import.meta.url));
@@ -171,4 +172,20 @@ test('independent scoped clients contend for leases and expiry stops new admissi
   assert.equal((await f.request('tabs.release', { workspaceId: f.firstId, tabId: 1 }, grants[1].token)).outcome.error.code, 'lease_conflict');
   f.clients.clock = () => grants[0].expiresAt + 1;
   assert.equal((await f.request('page.inspect', { workspaceId: f.firstId, tabId: 1 }, grants[0].token)).status, 401);
+});
+
+test('untyped errors never show agents local paths; activity details are path-free too (#126)', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'weft-error-paths-'));
+  const workspace = new WorkspaceService({ directory });
+  t.after(() => { workspace.close(); rmSync(directory, { recursive: true, force: true }); });
+  const leaked = '/home/someone/.config/weft/workspace-data/model-connections.json';
+  const providers = { close() {}, execute() { throw Object.assign(new Error(`ENOENT: no such file or directory, open '${leaked}'`), { code: 'ENOENT' }); } };
+  const dispatch = createDispatcher({ workspace, providers, admission: new AutomationAdmission() });
+  const agent = await dispatch('models.list', {}, { actor: 'automation' });
+  assert.equal(agent.error.code, 'command_failed');
+  assert.equal(agent.error.message, "ENOENT: no such file or directory, open '<path>'");
+  const person = await dispatch('models.list', {}, human);
+  assert.match(person.error.message, /model-connections\.json/, 'the person still sees the path');
+  assert.doesNotMatch(readFileSync(join(directory, 'activity-log.jsonl'), 'utf8'), /someone/, 'activity detail has no local path');
+  assert.equal(redactPaths('C:\\Users\\me\\weft\\x.json failed; see https://example.com/a/b/c and GET /v1/commands'), '<path> failed; see https://example.com/a/b/c and GET /v1/commands');
 });

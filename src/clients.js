@@ -1,7 +1,8 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { chmodSync, readFileSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { readJson, writeJsonDurable } from './atomic-json.js';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { AUTONOMY_LEVELS, DATA_CLASSES, DEFAULT_DATA_ACCESS, GRANTABLE_CLASSES, actionClassForCommand, dataClassesForCommand, matchDestination, resourceForCommand, validDestinationPattern } from './autonomy.js';
 
@@ -51,6 +52,35 @@ function migrateGrant(grant) {
     maxCommands: null, maxPerMinute: null, taskId: null, usage: { count: 0, lastUsedAt: null }, ...grant };
 }
 
+/** Shortest accepted WEFT_TOKEN: it is the bootstrap bearer token for full automation. */
+export const MIN_BOOTSTRAP_TOKEN_LENGTH = 32;
+/**
+ * The bootstrap API token: WEFT_TOKEN when set (refused if shorter than 32 characters), otherwise a random one.
+ * With WEFT_TOKEN_FILE and no WEFT_TOKEN, a generated token is written there (owner-only) instead of being printed.
+ */
+export function bootstrapToken(env = process.env, { generate = () => randomBytes(32).toString('hex'), write = (path, value) => writeTokenFile(path, value) } = {}) {
+  const supplied = env.WEFT_TOKEN;
+  if (supplied) {
+    if (supplied.trim() !== supplied || supplied.length < MIN_BOOTSTRAP_TOKEN_LENGTH) {
+      throw new Error(`WEFT_TOKEN must be at least ${MIN_BOOTSTRAP_TOKEN_LENGTH} characters without surrounding spaces; use 32 random bytes as hex (for example from openssl rand -hex 32)`);
+    }
+    return { token: supplied, generated: false, file: null };
+  }
+  const token = generate();
+  if (env.WEFT_TOKEN_FILE) { write(env.WEFT_TOKEN_FILE, token); return { token, generated: true, file: env.WEFT_TOKEN_FILE }; }
+  return { token, generated: true, file: null };
+}
+function writeTokenFile(path, value) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${value}\n`, { mode: 0o600, flag: 'wx' });
+  renameSync(temporary, path);
+  chmodSync(path, 0o600);
+}
+
+/** Per-profile key that signs client tokens, separate from the bootstrap bearer token so grants survive restarts. */
+export const SIGNING_KEY_FILE = 'client-signing-key.json';
+
 export class ClientGrants {
   constructor({ directory, masterToken, workspace, clock = Date.now }) {
     this.masterToken = masterToken;
@@ -60,6 +90,8 @@ export class ClientGrants {
     this.rate = new Map();
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.path = join(directory, 'client-grants.json');
+    this.signingKeyPath = join(directory, SIGNING_KEY_FILE);
+    this.signingKey = this.loadSigningKey();
     this.stamp = fileStamp(this.path);
     this.grants = [];
     try {
@@ -72,13 +104,32 @@ export class ClientGrants {
   save() {
     this.stamp = writeVerifiedJson(this.path, JSON.stringify({ version: 2, grants: this.grants }), this.stamp);
   }
-  sign(payload) { return createHmac('sha256', this.masterToken).update(payload).digest('base64url'); }
+  loadSigningKey() {
+    const saved = readJson(this.signingKeyPath, null);
+    if (saved) {
+      const key = Buffer.from(String(saved.key ?? ''), 'base64');
+      if (saved.version !== 1 || key.length !== 32) throw new Error(`${this.signingKeyPath} is not a valid client signing key; preserve it and review before retrying`);
+      return key;
+    }
+    const key = randomBytes(32);
+    writeJsonDurable(this.signingKeyPath, { version: 1, key: key.toString('base64'), createdAt: new Date(this.clock()).toISOString() });
+    return key;
+  }
+  /** Invalidate every issued client token at once (grants stay listed; their tokens stop authenticating). */
+  rotateSigningKey() {
+    const key = randomBytes(32);
+    writeJsonDurable(this.signingKeyPath, { version: 1, key: key.toString('base64'), createdAt: new Date(this.clock()).toISOString() });
+    this.signingKey = key;
+  }
+  sign(payload) { return createHmac('sha256', this.signingKey).update(payload).digest('base64url'); }
+  /** Tokens issued before the per-profile signing key existed were signed with the bootstrap token; they keep working while it is unchanged. */
+  legacySign(payload) { return typeof this.masterToken === 'string' && this.masterToken ? createHmac('sha256', this.masterToken).update(payload).digest('base64url') : null; }
   live(grant) { return grant && !grant.revoked && grant.expiresAt > this.clock(); }
   authenticate(token) {
     if (equal(token, this.masterToken)) return { actor: 'automation', source: 'api' };
     if (typeof token !== 'string' || token.length > 4096) return null;
     const parts = token.split('.');
-    if (parts.length !== 3 || parts[0] !== 'weft1' || !equal(parts[2], this.sign(parts[1]))) return null;
+    if (parts.length !== 3 || parts[0] !== 'weft1' || !(equal(parts[2], this.sign(parts[1])) || equal(parts[2], this.legacySign(parts[1])))) return null;
     let claims;
     try { claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString()); } catch { return null; }
     const grant = this.grants.find(item => item.clientId === claims.clientId);

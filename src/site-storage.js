@@ -283,7 +283,7 @@ export class SiteStoragePolicy {
     const workspace = args.workspaceId ?? context.workspaceId ?? service.activeWorkspaceId;
     service.workspace(workspace);
     if (name === 'storage.policy') return this.policy(workspace);
-    if (!['human', 'admin'].includes(context.actor ?? 'human')) throw new Error('PERMISSION_REQUIRED: storage policy changes require the trusted browser interface');
+    if (!['human', 'admin'].includes(context.actor)) throw new Error('PERMISSION_REQUIRED: storage policy changes require the trusted browser interface');
     const timestamp = new Date().toISOString();
     try {
       service.data.storagePolicies ??= [];

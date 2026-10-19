@@ -257,3 +257,15 @@ export class ActivityLog {
     return { items, nextCursor: more ? encodeCursor(items.at(-1).seq) : null, retention: { ...this.retention }, oldestSeq: this.entries[0]?.seq ?? null };
   }
 }
+
+/**
+ * Remove local filesystem paths (POSIX absolute, Windows drive and UNC) from an error message, so
+ * untyped errors from Node or the filesystem do not reveal profile locations to agents. URL paths are
+ * kept: a path counts only after whitespace, a quote, a bracket, "=" or the start of the message, has at
+ * least two segments, and is not an API route (/v1/...).
+ */
+export function redactPaths(message) {
+  return String(message ?? '')
+    .replace(/(^|[\s'"`(=[,])(?:\/(?!v1\/)(?:[^\s'"`()[\],]+\/)+[^\s'"`()[\],]+)/g, '$1<path>')
+    .replace(/(^|[\s'"`(=[,])(?:[A-Za-z]:[\\/]|\\\\)[^\s'"`()[\],]*/g, '$1<path>');
+}

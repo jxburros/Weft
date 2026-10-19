@@ -1,14 +1,20 @@
+import { readFileSync } from 'node:fs';
 import { CommandError, errorOutcome } from './commands.js';
+/** WEFT_TOKEN_FILE: the owner-only file a browser started with the same variable wrote its generated token to. */
+function tokenFromFile(path) {
+  if (!path) return undefined;
+  try { return readFileSync(path, 'utf8').trim(); } catch { throw new Error(`WEFT_TOKEN_FILE ${path} could not be read`); }
+}
 export function createClient({
   url = process.env.WEFT_API_URL || 'http://127.0.0.1:9222',
-  token = process.env.WEFT_TOKEN,
+  token = process.env.WEFT_TOKEN || tokenFromFile(process.env.WEFT_TOKEN_FILE),
 } = {}) {
   const base = new URL(url);
   if (base.protocol !== 'http:' || !['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname)
       || base.username || base.password || base.pathname !== '/' || base.search || base.hash) {
     throw new Error('WEFT_API_URL must be a loopback HTTP origin');
   }
-  if (!token?.trim()) throw new Error('Set WEFT_TOKEN to the browser API token');
+  if (!token?.trim()) throw new Error('Set WEFT_TOKEN (or WEFT_TOKEN_FILE) to the browser API token');
   async function request(path, body, allowOutcome = false, { deadlineMs } = {}) {
     const response = await fetch(new URL(path, base), {
       method: body ? 'POST' : 'GET',

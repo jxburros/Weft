@@ -130,10 +130,43 @@ export function parseDeadline(value) {
 }
 const DOWNLOAD_SOURCES = { artifact: ['id', 'versionId', 'part'], material: ['id'], package: ['name', 'path'] };
 
-export function createApiServer({ execute, token, subscribe, authenticate, executeReturnsOutcome = false, turns = null, eventRetention = {}, eventLog: sharedEventLog = null }) {
+/** Streams one identity may hold at once, and the ceiling for all identities together. */
+export const STREAM_LIMITS = Object.freeze({ perIdentity: 4, total: 16 });
+/** Concurrent connections the API accepts; slow-loris is bounded per connection by the header/request timeouts. */
+export const MAX_CONNECTIONS = 64;
+/** Failed authentication attempts per minute before further failures are delayed (up to two seconds each). */
+const AUTH_FAILURES_BEFORE_DELAY = 10;
+const bearerToken = header => /^bearer[ \t]+/i.test(header) ? header.replace(/^bearer[ \t]+/i, '') : '';
+
+/**
+ * `authorizeStream(identity, { command, workspaceId })` returns null when the identity may hold the stream, or a
+ * denial reason. Streams are authorized as the read command they mirror (events.list, conversations.get), at
+ * connect and before every frame, so narrowing, revocation and a closed bound task end them.
+ */
+export function createApiServer({ execute, token, subscribe, authenticate, authorizeStream = null, executeReturnsOutcome = false, turns = null, eventRetention = {}, eventLog: sharedEventLog = null }) {
   if (!authenticate && (typeof token !== 'string' || !token.trim())) throw new Error('An API token is required');
-  const expected = Buffer.from('Bearer ' + token);
+  const expected = Buffer.from(String(token ?? ''));
   const streams = new Set();
+  const streamOwners = new Map();
+  const authFailures = [];
+  const streamKey = identity => identity.clientId ?? identity.actor ?? 'automation';
+  const streamDenied = (identity, request) => authorizeStream ? authorizeStream(identity, request)
+    : identity.scopes && !identity.scopes.includes('read') ? 'client_scope' : null;
+  const holdStream = (res, identity) => {
+    const key = streamKey(identity);
+    streams.add(res);
+    streamOwners.set(key, (streamOwners.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      streams.delete(res);
+      const left = (streamOwners.get(key) ?? 1) - 1;
+      if (left > 0) streamOwners.set(key, left); else streamOwners.delete(key);
+    };
+  };
+  const streamLimit = identity => streams.size >= STREAM_LIMITS.total ? 'Event subscriber limit reached'
+    : (streamOwners.get(streamKey(identity)) ?? 0) >= STREAM_LIMITS.perIdentity ? `This identity already holds ${STREAM_LIMITS.perIdentity} event streams; close one first` : null;
   const fallbackListeners = new Set();
   const sourceSubscribe = subscribe || (listener => { fallbackListeners.add(listener); return () => fallbackListeners.delete(listener); });
   const publish = event => { if (!subscribe) for (const listener of fallbackListeners) listener(event); };
@@ -151,15 +184,29 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       res.end(JSON.stringify(body));
     };
     const fail = (status, code, message) => reply(status, errorOutcome(Object.assign(new Error(message), { code }), null, {}, [], 'not_run'));
+    // DNS-rebinding backstop: only the loopback names this server listens under are accepted.
+    const port = server.address()?.port;
+    const host = String(req.headers.host || '').toLowerCase();
+    if (!port || (host !== `127.0.0.1:${port}` && host !== `localhost:${port}`)) {
+      fail(403, 'permission_required', 'Unexpected Host header; connect to 127.0.0.1 or localhost');
+      return;
+    }
     const authorization = req.headers.authorization || '';
-    const supplied = Buffer.from(authorization);
+    const suppliedToken = bearerToken(authorization);
+    const supplied = Buffer.from(suppliedToken);
     let context;
     try {
-      context = authenticate ? await authenticate(authorization.startsWith('Bearer ') ? authorization.slice(7) : '')
+      context = authenticate ? await authenticate(suppliedToken)
         : supplied.length === expected.length && timingSafeEqual(supplied, expected) ? { actor: 'automation' } : null;
     } catch { context = null; }
     if (!context) {
-      fail(401, 'unauthorized', 'Unauthorized');
+      // Repeated failures are delayed so a short token cannot be guessed quickly; valid tokens are never delayed.
+      const now = Date.now();
+      while (authFailures.length && authFailures[0] < now - 60000) authFailures.shift();
+      if (authFailures.length < 1000) authFailures.push(now);
+      const excess = authFailures.length - AUTH_FAILURES_BEFORE_DELAY;
+      if (excess > 0) await new Promise(resolve => setTimeout(resolve, Math.min(2000, excess * 100)).unref());
+      if (!res.destroyed) fail(401, 'unauthorized', 'Unauthorized');
       return;
     }
     // Browser pages, including pages being automated, must not access the control plane.
@@ -169,7 +216,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
     }
     const currentIdentity = async () => {
       if (!authenticate) return context;
-      try { return await authenticate(authorization.slice(7)) || null; } catch { return null; }
+      try { return await authenticate(suppliedToken) || null; } catch { return null; }
     };
     const visible = (identity, workspaceId) => !identity.workspaceIds || (workspaceId && identity.workspaceIds.includes(workspaceId));
     const lastEventId = typeof req.headers['last-event-id'] === 'string' ? req.headers['last-event-id'].slice(0, 200) : '';
@@ -178,8 +225,10 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       return;
     }
     if (req.method === 'GET' && req.url === '/v1/events') {
-      if (context.scopes && !context.scopes.includes('read')) { fail(403, 'permission_required', 'The read scope is required for events'); return; }
-      if (streams.size >= 16) { fail(503, 'unavailable', 'Event subscriber limit reached'); return; }
+      const denied = streamDenied(context, { command: 'events.list' });
+      if (denied) { fail(403, 'permission_required', `Event streams need the read scope and the activity data class (${denied})`); return; }
+      const limited = streamLimit(context);
+      if (limited) { fail(503, 'unavailable', limited); return; }
       setSseHeaders(res);
       res.write(': connected\n\n');
       let closed = false;
@@ -189,7 +238,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
         if (closed) return;
         closed = true;
         clearInterval(heartbeat);
-        streams.delete(res);
+        release();
         unsubscribe?.();
       };
       const end = () => { cleanup(); res.end(); };
@@ -197,7 +246,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       const enqueue = write => { chain = chain.then(async () => {
         if (closed || res.destroyed) return;
         const identity = await currentIdentity();
-        if (!identity) { end(); return; }
+        if (!identity || streamDenied(identity, { command: 'events.list' })) { end(); return; }
         if (closed || res.destroyed) return;
         if (res.writableLength > 65536) { cleanup(); res.destroy(); return; }
         write(identity);
@@ -208,7 +257,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       });
       const heartbeat = setInterval(() => enqueue(() => res.write(': heartbeat\n\n')), 15000);
       heartbeat.unref();
-      streams.add(res);
+      const release = holdStream(res, context);
       res.on('close', cleanup);
       // Register before computing the replay in the same tick: no event falls between them.
       unsubscribe = eventLog.subscribe(deliver);
@@ -223,26 +272,34 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
       const info = turns?.info(turnMatch[1]);
       // Unknown, expired and out-of-scope turns are indistinguishable to the caller.
       if (!info || !visible(context, info.workspaceId)) { fail(404, 'not_found', 'Turn stream not found or no longer retained'); return; }
-      if (streams.size >= 16) { fail(503, 'unavailable', 'Event subscriber limit reached'); return; }
+      // Turn frames carry reply text: the same grant checks as conversations.get (read scope, conversations data class, task binding).
+      const turnRequest = { command: 'conversations.get', workspaceId: info.workspaceId };
+      const denied = streamDenied(context, turnRequest);
+      if (denied) { fail(403, 'permission_required', `Turn streams need the read scope and the conversations data class (${denied})`); return; }
+      const limited = streamLimit(context);
+      if (limited) { fail(503, 'unavailable', limited); return; }
       setSseHeaders(res);
       res.write(': connected\n\n');
       let closed = false;
-      const cleanup = () => { if (closed) return; closed = true; clearInterval(recheck); streams.delete(res); turns.off('frame', live); };
-      // Expiry or revocation of a client grant ends its follower stream too.
+      let release = () => {};
+      const cleanup = () => { if (closed) return; closed = true; clearInterval(recheck); release(); turns.off('frame', live); };
+      // Expiry, revocation, narrowing or a closed bound task ends the follower stream too.
       const recheck = setInterval(async () => {
         const identity = await currentIdentity();
-        if (!closed && (!identity || !visible(identity, info.workspaceId))) { cleanup(); res.end(); }
+        if (!closed && (!identity || !visible(identity, info.workspaceId) || streamDenied(identity, turnRequest))) { cleanup(); res.end(); }
         else if (!closed) res.write(': heartbeat\n\n');
       }, 15000);
       recheck.unref();
       const write = frame => {
         if (closed || res.destroyed) return;
+        // Grant checks read the live grant, so a change made mid-turn applies before the next frame.
+        if (streamDenied(context, turnRequest)) { cleanup(); res.end(); return; }
         if (res.writableLength > 4 * 1024 * 1024) { cleanup(); res.destroy(); return; }
         res.write(sseFrame({ id: frame.id, event: `turn.${frame.type}`, data: frame }));
         if (frame.type === 'end') { cleanup(); res.end(); }
       };
       const live = frame => { if (frame.turnId === turnMatch[1]) write(frame); };
-      streams.add(res);
+      release = holdStream(res, context);
       // A follower disconnect never stops the turn; only the originating request can.
       res.on('close', cleanup);
       turns.on('frame', live);
@@ -342,6 +399,7 @@ export function createApiServer({ execute, token, subscribe, authenticate, execu
   const close = server.close.bind(server);
   server.close = (...args) => { unsubscribeSource?.(); for (const response of streams) response.end(); return close(...args); };
   server.eventStats = () => ({ subscribers: streams.size, retained: eventLog.entries.length, lastEventId: eventLog.entries.at(-1)?.id ?? null });
+  server.maxConnections = MAX_CONNECTIONS;
   server.requestTimeout = 30000;
   server.headersTimeout = 10000;
   return server;

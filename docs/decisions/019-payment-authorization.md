@@ -137,6 +137,22 @@ snapshots redact them, screenshots mask them and `page.evaluate` is refused on
 the document. `submit: true` is refused (`card_submit_separate`): filling a card
 never buys anything.
 
+After a card fill, automation `page.click`, `page.fill`, `page.press` and
+`page.clickAt` are refused on the filled document (`permission_required`,
+`payment: card_filled`), and on any later document of that tab (a back/forward
+restore, for example) while a brokered field still holds a value. Without this,
+an agent at the `autonomous` level or under a standing approval could wait out
+the cooldown and press the pay button as an ordinary `external_write`, skipping
+the term-bound approval. The only automation path to the purchase click is
+`payments.propose` then `payments.submit`; a person's own input is unaffected.
+
+Task grants (`credentials.grantTask`) do apply to `payment_card` entries. This is
+deliberate: a grant lets an agent *fill* the card for the bound task without a
+per-use prompt, and filling never authorizes a purchase, because the submission
+still needs its own once-only `payments.submit` approval bound to the merchant,
+amount, currency and recurrence. A person who does not want an agent to handle
+card details at all simply grants no task access to card entries.
+
 ### Interruption, duplicates and reconciliation
 
 - **Startup sweep**: `PaymentService.init()` (before the API listens) turns any

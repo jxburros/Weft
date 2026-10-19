@@ -154,8 +154,17 @@ see runtime enablement. Their results are labelled untrusted.
   commands receive only validated arguments and the record collections they
   declared. Built-in plugins may call the listed reads.
 - The `vm` context plus permission-model process is defense in depth, not a
-  formally verified sandbox; a V8 or Node escape would reach an unprivileged
-  child process that has network access at the OS level.
+  formally verified sandbox. Electron 44's Node permission model restricts the
+  filesystem but not the network (network permissions arrive in Node 25), so
+  the OS adds the network layer where it can: on Linux the plugin process runs
+  in a new unprivileged user and network namespace (`unshare --user --net`)
+  whose only interface is a loopback that is down, so even a V8 or Node escape
+  cannot open a connection. On macOS, Windows, or Linux systems that forbid
+  unprivileged namespaces (for example an AppArmor
+  `apparmor_restrict_unprivileged_userns` policy) the `vm` context is the only
+  network boundary and a V8 or Node escape would reach a child process with
+  network access. `plugins.list` reports `networkIsolation` as
+  `network-namespace` or `vm-only` for each third-party plugin.
 - No plugin can write records, change policy, reach the network, read
   credentials or touch Electron objects.
 - Inside Electron the sandbox process is the Electron binary run as Node

@@ -231,7 +231,7 @@ if (process.argv.includes('--credentials-smoke')) {
       await until(() => contents.getTitle() === 'Signed in', 'post-submit navigation');
       await delay(800);
       const after = await run('page.evaluate', { tabId, expectedVersion: await inspect(), expression: 'document.title' }, agent);
-      assert.equal(after.result, 'Signed in', 'a new document without credential fields is ordinary again');
+      assert.equal(after.result.value, 'Signed in', 'a new document without credential fields is ordinary again');
       assert.ok(received.authorized.some(entry => entry.startsWith('POST /session') && entry.includes(encodeURIComponent(SECRET))), 'the authorized site received the form post');
       assert.ok(!received.attacker.some(entry => [SECRET, encodeURIComponent(SECRET), 'redirect-secret', encodeURIComponent(USERNAME)].some(value => entry.includes(value))), 'the attacker origin never received a secret');
       await delay(800);

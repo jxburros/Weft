@@ -18,7 +18,7 @@ import { electronEnv } from "../scripts/electron-env.js";
  * focus restoration, the native-page focus boundary, live-region noise, 200% zoom and text at the
  * minimum window, and reduced motion. Real screen readers are not exercised here (docs/ACCESSIBILITY.md).
  */
-const TOKEN = "a11y-fixture-token";
+const TOKEN = "a11y-fixture-token-0123456789abcdef";
 const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa", "best-practice"];
 
 if (process.argv.includes("--a11y-child")) {

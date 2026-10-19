@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { WorkspaceService } from '../src/workspace.js';
@@ -306,6 +306,31 @@ test('data-key rotation re-encrypts every value and component and retires the ol
   const { recoveryKey: next } = await enc(service, 'encryption.rotate', { target: 'wrapping' });
   assert.equal((await enc(service, 'encryption.checkRecoveryKey', { recoveryKey })).valid, false);
   assert.equal((await enc(service, 'encryption.checkRecoveryKey', { recoveryKey: next })).valid, true);
+});
+
+test('a failed keyring save during rotation leaves the live keys unchanged and new writes readable after reopening', async t => {
+  const directory = profile(t);
+  const safeStorage = fakeSafeStorage();
+  const service = open(t, directory, { safeStorage });
+  await seed(service);
+  const { recoveryKey } = await enc(service, 'encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' });
+  const keyringPath = join(directory, KEYRING_FILE);
+  const saved = readFileSync(keyringPath);
+  // Make the keyring path a non-empty directory so the durable rename fails.
+  const blockSave = () => { rmSync(keyringPath); mkdirSync(join(keyringPath, 'blocked'), { recursive: true }); };
+  const allowSave = () => { rmSync(keyringPath, { recursive: true, force: true }); writeFileSync(keyringPath, saved); };
+  blockSave();
+  await assert.rejects(enc(service, 'encryption.rotate', { target: 'dataKey' }));
+  assert.equal(service.encryption.keys.currentVersion, 1, 'data-key rotation did not switch the live key');
+  assert.equal(service.encryption.keyring.rotation, undefined);
+  await assert.rejects(enc(service, 'encryption.rotate', { target: 'wrapping' }));
+  const after = await service.execute('materials.create', { title: 'Written after the failed saves', content: 'AFTER-FAILURE-BODY' });
+  assert.ok(rows(directory, 'SELECT doc FROM records').every(row => row.doc.startsWith('wfe1.1.')), 'nothing is sealed under an unsaved key');
+  allowSave();
+  await service.close();
+  const reopened = open(t, directory, { safeStorage });
+  assert.equal((await reopened.execute('materials.get', { id: after.id })).content, 'AFTER-FAILURE-BODY');
+  assert.equal((await enc(reopened, 'encryption.checkRecoveryKey', { recoveryKey })).valid, true, 'the saved recovery key still unlocks');
 });
 
 test('disabling encryption rewrites plaintext, restores the on-disk index and removes the keyring', async t => {

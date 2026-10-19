@@ -304,7 +304,7 @@ if (mainSmoke) {
       await new Promise(resolve => portReservation.listen(0, '127.0.0.1', resolve));
       const port = portReservation.address().port;
       await new Promise(resolve => portReservation.close(resolve));
-      const token = 'browser-integration-test-token';
+      const token = 'browser-integration-test-token-0123456789abcdef';
       const main = spawn(electron, [...testFlags, `--user-data-dir=${profile}/main`, fileURLToPath(import.meta.url), '--weft-main-smoke'], {
         env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile }),
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -332,8 +332,12 @@ if (mainSmoke) {
         const cli = await promisify(execFile)(process.execPath, [
           fileURLToPath(new URL('../bin/weft.js', import.meta.url)), 'page.evaluate', JSON.stringify({ tabId: cliTab.id, expectedVersion: cliTab.version, expression: '6 * 7' }),
         ], { env: { ...process.env, WEFT_API_URL: `http://127.0.0.1:${port}`, WEFT_TOKEN: token } });
-        assert.equal(JSON.parse(cli.stdout).result, 42);
+        assert.deepEqual(JSON.parse(cli.stdout).result, { value: 42, contentTrust: 'untrusted' });
         assert.equal(JSON.parse(cli.stdout).execution, 'succeeded');
+        // Evaluation results are page data for automation: marked untrusted, with control and bidi-override characters removed.
+        const marked = (await (await request('page.inspect')).json()).result;
+        const cleaned = (await (await request('page.evaluate', { tabId: marked.id, expectedVersion: marked.version, expression: '({ ["k\\u202e"]: "a\\u202eb\\u0007c", list: ["x\\u2066"] })' })).json()).result;
+        assert.deepEqual(cleaned, { value: { k: 'abc', list: ['x'] }, contentTrust: 'untrusted' });
         const mcp = new Client({ name: 'chromium-smoke', version: '1.0.0' });
         const transport = new StdioClientTransport({
           command: process.execPath,
@@ -346,7 +350,7 @@ if (mainSmoke) {
           assert.deepEqual((await mcp.listTools()).tools.map(tool => tool.name), mcpTools.map(tool => tool.name));
           const mcpTab = (await (await request('page.inspect')).json()).result;
           const answer = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.evaluate', args: { tabId: mcpTab.id, expectedVersion: mcpTab.version, expression: '21 * 2' } } });
-          assert.equal(JSON.parse(answer.content[0].text).result, 42);
+          assert.deepEqual(JSON.parse(answer.content[0].text).result, { value: 42, contentTrust: 'untrusted' });
           assert.equal(answer.structuredContent.execution, 'succeeded');
           const screenshot = await mcp.callTool({ name: 'weft_page', arguments: { action: 'page.screenshot', args: { tabId: mcpTab.id } } });
           assert.equal(screenshot.isError, undefined, JSON.stringify(screenshot.structuredContent ?? screenshot.content));

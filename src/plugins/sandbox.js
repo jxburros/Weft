@@ -1,10 +1,37 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const CHILD = fileURLToPath(new URL('./sandbox-child.cjs', import.meta.url));
 const MAX_LINE = 8 * 1024 * 1024 + 4096;
 const failure = (code, message) => Object.assign(new Error(message), { code });
+
+/**
+ * OS-level network layer under the vm context (#107). Electron's bundled Node permission model limits the
+ * filesystem but not the network, so on Linux the plugin process starts in a new unprivileged user and
+ * network namespace (`unshare --user --net`): it sees only a loopback interface that is down, so even a
+ * vm escape cannot open a connection. Where unprivileged namespaces are unavailable (macOS, Windows,
+ * kernels or AppArmor policies that forbid them) the result is 'vm-only' and the vm context is the
+ * only network boundary; plugins.list reports which applies.
+ */
+let isolationCache = null;
+export function pluginNetworkIsolation({ platform = process.platform, execPath = process.execPath, refresh = false } = {}) {
+  if (isolationCache && !refresh) return isolationCache;
+  const unshare = platform === 'linux' ? ['/usr/bin/unshare', '/bin/unshare'].find(path => existsSync(path)) : null;
+  let available = false;
+  if (unshare) {
+    const env = process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {};
+    const probe = spawnSync(unshare, ['--user', '--net', execPath, '-e', '0'], { env, stdio: 'ignore', timeout: 5000 });
+    available = probe.status === 0;
+  }
+  isolationCache = available ? { mode: 'network-namespace', unshare } : { mode: 'vm-only', unshare: null };
+  return isolationCache;
+}
+/** The command that starts a sandbox child, wrapped in a network namespace when available. */
+export function sandboxLaunch(execPath, args, isolation = pluginNetworkIsolation({ execPath })) {
+  return isolation.mode === 'network-namespace' ? { command: isolation.unshare, args: ['--user', '--net', execPath, ...args] } : { command: execPath, args };
+}
 
 /**
  * One OS process per enabled third-party plugin. The process gets an empty
@@ -28,7 +55,8 @@ export class PluginSandbox {
     const args = ['--permission', `--max-old-space-size=${this.heapMb}`, '--disallow-code-generation-from-strings', CHILD];
     // Inside Electron, execPath is the Electron binary; run it as plain Node.
     const env = process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {};
-    const child = spawn(process.execPath, args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const launch = sandboxLaunch(process.execPath, args);
+    const child = spawn(launch.command, launch.args, { cwd: tmpdir(), env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.child = child;
     let buffered = '';
     child.stdout.setEncoding('utf8');
