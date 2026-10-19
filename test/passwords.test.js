@@ -35,7 +35,7 @@ test('every saved-password command is human-only administration; agents and mode
   const { dispatch, passwords, workspace } = fixture(t);
   for (const name of Object.keys(commands).filter(item => item.startsWith('passwords.'))) {
     assert.equal(commands[name].humanOnly, true, name);
-    assert.equal(commands[name].actionClass, 'administration', name);
+    assert.equal(commands[name].actionClass, name === 'passwords.list' ? 'local_read' : 'administration', name);
   }
   const saved = await dispatch('passwords.save', { origin: 'https://example.com', username: 'alice', password: 'correct horse' }, human);
   assert.equal(saved.error, null);

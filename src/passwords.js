@@ -39,7 +39,9 @@ export const passwordCommandDefinitions = {
   'passwords.export': ['Human exports this workspace\'s sign-ins as a plaintext CSV file (acknowledgement required)', { workspaceId, path: absolute, acknowledgePlaintext: z.literal(true) }],
 };
 export const PASSWORD_COMMANDS = Object.freeze(Object.keys(passwordCommandDefinitions));
-classify('administration', PASSWORD_COMMANDS);
+// Every command is human-only; listing is a read so the person's own browsing is not logged as administration.
+classify('administration', PASSWORD_COMMANDS.filter(name => name !== 'passwords.list'));
+classify('local_read', 'passwords.list');
 const schemas = Object.fromEntries(Object.entries(passwordCommandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));
 const failure = (code, message, details) => Object.assign(new Error(message), { code, ...(details && { details }) });
 

@@ -21,7 +21,9 @@ export const extensionCommandDefinitions = {
   'extensions.actions': ['Human lists the toolbar buttons (action popup, options page) of extensions enabled in a workspace', { workspaceId }],
   'extensions.openPage': ['Human opens an enabled extension\'s action popup or options page in a browser-owned window', { id, page: z.enum(['popup', 'options']) }],
 };
-classify('administration', 'extensions.actions extensions.openPage');
+// Listing toolbar buttons is a read (still human-only); opening an extension page is administration.
+classify('local_read', 'extensions.actions');
+classify('administration', 'extensions.openPage');
 const schemas = Object.fromEntries(Object.entries(extensionCommandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));
 const recordSchema = z.strictObject({ id: z.string(), workspaceId: z.string(), name: z.string(), version: z.string(), sha256: z.string(), hostGrants: z.array(z.string()), permissions: z.array(z.string()),
   enabled: z.boolean(), installedAt: z.string(), source: z.string(), chromeId: z.string().nullable(), lastError: z.string().nullable() });

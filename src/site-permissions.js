@@ -22,7 +22,7 @@ export const UNPROMPTED_PERMISSIONS = Object.freeze({
 });
 /** Decisions that can be remembered per site. Popups use the same store with their own permission name. */
 export const STORED_PERMISSIONS = Object.freeze([...Object.keys(PROMPTED_PERMISSIONS), 'popups']);
-export const PROMPT_DECISIONS = Object.freeze(['allow-once', 'allow-while-open', 'allow-always', 'block', 'block-always']);
+export const PROMPT_DECISIONS = Object.freeze(['allow-once', 'allow-while-open', 'allow-always', 'dismiss', 'block', 'block-always']);
 const SENSOR_NAMES = new Set(['sensors', 'accelerometer', 'gyroscope', 'magnetometer', 'ambient-light-sensor']);
 const PROMPT_TTL_MS = 60_000;
 const PROMPT_GESTURE_MS = 5_000;
@@ -36,7 +36,7 @@ export const permissionCommandDefinitions = {
   'permissions.list': ['List per-site permission and popup decisions, pending prompts and which requests Weft asks about or always denies', { workspaceId }],
   'permissions.respond': ['Human answers a pending browser-owned permission prompt (deny when dismissed)', {
     promptId: z.string().regex(/^perm_[0-9a-f-]{36}$/).describe('Pending prompt id from permissions.list or the tab protection state.'),
-    decision: z.enum(PROMPT_DECISIONS).describe('allow-once: this page only; allow-while-open: until the site has no open tab in this workspace; allow-always / block-always: remembered for the site in this workspace; block: until the site is closed.'),
+    decision: z.enum(PROMPT_DECISIONS).describe('allow-once: this page only; allow-while-open: until the site has no open tab in this workspace; allow-always / block-always: remembered for the site in this workspace; block: until the site is closed; dismiss: deny this request only.'),
     sourceId: z.string().min(1).max(200).optional().describe('Screen sharing only: the screen or window chosen in the source picker.') }],
   'permissions.set': ['Human reviews or revokes a remembered site permission or popup decision in a workspace', { workspaceId, origin,
     permission: z.enum(STORED_PERMISSIONS), decision: z.enum(['allow', 'block', 'ask']).describe('ask removes every remembered and open-site decision, so the site must ask again.') }],
@@ -260,6 +260,7 @@ export class SitePermissions {
       if (!prompt) throw failure('not_found', 'Permission prompt not found or already answered');
       const tab = this.browser?.tabs?.get(prompt.tabId);
       if (!tab || (tab.documentSerial ?? 0) !== prompt.document) { this.settle(prompt, false, 'dismissed'); throw failure('stale_state', 'The page changed; the request was denied', { reason: 'navigated' }); }
+      if (args.decision === 'dismiss') { this.settle(prompt, false, 'dismissed', prompt.display ? {} : undefined); return { promptId: prompt.id, decision: 'dismiss' }; }
       const allow = args.decision.startsWith('allow');
       if (prompt.display && allow && ['allow-while-open', 'allow-always'].includes(args.decision)) throw failure('invalid_arguments', 'Screen sharing is allowed one page at a time (allow-once)');
       for (const permission of prompt.permissions) {

@@ -171,6 +171,8 @@ if (primary) app.whenReady().then(async () => {
   browser.onAudit = entry => activity.append(entry);
   browser.onEvent = event => events.emit('event', event);
   // Browser-owned keys pressed inside a page return keyboard focus to the trusted chrome (#31).
+  // A permission prompt or password offer appeared: the trusted GUI refreshes at once.
+  browser.onSitePrompt = () => { if (!window.isDestroyed()) window.webContents.send('weft:site-prompt'); };
   browser.onChromeShortcut = ({ shortcut }) => { if (!window.isDestroyed()) { window.webContents.focus(); window.webContents.send('weft:chrome', shortcut); } };
   // A hidden window renders pages offscreen so captures keep working without a display (ADR 015).
   if (launchHeadless) { browser.hidden = true; browser.offscreen = true; }

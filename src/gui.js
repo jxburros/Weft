@@ -5,6 +5,7 @@ import { icon, illustration } from "./icons.js";
 import { knowledgeUI } from "./gui-knowledge.js";
 import { announce, focusView, keyboardScrollable, stateBadge, trustedBand } from "./gui-a11y.js";
 import { listsUI } from "./gui-lists.js";
+import { siteUI } from "./gui-site.js";
 const $ = (id) => document.getElementById(id);
 // Errors thrown across the preload bridge keep only their message, so the outcome is unwrapped here:
 // the shared outcome code ("locked", "approval_required", …) and status stay available to the GUI.
@@ -165,6 +166,19 @@ const knowledge = knowledgeUI({ $: (id) => $(id), esc, short, date, action, head
 // Community site list subscriptions (#28, src/gui-lists.js).
 const lists = listsUI({ esc, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a), closeDialog: () => closeDialog(),
   field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e), ws: () => ws() });
+// Site permission prompts, popups, saved passwords, extensions and private windows (src/gui-site.js).
+const site = siteUI({ $: (id) => $(id), esc, action, openDialog: (...a) => openDialog(...a), closeDialog: () => closeDialog(), execute: (...a) => execute(...a), toast: (m) => toast(m),
+  errorMessage: (e) => errorMessage(e), ws: () => ws(), active: () => active(), refresh: (f) => refresh(f), siteControls: () => siteProtection() });
+// Toolbar extensions are re-read at most every 30 s (listing re-verifies installed files).
+let toolbarExtensions = { workspaceId: null, at: 0, items: [] };
+function extensionsForToolbar() {
+  const id = ws()?.id;
+  if (id && (toolbarExtensions.workspaceId !== id || Date.now() - toolbarExtensions.at > 30000)) {
+    toolbarExtensions = { workspaceId: id, at: Date.now(), items: toolbarExtensions.workspaceId === id ? toolbarExtensions.items : [] };
+    void weftExecute("extensions.actions", { workspaceId: id }).then((items) => { toolbarExtensions.items = items; }, () => {});
+  }
+  return toolbarExtensions.items;
+}
 // Polling replaces controls. Keep keyboard focus on the equivalent new control.
 function rememberFocus() {
   const element = document.activeElement;
@@ -293,6 +307,8 @@ async function refreshState(force) {
       if (shown && shown.revision !== openTaskDetail.revision) void taskDetail(shown.id).catch(() => {});
       if (!document.activeElement || document.activeElement === document.body) restoreFocus();
     }
+    // A pending browser-owned permission prompt or password offer for the page in view (#90, #95).
+    site.afterRefresh(section === "browse" ? active() : null);
     if (document.activeElement !== $("address"))
       $("address").value =
         section === "browse" && active()?.url !== "about:blank"
@@ -404,6 +420,7 @@ function renderShell() {
   $("site-controls").classList.toggle("has-activity", stopped > 0);
   $("site-controls").setAttribute("aria-label", stopped ? `Site controls: ${stopped} blocked on this page` : "Site controls");
   $("site-controls").title = stopped ? `${stopped} blocked on this page` : "Site controls";
+  site.indicators(section === "browse" ? active() : null, extensionsForToolbar());
   $("back").disabled = !active()?.blocked && !active()?.canGoBack;
   $("forward").disabled = !active()?.canGoForward;
   $("stop").hidden = !active()?.loading;
@@ -1133,11 +1150,12 @@ async function siteProtection() {
   const blockedCount = (activity.cookieHeadersRemoved || 0) + (activity.setCookieRemoved || 0) + (activity.crossSiteCookiesBlocked || 0) + (activity.speculativeLoadsCancelled || 0);
   openDialog(
     `Site controls · ${hostname}`,
-    `<p>Storage for this site: <strong>${esc(storageModeLabel[current])}</strong>${current === "default" ? ` (${esc(storageModeLabel[p.storageMode?.mode] || "Remembered")})` : ""}. Changes apply after reload. Sites and agents cannot change this.</p><div class="inline-actions">${["block", "session", "remember", "default"].map((m) => action("storage-mode", m === "block" ? "Block site storage" : m === "session" ? "Allow for this session" : m === "remember" ? "Remember this site" : "Use workspace default", "", `data-host="${esc(hostname)}" data-mode="${m}"`, m === current ? "primary" : "secondary")).join("")}${action("clear-storage", "Clear this site", "trash")}</div><p>On this page: ${blockedCount} cookie or speculative request(s) stopped${activity.documentsSandboxed ? `, ${activity.documentsSandboxed} document(s) loaded without storage` : ""}, ${(p.blockedPopups || []).length} popup(s) blocked, ${Object.values(p.permissionDenials || {}).reduce((a, b) => a + b, 0)} permission request(s) denied, ${p.pendingLaunches || 0} application launch request(s) waiting.</p>${(p.blockedPopups || []).slice(-3).map((b) => `<div class="settings-row"><div><strong>Blocked popup</strong><small>${esc(b.url)}</small></div>${action("open-url", "Open in new tab", "external", `data-url="${esc(b.url)}"`)}</div>`).join("")}${p.securityWarning ? `<div class="notice">${esc(p.securityWarning)}</div>` : ""}${action("explain-url", "Why is this site allowed or blocked?", "search", `data-url="${esc(tab.url)}"`, "text-button")}`,
+    `<p>Storage for this site: <strong>${esc(storageModeLabel[current])}</strong>${current === "default" ? ` (${esc(storageModeLabel[p.storageMode?.mode] || "Remembered")})` : ""}. Changes apply after reload. Sites and agents cannot change this.</p><div class="inline-actions">${["block", "session", "remember", "default"].map((m) => action("storage-mode", m === "block" ? "Block site storage" : m === "session" ? "Allow for this session" : m === "remember" ? "Remember this site" : "Use workspace default", "", `data-host="${esc(hostname)}" data-mode="${m}"`, m === current ? "primary" : "secondary")).join("")}${action("clear-storage", "Clear this site", "trash")}</div><p>On this page: ${blockedCount} cookie or speculative request(s) stopped${activity.documentsSandboxed ? `, ${activity.documentsSandboxed} document(s) loaded without storage` : ""}, ${(p.blockedPopups || []).length} popup(s) blocked, ${Object.values(p.permissionDenials || {}).reduce((a, b) => a + b, 0)} permission request(s) denied, ${p.pendingLaunches || 0} application launch request(s) waiting.</p>${(p.blockedPopups || []).slice(-3).map((b) => `<div class="settings-row"><div><strong>Blocked popup</strong><small>${esc(b.url)}</small></div>${b.id ? action("popup-allow", "Open once", "external", `data-id="${esc(b.id)}" data-tab="${tab.id}"`) + action("popup-allow", "Always allow pop-ups here", "", `data-id="${esc(b.id)}" data-tab="${tab.id}" data-mode="always"`) : action("open-url", "Open in new tab", "external", `data-url="${esc(b.url)}"`)}</div>`).join("")}${p.popupsAllowed ? `<div class="settings-row"><div><strong>Pop-ups allowed for this site</strong></div>${action("perm-revoke", "Block pop-ups again", "", `data-host="${esc(new URL(tab.url).origin)}" data-kind="popups"`)}</div>` : ""}${site.controlsSection()}${p.securityWarning ? `<div class="notice">${esc(p.securityWarning)}</div>` : ""}${action("explain-url", "Why is this site allowed or blocked?", "search", `data-url="${esc(tab.url)}"`, "text-button")}`,
     action("close-dialog", "Close"),
     false,
     "Site controls",
   );
+  void site.loadControls(tab).catch(() => {});
 }
 async function explainUrl(url) {
   const r = await execute("siteRules.explain", { url, workspaceId: ws().id, ...(active() ? { tabId: active().id } : {}) }, true);
@@ -1261,6 +1279,8 @@ function openDialog(title, body, footer = "", wide = false, trusted = "") {
   );
 }
 function clearDialogSecrets() {
+  // A saved password shown in the passwords manager (#95) never outlives its dialog.
+  for (const shown of document.querySelectorAll(".secret-reveal")) shown.textContent = "";
   const secret = $("service-secret");
   if (secret) secret.value = "";
   const recovery = $("recovery-key");
@@ -3075,6 +3095,7 @@ async function act(button) {
   if (button.closest?.(".palette-results")) closeDialog();
   if (await knowledge.handle(a, button)) return;
   if (await lists.handle(a, button)) return;
+  if (await site.handle(a, button)) return;
   switch (a) {
     case "manage-clients":
       await manageClients();
@@ -4116,7 +4137,7 @@ $("split-view").onclick = () => {
 $("page-more").onclick = () =>
   openDialog(
     "Page tools",
-    `<div class="inline-actions">${action("capture-selection", "Send selected text to Weft", "chat")}${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${splitTabId ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
+    `<div class="inline-actions">${action("capture-selection", "Send selected text to Weft", "chat")}${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${splitTabId ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}${site.pageTools()}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
   );
 for (const name of ["back", "forward", "reload", "stop"])
   $(name).onclick = () => void execute(`page.${name}`).catch(() => {});
@@ -4150,6 +4171,8 @@ function cycleRegion(step, from = null) {
   regions[(index + step + regions.length) % regions.length].focus();
 }
 // Browser-owned keys pressed inside a page arrive here: the page can never keep keyboard focus.
+// A new browser-owned prompt or save offer: refresh now instead of waiting for the next poll.
+window.weft.onSitePrompt?.(() => void refresh(true).catch(() => {}));
 window.weft.onChrome?.((shortcut) => {
   if (lockScreenOpen) return;
   if ($("dialog").open) return;
