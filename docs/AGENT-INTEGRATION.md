@@ -367,6 +367,17 @@ refuses tabs that are leased, linked to an open task, busy, playing media or
 holding edited form fields and lists why. `tabs.search` finds tabs by title, URL
 or group, and `resume.get` lists blockers, open tasks and handoffs to continue.
 
+Tab order is the order of `tabs.list`; `tabs.reorder` moves a tab nobody else
+holds and does not change its version. `tabs.closed` lists up to 25 recently
+closed tabs of the workspace (data class `browsing_history`; cleared when a
+person clears history) and `tabs.reopen` reopens one at its saved scroll and
+zoom like `tabs.new`: it comes back without any lease, control mode or
+protected-operation state. Browser shortcuts, the page context menu, the print
+dialog, DevTools and page source are people-only chrome, not commands; agent
+key presses never trigger a shortcut, and `view-source:` addresses are refused.
+The address-bar search engine is a human-only `settings.update` field
+(`searchEngine`).
+
 ## Updates
 
 Agents can read update state with `update.status` (MCP `weft_browser`; also
