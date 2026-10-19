@@ -208,19 +208,25 @@ export class PasswordService {
     // Electron defers page scripts while a main-frame navigation loads, so a form post cannot be read once it
     // starts: the filled form is read when the person presses the mouse or Enter, and offered if a navigation follows.
     let pressed = null;
-    const navigated = () => {
+    // The snapshot taken at the press may still be on its way back when the navigation starts (a quick click on a
+    // busy machine): wait for it briefly rather than dropping the offer.
+    let pending = null;
+    const navigated = async () => {
+      if (pending) await Promise.race([pending, new Promise(resolve => setTimeout(resolve, 1000).unref?.())]);
       const candidate = pressed && this.now() - pressed.at < CANDIDATE_GESTURE_MS ? pressed.candidate : null;
       pressed = null;
       if (candidate && this.browser?.recentHumanInput?.(tab, CANDIDATE_GESTURE_MS)) void this.offer(tab, candidate).catch(() => {});
     };
-    contents.on('will-navigate', navigated);
-    contents.on('did-start-navigation', details => { if (details?.isMainFrame && !details.isSameDocument) navigated(); });
+    contents.on('will-navigate', () => void navigated());
+    contents.on('did-start-navigation', details => { if (details?.isMainFrame && !details.isSameDocument) void navigated(); });
     const input = (_event, data) => {
       const enter = data?.key === 'Enter';
       if (data?.type === 'mouseDown' || (['keyDown', 'rawKeyDown'].includes(data?.type) && enter)) {
         if (contents.isLoadingMainFrame?.()) return;
-        void contents.executeJavaScriptInIsolatedWorld(PASSWORD_WORLD, [{ code: SNAPSHOT_SCRIPT }])
-          .then(candidate => { pressed = candidate?.password ? { candidate, at: this.now() } : null; }, () => {});
+        const at = this.now();
+        const snapshot = pending = contents.executeJavaScriptInIsolatedWorld(PASSWORD_WORLD, [{ code: SNAPSHOT_SCRIPT }])
+          .then(candidate => { pressed = candidate?.password ? { candidate, at } : null; }, () => {})
+          .finally(() => { if (pending === snapshot) pending = null; });
       }
       // Script sign-ins (fetch) do not navigate: take the submitted form shortly after the click or Enter.
       if (data?.type === 'mouseUp' || (data?.type === 'keyUp' && enter)) setTimeout(() => this.take(tab, contents), 800).unref?.();
