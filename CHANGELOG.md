@@ -41,6 +41,7 @@ Everyday-browser parity, the Everything workspace, multiple windows and 1–4 pa
 
 ### Fixed
 
+- Full-text search stays fast on Node 22.23 / SQLite 3.51, whose query planner re-ran the match once per indexed document (about 1.7 s instead of 9 ms across 1k captures); found by the new CI performance job.
 - Case-insensitive redaction no longer leaves part of a secret visible when case mapping changes text length (#104).
 - Key rotation applies new keys only after the keyring is saved, so a failed save can no longer lose data (#105).
 - Client tokens are signed with a persisted per-profile key and survive restarts (#110).

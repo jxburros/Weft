@@ -905,7 +905,7 @@ export class MetadataStore {
   searchCount({ workspaceId, query }) {
     const compiled = compileQuery(query);
     if (!compiled || typeof workspaceId !== 'string') return 0;
-    return this.db.prepare('SELECT count(*) AS count FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid WHERE search_fts MATCH ? AND d.workspace_id = ?').get(compiled.any ?? compiled.all, workspaceId).count;
+    return this.db.prepare('SELECT count(*) AS count FROM search_fts CROSS JOIN search_docs d ON d.rowid = search_fts.rowid WHERE search_fts MATCH ? AND d.workspace_id = ?').get(compiled.any ?? compiled.all, workspaceId).count;
   }
   /** Indexed documents of a workspace (lexical coverage). */
   documentCount(workspaceId) { return this.db.prepare('SELECT count(*) AS count FROM search_docs WHERE workspace_id = ?').get(workspaceId).count; }
@@ -913,9 +913,10 @@ export class MetadataStore {
     this.assertOpen();
     const compiled = compileQuery(query);
     if (!compiled || typeof workspaceId !== 'string') return [];
-    // Rank first; build excerpts only for the returned rows.
+    // Rank first; build excerpts only for the returned rows. CROSS JOIN keeps the full-text match as the outer loop:
+    // SQLite 3.51 (Node 22.23) otherwise walks the workspace index and re-runs the MATCH once per document.
     const statement = this.db.prepare(`SELECT d.rowid AS rowid, d.collection, d.record_id, d.version_id, d.version_number, d.revision, d.local_only, d.updated_at, bm25(search_fts, 6.0, 1.0) AS score
-      FROM search_fts JOIN search_docs d ON d.rowid = search_fts.rowid
+      FROM search_fts CROSS JOIN search_docs d ON d.rowid = search_fts.rowid
       WHERE search_fts MATCH ? AND d.workspace_id = ? ORDER BY score, d.rowid LIMIT ?`);
     // FTS5 snippet() scores every fragment of large captures; a direct scan for the first query token is far cheaper.
     const text = this.db.prepare('SELECT title, body FROM search_fts WHERE rowid = ?');
