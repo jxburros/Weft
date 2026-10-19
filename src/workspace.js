@@ -26,7 +26,7 @@ import { ProfileEncryption } from './profile-encryption.js';
 import { encryptionSchemas } from './encryption-commands.js';
 // Same registered symbol as commands.js PARTIAL_COVERAGE (not imported here to avoid an import cycle).
 const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
-import { applyTransition, appendTimeline, isHumanContext, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
+import { applyTransition, appendTimeline, normalizePhase, sameIdentity, staleness, TERMINAL_PHASES } from './task-phases.js';
 
 const collections = [...Object.keys(recordShapes), 'artifacts'];
 const now = () => new Date().toISOString();

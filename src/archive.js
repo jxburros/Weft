@@ -81,7 +81,7 @@ export function parseMhtml(bytes, { maxParts = ARCHIVE_LIMITS.maxResources } = {
     const end = body.search(/\r?\n\r?\n/);
     if (end < 0) continue;
     const head = headers(body.slice(0, end));
-    let content = body.slice(end).replace(/^\r?\n\r?\n/, '').replace(/\r?\n$/, '');
+    const content = body.slice(end).replace(/^\r?\n\r?\n/, '').replace(/\r?\n$/, '');
     const encoding = (head['content-transfer-encoding'] || 'binary').toLowerCase();
     let decoded;
     if (encoding === 'base64') decoded = Buffer.from(content.replace(/\s+/g, ''), 'base64');

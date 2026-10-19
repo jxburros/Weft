@@ -1,7 +1,11 @@
 # Validation and supported test coverage
 
 `npm ci` installs the locked dependencies. Run `node node_modules/electron/install.js`
-once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript.
+once before parallel tests to install Electron 44 without lazy-installer races. `npm run check` syntax-checks JavaScript,
+fails on exports nothing in the repository uses (`scripts/unused-exports.mjs`) and runs ESLint with
+the small rule set in `eslint.config.js` (`npm run lint` runs ESLint alone): unused variables, empty
+blocks without a comment, unreachable code, `==` other than against `null`, and `let` that is never
+reassigned. `no-shadow` is deliberately not enabled (see the comment in the config).
 `npm run test:unit` runs non-GUI tests with a three-minute per-file cap (multiplied, like
 every explicit per-test timeout, by `WEFT_TEST_TIME_SCALE`; CI sets 4 on Windows, whose synced
 disk writes are several times slower) and

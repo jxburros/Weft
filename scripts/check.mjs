@@ -16,3 +16,8 @@ function check(directory) {
   }
 }
 directories.forEach(check);
+// Then exports nothing uses (#124) and the small lint rule set in eslint.config.js (#118).
+for (const args of [['scripts/unused-exports.mjs'], ['node_modules/eslint/bin/eslint.js', '.']]) {
+  const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+  if (result.status !== 0) process.exit(result.status || 1);
+}

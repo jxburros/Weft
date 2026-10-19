@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url';
 import electron from 'electron';
 import { Browser, applyEngineHardening } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
-import { CommunityLists } from '../src/community-lists.js';
 import { executeOutcome } from '../src/commands.js';
 import { electronEnv } from '../scripts/electron-env.js';
 import { budget } from './time-budget.js';

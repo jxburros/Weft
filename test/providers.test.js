@@ -275,8 +275,7 @@ test('unknown write tools and model attempts to change workspace or tab are refu
 
 test('conversation workspace changes during inference prevent cross-workspace tool reads', async t => {
   let reads = 0;
-  let fixtureData;
-  fixtureData = await fixture(t, (_req, res) => {
+  const fixtureData = await fixture(t, (_req, res) => {
     fixtureData.conversations.get('conversation-1').workspaceId = 'project-b';
     reply(res, toolReply('workspace_search', { query: 'secret' }));
   }, { searchWorkspace: async () => { reads++; return []; } });

@@ -103,7 +103,7 @@ test('system memory pressure suspends a few idle background tabs, combined with 
   addTab(9, { lastActiveAt: now });
   browser.activeId = 9;
   // Moderate: at most two idle tabs (idle 5+ minutes), least recently used first; edited pages stay loaded.
-  let level = 'moderate';
+  const level = 'moderate';
   const samples = [];
   browser.systemMemory = async () => { samples.push(level); return { available: true, level, reasons: ['psi'], sources: ['linux_psi'], psi: { someAvg10: 15, fullAvg10: 0 } }; };
   let results = await browser.suspendIdle({ now });

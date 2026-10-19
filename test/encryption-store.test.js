@@ -230,7 +230,7 @@ test('exports from an encrypted profile need explicit plaintext acknowledgement 
 
 test('encrypted backups stay encrypted with their keyring; restores reuse or require the matching key', async t => {
   const directory = profile(t);
-  let service = open(t, directory);
+  const service = open(t, directory);
   const { note } = await seed(service);
   const plainBackup = await service.execute('backups.create', { note: 'plaintext' });
   const { recoveryKey } = await enc(service, 'encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'manual', passphrase: 'correct horse battery staple' });

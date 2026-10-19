@@ -44,7 +44,8 @@ invent a new confirmation requirement for ordinary reversible work.
 
 1. Make the smallest coherent implementation and relevant regression checks;
    avoid tests that merely mirror static implementation details.
-2. Run inexpensive targeted checks, then the required suite. On headless Linux,
+2. Run inexpensive targeted checks (`npm run check` covers syntax, unused exports
+   and lint), then the required suite. On headless Linux,
    real Chromium tests require `xvfb-run -a npm test`; plain `npm test` reports
    display-dependent tests as skipped.
 3. Rerun `npm run test:docs` and `npm run evals` for command contract/guidance

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs, { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, statSync, utimesSync } from 'node:fs';
+import fs, { mkdtempSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';

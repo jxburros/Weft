@@ -1123,7 +1123,11 @@ async function loadDownloads() {
             "Files you download will appear here with their source and status.",
             "download",
           ));
-  } catch {}
+  } catch (error) {
+    // A failed render must not leave a stale or blank panel without saying why (#126).
+    console.error("Weft: the downloads panel could not be rendered", error);
+    if ($("download-list")) setHTML($("download-list"), `<div class="notice" role="alert">Downloads could not be listed: ${esc(errorMessage(error))}</div>`);
+  }
 }
 async function siteProtection() {
   const tab = active();
@@ -2036,7 +2040,6 @@ async function openPreview(id, versionId) {
 async function closePreview(quiet = false) {
   if (!previewing) return;
   previewing = null;
-let dialogGeneration = 0;
   try { await weftExecute("artifacts.closePreview", {}); } catch { /* already closed */ }
   if (!quiet) { renderContent(); layout(); }
 }
@@ -2321,7 +2324,7 @@ async function restoreBackupDialog(id) {
 // ---- Workspace encryption (ADR 014) ---------------------------------------
 let encryption = null;
 let lockScreenOpen = false;
-let unlockWaiters = [];
+const unlockWaiters = [];
 const backendLabel = (b) => ({ keychain: "macOS Keychain", dpapi: "Windows DPAPI", gnome_libsecret: "Secret Service (libsecret)", kwallet: "KWallet", kwallet5: "KWallet 5", kwallet6: "KWallet 6", basic_text: "basic_text (no OS secret service)" })[b] || b || "none";
 function plaintextExportNotice() {
   if (!encryption?.enabled) return "";

@@ -46,7 +46,7 @@ test('a single report never designates: proposals and single approvals enforce n
   assert.throws(() => reviewEntry(submitted.state, { actor: 'sub1', entryId: id, decision: 'approve', now: T0 }), /ROLE_REQUIRED/);
   const selfReviewer = addRole(submitted.state, { actor: 'maint', member: 'sub1', role: 'reviewer', now: T0 });
   assert.throws(() => reviewEntry(selfReviewer, { actor: 'sub1', entryId: id, decision: 'approve', now: T0 }), /CONFLICT_OF_INTEREST/);
-  let one = reviewEntry(submitted.state, { actor: 'rev1', entryId: id, decision: 'approve', now: T0 });
+  const one = reviewEntry(submitted.state, { actor: 'rev1', entryId: id, decision: 'approve', now: T0 });
   assert.equal(one.entry.status, 'proposed');
   assert.throws(() => reviewEntry(one.state, { actor: 'rev1', entryId: id, decision: 'approve', now: T0 }), /ALREADY_REVIEWED/);
   assert.equal(evaluate(one.state).entries[0].behavior, 'none');
