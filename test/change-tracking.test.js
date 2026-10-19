@@ -1,16 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { trackChanges, untracked } from '../src/change-tracker.js';
 import { WorkspaceService } from '../src/workspace.js';
+import { closeAfter, closeQuietly, tempDirectory } from './temp-profile.js';
 
 function service(t) {
-  const directory = mkdtempSync(join(tmpdir(), 'weft-tracking-'));
-  const workspace = new WorkspaceService({ directory });
-  t.after(() => { workspace.close(); rmSync(directory, { recursive: true, force: true }); });
-  return workspace;
+  const directory = tempDirectory(t, 'weft-tracking-');
+  return closeAfter(t, new WorkspaceService({ directory }), closeQuietly);
 }
 
 test('the tracker notes records read, collections touched and keys replaced, and never stores a proxy', () => {
@@ -57,7 +53,7 @@ test('a command re-serializes only the records it read, and the commit matches a
   assert.ok(hinted < 20, `the tracked commit serialized ${hinted} materials`);
   workspace.close();
   const reopened = new WorkspaceService({ directory: workspace.directory });
-  t.after(() => reopened.close());
+  closeAfter(t, reopened);
   assert.equal((await reopened.execute('materials.get', { id: 'material-1999' })).content, 'changed');
 });
 

@@ -4,9 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { readJson, writeJsonDurable } from '../src/atomic-json.js';
 import { PROVIDER_PRESETS, reportedCapabilities } from '../src/provider-presets.js';
 import { describeCapabilities, MCP_RESOURCES, MAX_DEADLINE_MS } from '../src/capabilities.js';
@@ -16,8 +15,9 @@ import { createClient } from '../src/client.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { commands } from '../src/commands.js';
 import { budget } from './time-budget.js';
+import { closeAfter, closeQuietly, tempDirectory } from './temp-profile.js';
 
-const temporary = t => { const directory = mkdtempSync(join(tmpdir(), 'weft-contract-')); t.after(() => rmSync(directory, { recursive: true, force: true })); return directory; };
+const temporary = t => tempDirectory(t, 'weft-contract-');
 
 test('writeJsonDurable replaces a file whole, privately, and leaves no temporary file behind', t => {
   const directory = temporary(t);
@@ -120,7 +120,7 @@ test('the encryption coverage statement is frozen and names what stays unencrypt
   // The statement Weft gives callers is exactly this table.
   const directory = temporary(t);
   const service = new WorkspaceService({ directory });
-  t.after(() => service.close());
+  closeAfter(t, service, closeQuietly);
   assert.deepEqual((await service.executeEncryption('encryption.status', {}, { actor: 'human', source: 'gui' })).coverage, structuredClone(ENCRYPTION_COVERAGE));
 });
 
@@ -140,7 +140,7 @@ test('the offline store CLI validates its arguments, lists, verifies and restore
   const restored = runStoreCommand(['restore', directory, backup.id]);
   assert.equal(restored.verification.status, 'verified');
   const reopened = new WorkspaceService({ directory });
-  t.after(() => reopened.close());
+  closeAfter(t, reopened, closeQuietly);
   assert.equal((await reopened.execute('materials.get', { id: note.id })).content, 'v1');
   assert.ok(readFileSync(join(directory, '.workspace.lock'), 'utf8').includes(String(process.pid)), 'the reopened service holds the lock again');
 });

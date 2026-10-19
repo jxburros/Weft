@@ -1,23 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Browser } from '../src/browser.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { commands } from '../src/commands.js';
+import { closeAfter, closeQuietly, tempDirectory } from './temp-profile.js';
 import { PasswordService, generatePassword, importRows, parseCsv } from '../src/passwords.js';
 
 const human = { actor: 'human', source: 'gui' };
 const protector = { status: () => ({ available: true, backend: 'test', protected: true }), wrap: text => Buffer.from(`wrapped:${text}`), unwrap: bytes => Buffer.from(bytes).toString().slice(8) };
 
 function fixture(t, options = {}) {
-  const directory = mkdtempSync(join(tmpdir(), 'weft-passwords-'));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const workspace = new WorkspaceService({ directory: join(directory, 'records') });
+  const directory = tempDirectory(t, 'weft-passwords-');
+  const workspace = closeAfter(t, new WorkspaceService({ directory: join(directory, 'records') }), closeQuietly);
   const session = new EventEmitter();
   session.setPermissionRequestHandler = () => {};
   session.setPermissionCheckHandler = () => {};
