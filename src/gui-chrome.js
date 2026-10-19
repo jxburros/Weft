@@ -176,9 +176,6 @@ export function chromeUI(deps) {
   let selected = -1;
   const isOpen = () => !$("omnibox-list").hidden;
   const engine = () => searchEngine(getState().settings);
-  function looksLikeUrl(value) {
-    return /^[a-z][a-z\d+.-]*:/i.test(value) || (!/\s/.test(value) && (value.includes(".") || value.startsWith("localhost")));
-  }
   function suggest(query) {
     const q = query.trim().toLowerCase();
     if (!q) return [];
