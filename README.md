@@ -48,19 +48,29 @@ MCP or REST. Details: [connecting clients](docs/CONNECTING.md) and
 - **Browse** with native Chromium pages, separate sign-in state per workspace,
   split view, bookmarks, history, downloads and find.
 - **Organize** notes, website references, copied files, and what you have
-  confirmed, found, asked and decided, per workspace.
+  confirmed, found, asked and decided, per workspace. Give each workspace a
+  description, standing instructions and memory, and an optional due date.
+- **Collect** messages you are reading in Gmail or Outlook, or any selected page
+  text, into a workspace mailbox with **Send to Weft**. You review the capture
+  first, and no mail account is connected.
 - **Continue work** with tasks that record objectives, blockers, checkpoints and
   next steps, and reusable workflows that pause for your approval. Work whose
   outcome is unknown is marked `uncertain` instead of being retried blindly.
 - **Keep evidence** by saving readable page text and screenshots as versions you
   can open offline and cite later.
-- **Choose your model** among OpenAI-compatible endpoints, Anthropic or local
-  Ollama. You see where each message goes and exactly what it includes before it
-  is sent. Weft never silently switches to a cloud provider.
+- **Choose your model**: OpenAI-compatible endpoints, Anthropic, Gemini,
+  DeepSeek, Moonshot, Meta Muse, local Ollama and others, with the model list
+  fetched from your key. You see where each message goes and exactly what it
+  includes before it is sent. Weft never silently switches to a cloud provider.
+- **Find what matters** with keyword search, optional semantic search, and an
+  Ask Weft control that attaches the most relevant cited passages. Opt-in
+  background learning keeps editable summaries of saved work, off by default.
 - **Set boundaries** with personal site rules, blocked redirects and background requests,
   per-site storage controls and optional signed community lists.
-- **Automate** from outside the app. The GUI, CLI, MCP and REST all use the same
-  validated commands.
+- **Automate** with workflows that can wake on a watched page change while Weft
+  is open, and from outside the app: the GUI, CLI, MCP and REST all use the same
+  validated commands. Ask Weft can propose an exact app action, which runs only
+  after you approve it.
 
 ## Install and run
 
@@ -99,7 +109,7 @@ integration authors is in [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)
 
 ## Status and limits
 
-This is version 1.1.3: a working browser that implements a large part, but not all,
+This is version 1.3.0: a working browser that implements a large part, but not all,
 of the [product specification](AI-Workspace-Browser-Product-Specification.md).
 [Implementation coverage](docs/IMPLEMENTATION.md) assesses it section by section.
 
@@ -109,8 +119,12 @@ Please know before relying on it:
   deliberately deferred ([ADR-002](docs/decisions/002-sync-collaboration-remote.md)).
 - **Installers are unsigned** until signing credentials are configured. Windows may show a SmartScreen warning; see [Using Weft](docs/USING-WEFT.md#installers-and-updates).
 - **Not yet independently verified:** the credential broker, payment
-  authorization with real merchants and card issuers, screen-reader behavior, and
-  the OS key stores used by optional workspace encryption.
+  authorization with real merchants and card issuers, screen-reader behavior,
+  the OS key stores used by optional workspace encryption, the Gmail and Outlook
+  capture adapters against signed-in accounts, and the model provider presets
+  against live accounts.
+- **Background work runs only while Weft is open and unlocked.** Web watches
+  and learning do not run while it is closed or across machine sleep.
 - **Your data is not encrypted** unless you turn on workspace encryption, and
   backups on the same disk do not protect against losing the disk.
 - **Weft does not protect secrets from an agent that controls your computer.** A

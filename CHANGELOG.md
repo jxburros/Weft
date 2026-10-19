@@ -3,7 +3,7 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
-## 1.3.0 — 2026-10-18
+## v1.3.0 — 2026-10-18
 
 - Capture visible Gmail/Outlook messages or selected page text into a workspace inbox through a reviewed Send to Weft flow; no domain, mail account connection or relay required.
 - Add inbox summarize, sort, remember and task drafts with explicit model/action review, source metadata, on-device defaults and archive controls.

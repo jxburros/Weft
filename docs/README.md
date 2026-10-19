@@ -8,6 +8,8 @@ works. This index groups everything else by who it is for.
 | Document | Read it to |
 | --- | --- |
 | [Using Weft](USING-WEFT.md) | Run Weft, learn the shortcuts, set up a model, understand where your data lives and what is and is not protected |
+| [Workspace agents](WORKSPACE-AGENTS.md) | Set workspace instructions and memory, connect a model provider, approve Ask Weft actions, watch pages and import email |
+| [Capture and learning](CAPTURE-AND-LEARNING.md) | Send webmail or page text to Weft, retrieve relevant context, and control background learning |
 | [Accessibility](ACCESSIBILITY.md) | See what keyboard and screen-reader support exists and what has been tested |
 | [Community lists](COMMUNITY-LISTS.md) | Subscribe to or publish signed site lists |
 | [Storage safety](STORAGE-SAFETY.md) | Understand backups, recovery, locking and encryption |

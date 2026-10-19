@@ -1,6 +1,6 @@
 # Contributing with an agent
 
-Last verified against code: 2026-10-18.
+Last verified against code: 2026-10-19.
 
 Weft is a local workspace browser for explicit human/agent collaboration, durable
 project evidence and visible authority. Read `docs/CORE-IDENTITY.md` for product
@@ -15,6 +15,9 @@ instructions; it does not override them or add a separate approval process.
   browser/workspace tests; do not infer implementation from the product spec.
 - CLI/API/MCP/schema/guidance change: `src/commands.js`,
   `docs/AGENT-INTEGRATION.md`, `evals/README.md` and the interface tests.
+- Model, memory, retrieval, capture or learning change:
+  `docs/WORKSPACE-AGENTS.md`, `docs/CAPTURE-AND-LEARNING.md` and
+  `docs/decisions/018-integration-contracts-and-hybrid-retrieval.md`.
 - GUI/style change: `Weft-Visual-Style-Guide.md` and GUI tests.
 
 ## Invariants

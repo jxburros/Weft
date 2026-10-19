@@ -1,4 +1,9 @@
-# Workspace agents in Weft 1.2
+# Workspace agents
+
+How to give a workspace standing context, connect a model, let Ask Weft propose
+app actions, wake workflows on page changes, and bring email into a workspace.
+
+## Workspace instructions and memory
 
 Edit a workspace from **Manage workspaces → Edit**. Descriptions, custom
 instructions and memory are durable workspace fields. General workspaces are
