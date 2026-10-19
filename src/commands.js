@@ -62,6 +62,11 @@ const definitions = {
   'tabs.move': ['Reopen a tab in another workspace isolated container', { tabId: tabId.unwrap(), workspaceId: workspaceId.unwrap(), expectedVersion }],
   'tabs.pin': ['Pin or unpin a tab', { tabId: tabId.unwrap(), pinned: z.boolean(), expectedVersion }],
   'tabs.duplicate': ['Duplicate a tab in its workspace', { tabId: tabId.unwrap() }],
+  'tabs.reorder': ['Move a tab to a position among its workspace tabs; the order persists and is the order of tabs.list', { tabId: tabId.unwrap(),
+    index: z.number().int().min(0).max(10000).describe('Zero-based position among the tabs of the workspace.') }],
+  'tabs.closed': ['List recently closed tabs of a workspace, newest first (at most 25; cleared with history)', {}],
+  'tabs.reopen': ['Reopen a recently closed tab at its saved scroll position and zoom; it reopens without any agent control', {
+    closedId: z.string().min(1).max(64).optional().describe('Id from tabs.closed; omit to reopen the most recently closed tab.') }],
   'tabs.group': ['Put a tab in a tab group of its workspace, or remove it from its group with null', { tabId: tabId.unwrap(),
     groupId: z.string().min(1).max(128).nullable().describe('Tab group id from tabGroups.list; null ungroups the tab.') }],
   'tabs.search': ['Search open tab titles and URLs with group, ownership, task and suspension indicators', {

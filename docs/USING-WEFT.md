@@ -54,17 +54,84 @@ account only and needs no administrator rights.
 
 ## Keyboard controls
 
+These work whether focus is in Weft's own controls or inside a website. On macOS
+use Cmd where the table says Ctrl. Keys marked † are ones websites conventionally
+may claim (a web editor that uses Ctrl+F for its own search, for example): Weft
+runs them only when the page did not handle the key itself. The others always
+go to Weft. Shortcuts are human input only; an agent's key presses never trigger
+them. Page tools (the ⋯ button) lists every shortcut.
+
 | Shortcut | Action |
 | --- | --- |
-| Ctrl/Cmd K | Search project records and actions |
-| Ctrl/Cmd L | Focus the address bar |
-| Ctrl/Cmd T | New tab |
-| Ctrl/Cmd W | Close the current tab |
-| Ctrl/Cmd F | Find in page |
-| Ctrl/Cmd J | Downloads |
-| Ctrl/Cmd Shift A | Search open tabs |
+| Ctrl K | Find anything: search project records and actions |
+| Ctrl L, Alt D | Focus the address bar |
+| Ctrl T | New tab |
+| Ctrl W | Close the current tab |
+| Ctrl Shift T | Reopen the last closed tab |
+| Ctrl Tab / Ctrl Shift Tab, Ctrl PageDown / PageUp | Next / previous tab (on macOS also Cmd Option → / ←) |
+| Ctrl 1–8, Ctrl 9 | Go to tab 1–8, the last tab |
+| Alt ← / Alt → (macOS Cmd [ / Cmd ]) † | Back / forward |
+| Ctrl R, F5 † | Reload; Ctrl Shift R or Shift F5 reloads without the cache |
+| Escape † | Stop loading (only while the page loads) |
+| Ctrl F † | Find in page (find bar: Enter / Shift Enter or F3 / Shift F3, Ctrl G / Ctrl Shift G for next / previous, Escape closes) |
+| Ctrl P † | Print, with the system print dialog |
+| Ctrl + / Ctrl − / Ctrl 0 † | Zoom in / out / reset (25%–500%) |
+| Ctrl D † | Bookmark this page |
+| Ctrl U † (macOS Cmd Option U) | View page source |
+| F12, Ctrl Shift I (macOS Cmd Option I) | Developer tools |
+| Ctrl J † | Downloads |
+| Ctrl Shift A † | Search open tabs |
+| Alt Shift ↑ / ↓ on a sidebar tab | Move the tab up or down |
+| Shift F10 or the menu key | The page's context menu |
 | F6 / Shift F6 | Move between the address bar, page, Ask Weft panel, sidebar and content, including from inside a website |
 | Escape | Close the current dialog |
+
+Ctrl Shift N (private window) and Ctrl Alt N (new window) are reserved; this
+version of Weft says so when you press them.
+
+## Everyday browsing
+
+- **Address bar.** Typing shows matching open tabs (switch to them), bookmarks
+  and this workspace's history, then a search row. Use ↑/↓ and Enter, or Escape
+  to close the list; the page steps aside while the list is open. Suggestions
+  come from this workspace only and never from history you cleared. Text that
+  is not an address goes to the search engine chosen in **Settings → Browsing**
+  (Google, DuckDuckGo, Bing, Brave Search, Startpage, Kagi, or a custom
+  `https://` address containing `%s` once). Google is the default because it was
+  Weft's only engine before. Nothing you type is sent anywhere until you press
+  Enter: Weft does not request suggestions from the engine.
+- **Find bar.** Ctrl F opens it under the address bar with the match count
+  ("2 of 12"), next/previous and Match case. Escape closes it and clears the
+  highlights.
+- **Zoom.** Ctrl +/−/0 or Page tools. When a page is not at 100% the address
+  bar shows its zoom; select it to reset. Zoom is remembered per site and per
+  workspace, and survives suspending and reopening tabs.
+- **Print.** Ctrl P or Page tools → Print… opens the system print dialog for the
+  page you are looking at (the focused pane in split view). Save as PDF remains
+  in Page tools.
+- **Context menu.** Right-click (or Shift F10) in a page for link, image,
+  selection, text-field and page actions: open a link or image in a new tab,
+  copy addresses, download a linked file or image to the Weft downloads folder,
+  copy, search the web for the selection, send it to Weft, cut/copy/paste,
+  spelling suggestions, back/forward/reload, save the page to the workspace,
+  print, view source and inspect. A link a site rule blocks is not opened, and
+  Weft says why.
+- **Recently closed tabs.** Ctrl Shift T, the "Recently closed" entry under the
+  tab list, or Page tools list up to 25 closed tabs per workspace. Reopening
+  restores the address, scroll position, zoom, pin and group, with you in
+  control; form input, sign-ins and in-page state are not restored. Clearing
+  history clears the list.
+- **Tab order.** Drag tabs in the sidebar to reorder them, onto the pinned
+  area to pin them, onto a tab group to add them, or onto another workspace in
+  the rail to move them (with the usual storage-container warning). Alt Shift
+  ↑/↓ moves the focused tab. The order is saved.
+- **Developer tools and page source.** F12 or Inspect opens Chromium DevTools in
+  a separate window; Ctrl U opens a read-only source view of the page in a new
+  tab that is not saved with your tabs. DevTools are refused for offline
+  previews, during a protected sign-in or payment operation, and on a tab an
+  agent drives (take control first). While DevTools are open the tab shows
+  "DevTools open" and Weft never fills a saved sign-in into it. Agents cannot
+  open DevTools or page source: neither is an agent command.
 
 Use the top-right **Ask Weft** button for conversations and the command icon for
 the complete command desk. Sidebar controls remain usable without configuring

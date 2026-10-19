@@ -5,6 +5,8 @@ import { icon, illustration } from "./icons.js";
 import { knowledgeUI } from "./gui-knowledge.js";
 import { announce, focusView, keyboardScrollable, stateBadge, trustedBand } from "./gui-a11y.js";
 import { listsUI } from "./gui-lists.js";
+import { chromeUI } from "./gui-chrome.js";
+import { searchUrl } from "./search-engines.js";
 const $ = (id) => document.getElementById(id);
 // Errors thrown across the preload bridge keep only their message, so the outcome is unwrapped here:
 // the shared outcome code ("locked", "approval_required", …) and status stay available to the GUI.
@@ -165,6 +167,11 @@ const knowledge = knowledgeUI({ $: (id) => $(id), esc, short, date, action, head
 // Community site list subscriptions (#28, src/gui-lists.js).
 const lists = listsUI({ esc, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a), closeDialog: () => closeDialog(),
   field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e), ws: () => ws() });
+// Shortcuts, find bar, zoom, address suggestions, recently closed tabs and tab drag-reorder (#88, #91, #92, #93, #96).
+const browserChrome = chromeUI({ $: (id) => $(id), esc, icon, toast: (m) => toast(m), announce, execute: (...a) => execute(...a), errorMessage: (e) => errorMessage(e), act: (b) => act(b),
+  active: () => active(), visibleTabs: () => visibleTabs(), records: (k) => records(k), ws: () => ws(), getState: () => state, navigateSection: (...a) => navigateSection(...a),
+  tabSearch: () => tabSearch(), layout: () => layout(), focusPage: () => focusPage(), refresh: (f) => refresh(f), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a),
+  field: (...a) => field(...a), closeDialog: () => closeDialog(), openUrl: (url) => openUrl(url), captureSelection: () => captureInbox("selection"), savePage: () => capture() });
 // Polling replaces controls. Keep keyboard focus on the equivalent new control.
 function rememberFocus() {
   const element = document.activeElement;
@@ -409,6 +416,7 @@ function renderShell() {
   $("stop").hidden = !active()?.loading;
   $("reload").hidden = !!active()?.loading;
   $("split-view").classList.toggle("sage-color", !!splitTabId);
+  browserChrome.renderZoom(section);
 }
 function heading(title, subtitle, button = "") {
   return `<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${button}</div>`;
@@ -699,7 +707,7 @@ function artifactCard(r) {
 }
 function tabTable() {
   const groups = records("tabGroups");
-  return `<div class="inline-actions">${action("new-group", "New tab group", "plus")}${action("search-tabs", "Search tabs", "search")}</div><table class="tabs-table"><thead><tr><th>PAGE</th><th>GROUP</th><th>CONTROL</th><th>ACTIONS</th></tr></thead><tbody>${visibleTabs()
+  return `<div class="inline-actions">${action("new-group", "New tab group", "plus")}${action("search-tabs", "Search tabs", "search")}${action("recently-closed", "Recently closed tabs", "clock")}</div><table class="tabs-table"><thead><tr><th>PAGE</th><th>GROUP</th><th>CONTROL</th><th>ACTIONS</th></tr></thead><tbody>${visibleTabs()
     .map(
       (t) =>
         `<tr><td>${esc(displayTitle(t))}<small>${esc(short(t.url, 70))}${t.suspended ? " · Suspended (reloads when opened)" : ""}</small></td><td><select id="tab-group-${t.id}" class="tab-group-select" data-tab="${t.id}" aria-label="Group for ${esc(displayTitle(t))}"><option value="">No group</option>${groups.map((g) => `<option value="${esc(g.id)}" ${t.groupId === g.id ? "selected" : ""}>${esc(g.name)} (${esc(groupColors[g.color] || g.color)})</option>`).join("")}</select></td><td>${esc(controlLabel(t))}<small>Version ${t.version || 1}${t.activity ? " · running " + esc(t.activity.command) + " for " + esc(t.activity.actor) : ""}${t.queued?.length ? " · " + t.queued.length + " queued" : ""}${t.lastBoundary?.interrupted?.length ? " · could not cancel " + esc(t.lastBoundary.interrupted.map((a) => a.command).join(", ")) : ""}</small></td><td><div class="inline-actions">${action("activate-tab", "Open", "", 'data-id="' + t.id + '"')}${action("pin-tab", t.pinned ? "Unpin" : "Pin", "pin", `data-id="${t.id}"`)}${t.controlMode !== "you-drive" ? action("takeover", "You drive", "", 'data-id="' + t.id + '"') : ""}${t.controlMode !== "assist" ? action("control-mode", "Assist", "", `data-id="${t.id}" data-mode="assist"`) : ""}${!["agent-drives", "available"].includes(t.controlMode) ? action("control-mode", "Let an agent drive", "", `data-id="${t.id}" data-mode="agent-drives"`) : ""}${!t.active && !t.suspended ? action("suspend-tab", "Suspend", "pause", `data-id="${t.id}"`) : ""}</div></td></tr>`,
@@ -872,7 +880,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. Content is sent for requests or background features you enable. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; app actions require your approval of an exact proposal.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Learning & memory</h2><p>Optionally learn from saved workspace content. Review, edit or erase workspace and shared memories.</p>${action("manage-learning", "Manage learning & memory", "spark")}</section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. Content is sent for requests or background features you enable. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; app actions require your approval of an exact proposal.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Learning & memory</h2><p>Optionally learn from saved workspace content. Review, edit or erase workspace and shared memories.</p>${action("manage-learning", "Manage learning & memory", "spark")}</section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2>${browserChrome.engineSetting()}<div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests", restricted_original: "Restricted capture originals (each read still needs your approval)" };
@@ -1163,7 +1171,7 @@ function ownerBadge(t) {
   const mode = controlMode(t);
   const label = mode === "you-drive" ? "You drive" : mode === "assist" ? "Assist: agent observes" : mode === "agent-drives" ? `Agent drives: ${t.controller}` : "Available to agents";
   const state = t?.activity ? "working" : mode === "you-drive" ? "you" : mode === "assist" ? "assist" : mode === "agent-drives" ? "agent" : "available";
-  return stateBadge(state, `${esc(label)}${t?.activity ? ` · working: ${esc(t.activity.command)}` : ""}`);
+  return stateBadge(state, `${esc(label)}${t?.activity ? ` · working: ${esc(t.activity.command)}` : ""}${t?.devtools ? " · DevTools open" : ""}${t?.viewSource ? " · Page source (read-only)" : ""}`);
 }
 function paneFrames(tab) {
   const other = splitTab();
@@ -1193,6 +1201,7 @@ function layout() {
   const show =
     section === "browse" &&
     !$("dialog").open &&
+    !browserChrome.isOpen() &&
     (Boolean(area) || (!!active() &&
     active().url !== "about:blank" &&
     !active().blocked));
@@ -2788,16 +2797,20 @@ const tabFlags = (t) => [
 ].filter(Boolean);
 function tabButton(tab) {
   const flags = tabFlags(tab);
-  return `<div class="tab ${tab.active ? "active" : ""} ${tab.suspended ? "suspended" : ""}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span>${flags.join("")}</button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}">×</button></div>`;
+  return `<div class="tab ${tab.active ? "active" : ""} ${tab.suspended ? "suspended" : ""}" draggable="true" data-tab-id="${tab.id}"><button data-action="activate-tab" data-id="${tab.id}" title="${esc(tab.url)}">${icon(tab.pinned ? "pin" : "globe")}<span>${esc(displayTitle(tab))}</span>${flags.join("")}</button><button data-action="close-tab" data-id="${tab.id}" aria-label="Close ${esc(displayTitle(tab))}" aria-keyshortcuts="${tab.active ? "Control+W" : ""}">×</button></div>`;
 }
 function tabStrip() {
   const groups = records("tabGroups");
   const grouped = new Set(groups.map((g) => g.id));
   const html = groups.map((g) => {
     const members = visibleTabs().filter((t) => t.groupId === g.id);
-    return `<div class="tab-group group-${esc(g.color)}" role="group" aria-labelledby="group-${esc(g.id)}"><div class="tab-group-header"><button id="group-${esc(g.id)}" data-action="toggle-group" data-id="${esc(g.id)}" aria-expanded="${g.collapsed ? "false" : "true"}"><span class="group-swatch" aria-hidden="true"></span><span>${esc(g.name)}</span><small>${esc(groupColors[g.color] || g.color)} · ${members.length} tab${members.length === 1 ? "" : "s"}</small></button><button class="icon-button" data-action="edit-group" data-id="${esc(g.id)}" aria-label="Edit group ${esc(g.name)}">${icon("more")}</button></div>${g.collapsed ? "" : members.map(tabButton).join("")}</div>`;
+    return `<div class="tab-group group-${esc(g.color)}" data-group-id="${esc(g.id)}" role="group" aria-labelledby="group-${esc(g.id)}"><div class="tab-group-header"><button id="group-${esc(g.id)}" data-action="toggle-group" data-id="${esc(g.id)}" aria-expanded="${g.collapsed ? "false" : "true"}"><span class="group-swatch" aria-hidden="true"></span><span>${esc(g.name)}</span><small>${esc(groupColors[g.color] || g.color)} · ${members.length} tab${members.length === 1 ? "" : "s"}</small></button><button class="icon-button" data-action="edit-group" data-id="${esc(g.id)}" aria-label="Edit group ${esc(g.name)}">${icon("more")}</button></div>${g.collapsed ? "" : members.map(tabButton).join("")}</div>`;
   }).join("");
-  return html + visibleTabs().filter((t) => !t.groupId || !grouped.has(t.groupId)).map(tabButton).join("");
+  // Pinned tabs sit first (#92): drop a tab here to pin it; Alt+Shift+Up/Down moves a focused tab.
+  const loose = visibleTabs().filter((t) => !t.groupId || !grouped.has(t.groupId));
+  const pinned = loose.filter((t) => t.pinned);
+  const pinnedHtml = pinned.length ? `<div class="pinned-tabs" role="group" aria-label="Pinned tabs">${pinned.map(tabButton).join("")}</div>` : "";
+  return pinnedHtml + html + loose.filter((t) => !t.pinned).map(tabButton).join("") + browserChrome.closedEntry();
 }
 function groupDialog(group) {
   const candidates = visibleTabs();
@@ -3054,7 +3067,7 @@ async function openUrl(value) {
   if (!/^[a-z][a-z\d+.-]*:/i.test(url)) {
     url =
       /\s/.test(url) || (!url.includes(".") && !url.startsWith("localhost"))
-        ? `https://www.google.com/search?q=${encodeURIComponent(url)}`
+        ? searchUrl(state.settings, url)
         : `https://${url}`;
   }
   section = "browse";
@@ -3069,6 +3082,7 @@ async function openUrl(value) {
   }
 }
 async function act(button) {
+  if (browserChrome.actions(button)) return;
   const a = button.dataset.action,
     id = button.dataset.id,
     kind = button.dataset.kind;
@@ -3957,14 +3971,7 @@ async function act(button) {
       break;
     }
     case "find-page":
-      formDialog(
-        "Find in page",
-        field("Text to find", "text", "", "text", true),
-        async (v) => {
-          await execute("page.find", v);
-        },
-        { save: "Find" },
-      );
+      browserChrome.actions({ dataset: { action: "open-find" } });
       break;
     case "zoom-page":
       await execute("page.zoom", { factor: Number(button.dataset.factor) });
@@ -4116,7 +4123,7 @@ $("split-view").onclick = () => {
 $("page-more").onclick = () =>
   openDialog(
     "Page tools",
-    `<div class="inline-actions">${action("capture-selection", "Send selected text to Weft", "chat")}${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${splitTabId ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
+    `<div class="inline-actions">${action("open-find", "Find in page", "search")}${action("print-page", "Print…", "download")}${action("save-pdf", "Save as PDF", "download")}${action("capture-selection", "Send selected text to Weft", "chat")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("recently-closed", "Recently closed tabs", "clock")}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${action("view-source", "View page source", "terminal")}${action("open-devtools", "Developer tools", "terminal")}${splitTabId ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions" role="group" aria-label="Page zoom">${action("zoom-step", "Zoom out", "", 'data-direction="-1"')}${action("zoom-step", `Reset (${Math.round((active()?.zoom || 1) * 100)}%)`, "", 'data-direction="0"')}${action("zoom-step", "Zoom in", "", 'data-direction="1"')}</div></div>${browserChrome.shortcutList()}`,
   );
 for (const name of ["back", "forward", "reload", "stop"])
   $(name).onclick = () => void execute(`page.${name}`).catch(() => {});
@@ -4156,6 +4163,7 @@ window.weft.onChrome?.((shortcut) => {
   if (shortcut === "palette") return palette();
   if (shortcut === "chrome-back") return cycleRegion(-1, "page");
   if (shortcut === "chrome") return cycleRegion(1, "page");
+  if (browserChrome.onPage(shortcut)) return;
   $("address").focus();
   $("address").select();
 });
@@ -4170,22 +4178,19 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     return closeAgent();
   }
-  if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+  // Standard browser shortcuts (#88): the same table as keys pressed inside a page (src/shortcuts.js).
+  if (browserChrome.onKeydown(e)) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
     const key = e.key.toLowerCase();
-    if (["k", "l", "t", "w", "f", "j"].includes(key) || (key === "a" && e.shiftKey)) e.preventDefault();
-    if (key === "a" && e.shiftKey) return tabSearch();
+    if (["k", "l"].includes(key)) e.preventDefault();
     if (key === "k") palette();
     if (key === "l") {
       $("address").focus();
       $("address").select();
     }
-    if (key === "t") void act({ dataset: { action: "new-tab" } });
-    if (key === "w" && active())
-      void act({ dataset: { action: "close-tab", id: active().id } });
-    if (key === "f") void act({ dataset: { action: "find-page" } });
-    if (key === "j") navigateSection("downloads");
   }
 });
+browserChrome.init();
 new ResizeObserver(layout).observe($("content"));
 window.addEventListener("resize", layout);
 try {

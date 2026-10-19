@@ -167,6 +167,8 @@ if (primary) app.whenReady().then(async () => {
   browser.onEvent = event => events.emit('event', event);
   // Browser-owned keys pressed inside a page return keyboard focus to the trusted chrome (#31).
   browser.onChromeShortcut = ({ shortcut }) => { if (!window.isDestroyed()) { window.webContents.focus(); window.webContents.send('weft:chrome', shortcut); } };
+  // Short browser-owned notices (a context-menu link a site rule refused, for example).
+  browser.onNotice = message => { if (!window.isDestroyed()) window.webContents.send('weft:notice', String(message).slice(0, 500)); };
   // A hidden window renders pages offscreen so captures keep working without a display (ADR 015).
   if (launchHeadless) { browser.hidden = true; browser.offscreen = true; }
   // Page renderer memory (the GUI renderer excluded) drives memory-pressure suspension when a budget is set (#30).
@@ -257,6 +259,13 @@ if (primary) app.whenReady().then(async () => {
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
   ipcMain.handle('weft:focusPage', event => { trusted(event); return browser.focusPage(); });
+  // People-only browser chrome (#88, #93, #96): find bar, print dialog, zoom steps, hard reload, DevTools and page source.
+  // Not in the command catalog, so no agent surface can reach them.
+  ipcMain.handle('weft:chromeAction', async (event, action, args) => {
+    trusted(event);
+    try { return { result: await browser.chromeAction(String(action), args && typeof args === 'object' ? args : {}) }; }
+    catch (error) { return { error: { message: error.message, code: error.code ?? 'failed' } }; }
+  });
   // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
   ipcMain.handle('weft:pickPath', async (event, kind) => {
     trusted(event);

@@ -462,6 +462,12 @@ export class WorkspaceService {
         ...(tab.suspended && { suspended: { at: String(tab.suspended.at || '').slice(0, 40), reason: String(tab.suspended.reason || '').slice(0, 60), scrollX: Number(tab.suspended.scrollX) || 0, scrollY: Number(tab.suspended.scrollY) || 0, zoom: Number(tab.suspended.zoom) || 1 } }),
         controller: tab.controller === 'human' ? 'human' : 'available', ...(tab.controller === 'human' && tab.assistant && { assistant: String(tab.assistant).slice(0, 200) }) })),
       activeId: session.activeId ?? null,
+      // Recently closed tabs (#92) and remembered per-origin zoom (#93), per workspace.
+      closed: (session.closed ?? this.data.browserSession?.closed ?? []).slice(-500).map(item => ({ id: String(item.id).slice(0, 64), workspaceId: item.workspaceId, url: sanitizeUrl(item.url) || 'about:blank',
+        title: String(item.title || '').slice(0, 1000), pinned: Boolean(item.pinned), ...(typeof item.groupId === 'string' && { groupId: item.groupId.slice(0, 128) }),
+        zoom: Math.min(5, Math.max(0.25, Number(item.zoom) || 1)), scrollX: Number(item.scrollX) || 0, scrollY: Number(item.scrollY) || 0, closedAt: String(item.closedAt || '').slice(0, 40) })),
+      zoom: Object.fromEntries(Object.entries(session.zoom ?? this.data.browserSession?.zoom ?? {}).map(([workspaceId, origins]) => [workspaceId,
+        Object.fromEntries(Object.entries(origins ?? {}).filter(([origin, factor]) => /^https?:\/\/[^/]+$/.test(origin) && Number.isFinite(factor)).slice(-200).map(([origin, factor]) => [origin.slice(0, 300), Math.min(5, Math.max(0.25, factor))]))])),
     };
     // Only the session row is written: frequent tab updates never re-serialize every record (#30).
     try { this.save({ only: ['browserSession'] }); } catch (error) { this.data.browserSession = before; throw error; }
@@ -775,6 +781,8 @@ export class WorkspaceService {
       if (!['human', 'admin'].includes(context.actor ?? 'human')) snapshot.materials = snapshot.materials.map(item => forCaller('materials', item, context));
       snapshot.browserSession.tabs = snapshot.browserSession.tabs.filter(item => item.workspaceId === workspaceId);
       if (!snapshot.browserSession.tabs.some(tab => tab.id === snapshot.browserSession.activeId)) snapshot.browserSession.activeId = null;
+      if (snapshot.browserSession.closed) snapshot.browserSession.closed = snapshot.browserSession.closed.filter(item => item.workspaceId === workspaceId);
+      if (snapshot.browserSession.zoom) snapshot.browserSession.zoom = { [workspaceId]: snapshot.browserSession.zoom[workspaceId] ?? {} };
       snapshot.activeWorkspaceId = workspaceId;
       return snapshot;
     }
@@ -895,6 +903,9 @@ export class WorkspaceService {
     if (name === 'history.clear') {
       if (!admin) throw new Error('History clearing requires human administration');
       this.data.history = (this.data.history || []).filter(item => item.workspaceId !== workspaceId);
+      // Recently closed tabs are browsing history too (#92).
+      if (this.data.browserSession?.closed) this.data.browserSession.closed = this.data.browserSession.closed.filter(item => item.workspaceId !== workspaceId);
+      this.browser?.forgetClosed?.(workspaceId);
       this.log(name, workspaceId, null, actor);
       return { cleared: true, workspaceId };
     }
@@ -983,6 +994,8 @@ export class WorkspaceService {
       // Access granted to the deleted workspace ends with it; the membership stays as history.
       for (const shared of this.data.sharedCollections) for (const member of shared.members ?? []) if (member.workspaceId === record.id && !member.revokedAt) Object.assign(member, { revokedAt: now(), revokedBy: actor, reason: 'workspace deleted' });
       this.data.browserSession.tabs = this.data.browserSession.tabs.filter(item => item.workspaceId !== record.id);
+      if (this.data.browserSession.closed) this.data.browserSession.closed = this.data.browserSession.closed.filter(item => item.workspaceId !== record.id);
+      if (this.data.browserSession.zoom) delete this.data.browserSession.zoom[record.id];
       effects.push(() => this.browser?.closeWorkspace?.(record.id), switchBrowser);
     } else if (action === 'duplicate') {
       const exported = this.exportWorkspace(record.id, undefined, { mode: 'package', keepLocalPaths: true, captures: 'all' });

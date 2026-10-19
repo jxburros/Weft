@@ -59,6 +59,15 @@ run only in the Linux Chromium job under Xvfb with software rendering. Their
 evidence is Linux-only; the responsiveness budgets are deliberately generous
 regression ceilings, and `perf/README.md` records the reference numbers.
 
+Everyday browser chrome (`test/browser-chrome.test.js`) runs real Electron in the
+Linux Chromium job: shortcuts pressed inside a page (including a page that claims
+Ctrl+F), the context-menu template and a site-blocked link, find counts, zoom
+memory, recently closed tabs, tab order, DevTools refusals and page source. The
+native context menu and the system print dialog are not opened under test (the
+menu is captured before it is shown; printing is stubbed). The print dialog on
+Windows, macOS and Linux desktops and macOS Cmd shortcuts have not been checked
+by hand yet.
+
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
 malware-feed, payment-provider, model-provider account, signed-in webmail,
 email-forwarding relay or multi-user deployment validation. Model discovery,
