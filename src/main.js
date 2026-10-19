@@ -12,6 +12,7 @@ import { WorkspaceService } from './workspace.js';
 import { createKeyProtector } from './encryption.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants, bootstrapToken } from './clients.js';
+import { cleanImportScratch } from './browsing-import.js';
 import { CommunityLists } from './community-lists.js';
 import { Learning } from './learning.js';
 import { Standby } from './standby.js';
@@ -113,6 +114,8 @@ if (primary) app.whenReady().then(async () => {
     catch (error) { console.error('Weft automatic rollback failed:', error.message); }
   }
   const directory = join(app.getPath('userData'), 'workspace-data');
+  // An import interrupted by a crash may have left a copied history database behind; remove it before anything else runs.
+  cleanImportScratch(directory);
   // Verified automatic backups at startup and then daily, keeping the latest five.
   // Workspace encryption (ADR 014) wraps its profile key with Electron safeStorage when the OS key store protects it.
   workspace = new WorkspaceService({ directory, backups: { automatic: true, intervalHours: 24, keep: 5 }, keyProtector: createKeyProtector({ safeStorage }) });
