@@ -1,0 +1,17 @@
+@import url("../assets/tokens.css");
+@font-face { font-family: "Source Sans 3"; src: url("../assets/fonts/SourceSans3-Regular.woff2"); }
+@font-face { font-family: "Source Sans 3"; src: url("../assets/fonts/SourceSans3-Semibold.woff2"); font-weight: var(--font-weight-semibold); }
+/* A private window always uses one dark, unmistakable treatment, whatever the app theme (#94). */
+:root { font-family: var(--font-family); color-scheme: dark; }
+body { margin: 0; background: #241b2f; color: #f4eefa; font-size: 14px; border-top: 4px solid #b58ad8; }
+.private-bar { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 12px; box-sizing: border-box; }
+.private-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: #b58ad8; color: #1b1222; font-weight: 600; }
+.mask { width: 18px; height: 10px; border-radius: 6px 6px 3px 3px; background: #1b1222; display: inline-block; }
+.navigation { display: flex; flex: 1; align-items: center; gap: 6px; }
+button { min-width: 32px; min-height: 32px; border-radius: 8px; border: 1px solid #5c4870; background: #352745; color: inherit; font: inherit; }
+button:disabled { opacity: 0.45; }
+#address { flex: 1; min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid #5c4870; background: #170f1e; color: inherit; font: inherit; }
+:focus-visible { outline: 3px solid #e4c6ff; outline-offset: 2px; }
+.private-notice { margin: 0; padding: 6px 12px; background: #2f2340; color: #e8dcf4; font-size: 12px; line-height: 16px; height: 32px; box-sizing: border-box; overflow: hidden; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+@media (forced-colors: active) { body { border-top-color: Highlight; } .private-badge, .mask { forced-color-adjust: none; } }

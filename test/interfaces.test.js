@@ -167,7 +167,7 @@ test('MCP stdio entry point performs a real protocol handshake without stdout no
   });
   t.after(() => client.close());
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 10);
+  assert.equal((await client.listTools()).tools.length, 11);
   const response = await client.callTool({ name: 'tabs_list', arguments: {} });
   assert.deepEqual(JSON.parse(response.content[0].text).result, { command: 'tabs.list', args: {} });
 });

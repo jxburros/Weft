@@ -100,6 +100,35 @@ if (smoke) {
       let again = null;
       for (let attempt = 0; attempt < 200 && !again; attempt++) { await sleep(50); again = await read(tab.id); }
       matrix.injectedAfterReEnable = Boolean(again);
+      // Toolbar button, action popup and options page (#98): human-only, browser-owned windows, allowlist unchanged.
+      const toolbarPath = materialize('toolbar');
+      const toolbarReport = ok(await dispatch('extensions.audit', { path: toolbarPath }, human));
+      matrix.toolbarUi = toolbarReport.scope.ui;
+      const toolbar = ok(await dispatch('extensions.install', { path: toolbarPath, sha256: toolbarReport.sha256 }, human));
+      ok(await dispatch('extensions.enable', { id: toolbar.id }, human));
+      matrix.toolbarActions = ok(await dispatch('extensions.actions', {}, human)).map(item => ({ name: item.name, title: item.title, popup: item.popup, options: item.options }));
+      matrix.automationActions = (await dispatch('extensions.actions', { workspaceId: first }, { actor: 'automation' })).error?.code;
+      matrix.automationOpen = (await dispatch('extensions.openPage', { id: toolbar.id, page: 'popup' }, { actor: 'automation' })).error?.code;
+      const pageTitle = async (page, prefix) => {
+        const opened = ok(await dispatch('extensions.openPage', { id: toolbar.id, page }, human));
+        const view = [...extensions.pages.get(toolbar.id)].at(-1);
+        // Committed navigations (the popup tries to leave the extension 50 ms after it is ready).
+        const started = [];
+        view.webContents.on('did-navigate', (_event, url) => started.push(url));
+        let seen = view.webContents.getTitle();
+        view.webContents.on('page-title-updated', (_event, title) => { seen = title; });
+        let value = '';
+        for (let attempt = 0; attempt < 400 && !value.startsWith(prefix); attempt++) { await sleep(25); value = view.isDestroyed() ? seen : view.webContents.getTitle(); }
+        await sleep(300);
+        // A popup also closes when another window takes focus (as on a busy shared display); that is not a navigation.
+        return { url: opened.url, title: value, stayed: started.every(url => url.startsWith('chrome-extension://')) && (view.isDestroyed() || view.webContents.getURL().startsWith('chrome-extension://')) };
+      };
+      matrix.popup = await pageTitle('popup', 'popup:');
+      matrix.options = await pageTitle('options', 'options:');
+      matrix.toolbarPermissions = extensions.records.find(item => item.id === toolbar.id).permissions;
+      matrix.dnrRefused = !ok(await dispatch('extensions.audit', { path: materialize('toolbar-dnr') }, human)).ok;
+      ok(await dispatch('extensions.remove', { id: toolbar.id }, human));
+      matrix.pagesClosedOnRemove = !extensions.pages.has(toolbar.id);
       ok(await dispatch('extensions.remove', { id: installed.id }, human));
       matrix.loadedAfterRemove = session.extensions.getAllExtensions().length;
       matrix.copyRemoved = !existsSync(join(profile, 'extensions', installed.id));
@@ -161,6 +190,17 @@ if (smoke) {
       assert.equal(matrix.injectedAfterReEnable, true);
       assert.equal(matrix.loadedAfterRemove, 0);
       assert.equal(matrix.copyRemoved, true);
+      // Toolbar (#98).
+      assert.deepEqual(matrix.toolbarUi, { title: 'Fixture button', popup: 'popup.html', options: 'options.html', icon: null });
+      assert.deepEqual(matrix.toolbarActions, [{ name: 'Weft toolbar fixture', title: 'Fixture button', popup: true, options: true }]);
+      assert.equal(matrix.automationActions, 'permission_required');
+      assert.equal(matrix.automationOpen, 'permission_required');
+      assert.equal(matrix.popup.title, 'popup:object:undefined:undefined', 'storage works; cookies and debugger stay unavailable');
+      assert.equal(matrix.popup.stayed, true, 'the popup cannot navigate away from the extension');
+      assert.equal(matrix.options.title, 'options:true');
+      assert.deepEqual(matrix.toolbarPermissions, ['storage']);
+      assert.equal(matrix.dnrRefused, true);
+      assert.equal(matrix.pagesClosedOnRemove, true);
       if (process.env.WEFT_EXTENSION_MATRIX) writeFileSync(process.env.WEFT_EXTENSION_MATRIX, JSON.stringify(matrix, null, 2));
     } finally { clearTimeout(timeout); rmSync(profile, { recursive: true, force: true }); }
   });

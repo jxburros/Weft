@@ -4,6 +4,8 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser, applyEngineHardening } from './browser.js';
+import { PrivateWindows } from './private-window.js';
+import { PasswordService } from './passwords.js';
 import { commands, CommandError } from './commands.js';
 import { createApiServer, EventLog, sanitizeEvent, registerEventType } from './server.js';
 import { Transfers } from './transfers.js';
@@ -38,6 +40,10 @@ registerEventType('encryption');
 import { DisplayController, displayEnvironment, profileFingerprint } from './display.js';
 
 let browser;
+let privateWindows;
+let passwords;
+// Site rules without a workspace scope: only rules that apply to every workspace reach private windows.
+const PRIVATE_SCOPE = 'weft-private-window';
 let workspace;
 let providers;
 let server;
@@ -169,6 +175,8 @@ if (primary) app.whenReady().then(async () => {
   browser.onAudit = entry => activity.append(entry);
   browser.onEvent = event => events.emit('event', event);
   // Browser-owned keys pressed inside a page return keyboard focus to the trusted chrome (#31).
+  // A permission prompt or password offer appeared: the trusted GUI refreshes at once.
+  browser.onSitePrompt = () => { if (!window.isDestroyed()) window.webContents.send('weft:site-prompt'); };
   browser.onChromeShortcut = ({ shortcut }) => { if (!window.isDestroyed()) { window.webContents.focus(); window.webContents.send('weft:chrome', shortcut); } };
   // Short browser-owned notices (a context-menu link a site rule refused, for example).
   browser.onNotice = message => { if (!window.isDestroyed()) window.webContents.send('weft:notice', String(message).slice(0, 500)); };
@@ -182,6 +190,8 @@ if (primary) app.whenReady().then(async () => {
   // The operating system's memory-pressure signal (Linux PSI and available memory, Windows available memory, a macOS free-page heuristic).
   browser.systemMemory = createMemoryPressureSource();
   workspace.attachBrowser(browser);
+  // Private windows (#94): in-memory sessions outside every workspace; only global site rules and threat lists apply.
+  privateWindows = new PrivateWindows({ browser, audit: entry => activity.append(entry), siteRuleFor: url => workspace.matchSiteRule(url, PRIVATE_SCOPE) });
   // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
   plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
   const extensions = new WorkspaceExtensions({ directory, workspace, browser });
@@ -198,6 +208,11 @@ if (primary) app.whenReady().then(async () => {
   credentials = new CredentialService({ directory: join(app.getPath('userData'), 'credentials'), protector: safeStorageProtector(safeStorage), browser, workspace,
     promptSecret: request => promptCredentialSecret(window, request) });
   credentials.start().catch(error => console.warn(`Weft credential vault: ${error.message}`));
+  // The person's own saved passwords (#95, ADR-020): a separate OS-protected vault outside workspace-data, human-only.
+  passwords = new PasswordService({ directory: join(app.getPath('userData'), 'passwords'), protector: safeStorageProtector(safeStorage), browser, workspace,
+    audit: entry => activity.append(entry),
+    confirmReveal: async ({ origin, username }) => (await dialog.showMessageBox(window, { type: 'warning', buttons: ['Cancel', 'Show password'], defaultId: 0, cancelId: 0, noLink: true,
+      title: 'Show saved password', message: `Show the saved password for ${username || 'this account'} on ${origin}?`, detail: 'Anyone who can see your screen will see it.' })).response === 1 });
   // Service credentials live only in OS-protected storage; scheduled freshness checks are opt-in per workspace.
   const knowledge = new Knowledge({ workspace, credentials: new ServiceCredentials({ directory, safeStorage }), audit: entry => activity.append(entry), protectedPaths: [app.getPath('userData')] });
   // Scheduled checks read workspace data: they wait while an encrypted profile is locked.
@@ -269,10 +284,14 @@ if (primary) app.whenReady().then(async () => {
     try { return { result: await browser.chromeAction(String(action), args && typeof args === 'object' ? args : {}) }; }
     catch (error) { return { error: { message: error.message, code: error.code ?? 'failed' } }; }
   });
+  // A person opens a private window from the trusted GUI (menu or Ctrl/Cmd+Shift+N); no command or agent can.
+  ipcMain.handle('weft:openPrivateWindow', event => { trusted(event); return privateWindows.open(); });
   // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
   ipcMain.handle('weft:pickPath', async (event, kind) => {
     trusted(event);
-    const result = await dialog.showOpenDialog(window, { title: kind === 'folder' ? 'Link a folder' : 'Link a file', properties: [kind === 'folder' ? 'openDirectory' : 'openFile', 'dontAddToRecent'] });
+    // 'save' picks where a person-requested export (saved passwords) is written.
+    if (kind === 'save') { const saved = await dialog.showSaveDialog(window, { title: 'Export to a file', defaultPath: 'weft-passwords.csv', properties: ['showOverwriteConfirmation', 'dontAddToRecent'] }); return saved.canceled ? null : saved.filePath ?? null; }
+    const result = await dialog.showOpenDialog(window, { title: kind === 'folder' ? 'Link a folder' : kind === 'import' ? 'Choose a password export (CSV)' : 'Link a file', properties: [kind === 'folder' ? 'openDirectory' : 'openFile', 'dontAddToRecent'] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   ipcMain.handle('weft:execute', (event, name, args) => {
@@ -314,6 +333,8 @@ app.on('before-quit', event => {
   credentials?.close();
   retrieval?.close();
   relay.close();
+  privateWindows?.closeAll();
+  passwords?.close();
   plugins?.close();
   standby?.close();
   learning?.close();

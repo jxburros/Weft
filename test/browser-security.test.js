@@ -309,7 +309,8 @@ async function securitySmoke() {
     assert.equal(approved.state, 'launched');
     assert.deepEqual(launched, ['weft-test-app://open?item=1']);
     await assert.rejects(browser.execute('launches.approve', { launchId: launch.id }, human), /launched/, 'approval is single use');
-    // Deceptive or repeated permission prompts are denied without reaching the person.
+    // With "never ask" on, every prompted permission is denied without reaching the person (prompts themselves: site-permissions-browser.test.js).
+    await browser.execute('permissions.configure', { neverAsk: true }, human);
     await navigate(url('127.0.0.1', '/permissions'));
     const permissions = await titled(browser, tab);
     assert.equal(permissions.notification, 'denied');
@@ -318,6 +319,7 @@ async function securitySmoke() {
     assert.notEqual(permissions.media, 'granted');
     assert.notEqual(permissions.clipboard, 'granted');
     report.permissionDenials = browser.describe(browser.tab(tab)).protection.permissionDenials;
+    await browser.execute('permissions.configure', { neverAsk: false }, human);
 
     // Threat intelligence is a separate security layer with staleness reporting.
     const generatedAt = new Date(Date.now() - 10 * 86400000).toISOString();

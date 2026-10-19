@@ -32,7 +32,7 @@ were not used as evidence.
 | `chrome.tabs.query` | Returns only tabs of the same workspace session | `tabs` allowed |
 | `chrome.runtime.connectNative` | Absent (`is not a function`) | `nativeMessaging` denied |
 | `chrome.cookies`, `chrome.webRequest`, `chrome.debugger` | Undefined in the worker | `cookies`, `webRequest*`, `debugger` denied |
-| `chrome.management`, `chrome.action` | Present in the worker | `management` permission denied; `action` UI ignored (no toolbar) |
+| `chrome.management`, `chrome.action` | Present in the worker | `management` permission denied; the action popup is shown from Weft's toolbar menu (addendum below), badges and other `chrome.action` calls have no effect |
 | Worker `fetch` to a granted host | Succeeds | Allowed |
 | Worker `fetch` to a site-rule-blocked path (navigation-mode rule) | Cancelled before reaching the server | Any block rule applies to extension-originated requests |
 | Worker `fetch` to an ungranted host | Cancelled before reaching the server | Extension-originated requests must match a granted host |
@@ -69,8 +69,10 @@ were not used as evidence.
   `offscreen`, `sidePanel`; `optional_permissions`/`optional_host_permissions`
   (no runtime prompt); sandbox pages; shared modules; Manifest V2; unknown keys
   and permissions (fail closed).
-- **Ignored and reported:** `action`, `options_page`/`options_ui`,
-  `devtools_page`, `commands`, `omnibox`, `side_panel`, `chrome_url_overrides`,
+- **Validated (addendum, #98):** `action` (`default_title`, `default_icon`,
+  `default_popup` only), `options_page` and `options_ui.page`; each page must
+  be an `.html` file in the package.
+- **Ignored and reported:** `devtools_page`, `commands`, `omnibox`, `side_panel`, `chrome_url_overrides`,
   `update_url` (Weft never auto-updates an extension).
 - **Network:** requests whose initiator is an extension origin are cancelled
   unless the URL matches one of that extension's granted hosts in that
@@ -96,3 +98,26 @@ Product copy must say "unpacked Manifest V3 extensions, per workspace" and not
 case to the Electron test, observing the result on the pinned Electron version,
 and updating this record. Electron upgrades must rerun the Electron test before
 changing the allowed set.
+
+## Addendum (2026-10-19, issue #98): toolbar, popups, options, CRX and declarativeNetRequest
+
+| Question | Decision | Reason |
+| --- | --- | --- |
+| Toolbar button and action popup | **Ship, minimal.** The Extensions button in the address bar lists the extensions enabled in the current workspace (title, raster icon). Choosing one opens its `default_popup` in a separate browser-owned window. | Installed extensions were otherwise invisible. A separate window keeps extension UI out of Weft's trusted interface and out of page views. |
+| Options page | **Ship.** "Options" opens `options_page`/`options_ui.page` in the same kind of window. | Settings are the other everyday extension surface. |
+| Badges, `chrome.action.*` (setBadgeText, setPopup, onClicked), `open_in_tab` | **Not supported.** Calls have no visible effect; the menu says so. | Electron implements no `chrome.action` UI. |
+| Packaged `.crx` / Chrome Web Store install | **No-ship.** | No verified update or signature path Weft controls; a packaged install would skip the reviewable unpacked audit and hash pinning. Unpacking a CRX by hand and auditing it stays possible. |
+| `declarativeNetRequest` (ad blocking) | **No-ship; still denied.** | Electron 44 does not implement it, and request rewriting could route around site rules. Weft's own site rules and community lists cover blocking. |
+| Optional permissions | **Still refused.** | No runtime permission prompt; extension UI never expands the audited allowlist (`storage`, `scripting`, `tabs`). |
+
+Extension windows use the extension's workspace session, are sandboxed and
+context-isolated with no preload, cannot open new windows or navigate outside
+`chrome-extension://<id>/`, close when the extension is disabled or removed,
+and refuse to open while the active tab is in a protected sign-in or payment
+operation. Every `extensions.*` command, including `extensions.actions` and
+`extensions.openPage`, is human-only. The real-Chromium test
+(`test/extensions-browser.test.js`) opens a fixture popup and options page,
+checks that `chrome.storage` works while `chrome.cookies` and `chrome.debugger`
+stay undefined, that the popup cannot navigate away, that the recorded
+permissions are unchanged and that a toolbar extension asking for
+`declarativeNetRequest` is refused.

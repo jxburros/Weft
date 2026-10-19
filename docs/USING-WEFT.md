@@ -190,6 +190,53 @@ Errors, cancellation and
 unsupported responses are shown as such; a stopped reply is kept and marked
 interrupted, and the application does not manufacture an assistant reply.
 
+## Site permissions, pop-ups, private windows, passwords and extensions
+
+- **Permission prompts.** When a site asks for your camera, microphone,
+  location, notifications, clipboard, screen, MIDI devices or motion sensors,
+  Weft shows its own prompt naming the site. Choose *Allow on this visit*,
+  *Allow while the site is open*, *Always allow*, *Block* (until you close the
+  site) or *Always block*; closing the prompt denies the request. Decisions
+  belong to one workspace and site, are not exported, imported or carried when
+  a tab moves, and are listed in **Site controls** (the shield in the address
+  bar) where you can reset each one, stop camera, microphone and screen sharing
+  (the page reloads), or turn on *Never ask*. Screen sharing asks you to pick a
+  screen or window every time and shows *Sharing* in the address bar. Tabs in
+  the background, suspended tabs, headless sessions and pages only an agent is
+  driving are denied without a prompt, and agents can never answer one. USB,
+  serial, HID, Bluetooth, fullscreen and similar requests are still denied
+  without asking.
+- **Pop-ups.** A page may open a pop-up within about five seconds of your click
+  or key press in that tab (sign-in and payment windows keep their link to the
+  page that opened them, so they can report back and close themselves). Other
+  pop-ups are blocked; the address bar then shows a count. Open one once, or
+  always allow pop-ups from that site in this workspace (reset it in Site
+  controls). Site rules still apply to every pop-up.
+- **Private windows.** Page tools > *New private window* (Ctrl/Cmd+Shift+N)
+  opens a window with its own dark frame. Its cookies and site data stay in
+  memory and are erased when its last window closes (also after a crash, since
+  nothing is written to disk); it keeps no history, tab records, captures or
+  session restore; downloads need a click and always ask where to save; every
+  site permission is denied; and agents cannot see or control it. It does not
+  hide you from websites, your network or this computer. Only site rules that
+  apply to every workspace, and threat lists, apply in private windows.
+- **Saved passwords.** After you sign in, Weft offers to save (or update) the
+  password for that site in this workspace. The key button in the address bar
+  fills a saved sign-in into this site's own form (never a frame from another
+  site, never submitted for you) and can suggest a strong password. Page tools >
+  *Saved passwords* lists, shows (after a confirmation), deletes, imports
+  (Chrome, Edge, Firefox or Safari CSV exports, optionally deleting the export
+  afterwards) and exports them. Passwords are encrypted with your system key
+  store (Weft refuses to save them without one) and are separate from the
+  sign-ins agents may use; agents cannot list, read, fill or reveal them
+  ([ADR-020](decisions/020-human-password-manager.md)). Address and card
+  autofill are not available.
+- **Extensions.** If an enabled extension has a toolbar button, the extensions
+  button in the address bar opens its popup or options page in a separate
+  window. Badges, Chrome Web Store installs and ad-blocking rules
+  (`declarativeNetRequest`) are not supported
+  ([ADR-007](decisions/007-extension-compatibility.md)).
+
 ## Where your data lives
 
 Electron uses its OS application-data directory by default. Use a separate
@@ -235,8 +282,8 @@ perform comprehensive secret or personal-information redaction.
 ## What Weft does and does not protect
 
 Remote pages are sandboxed and have no Node integration or privileged preload.
-Unsupported protocols and native launches are blocked; permission requests are
-denied. Site rules cover documented Chromium request paths, not an external
+Unsupported protocols and native launches are blocked; web permission requests
+are denied unless you allow them in Weft's prompt. Site rules cover documented Chromium request paths, not an external
 agent's independent network tools. Unsolicited downloads are cancelled and can be approved from Downloads. Downloads are never executed automatically
 and are not claimed to have been scanned for malware unless you configure a local scanner ([ADR-009](decisions/009-destination-intelligence-and-downloads.md)). Keep Electron current for
 Chromium security fixes.
