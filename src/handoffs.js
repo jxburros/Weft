@@ -35,7 +35,8 @@ export function executeHandoffCommand(service, name, input, context = {}) {
   const args = schemas[name]?.parse(input);
   if (!args) throw new Error(`Unknown handoff command: ${name}`);
   rejectSecretKeys(args);
-  const who = context.actor || 'human';
+  // A missing actor is never treated as a person: only the dispatcher's trusted GUI context is human.
+  const who = context.actor || 'automation';
   service.data.handoffs ??= [];
   const workspaceId = args.workspaceId || context.workspaceId || service.activeWorkspaceId;
   if (context.workspaceId && args.workspaceId && context.workspaceId !== args.workspaceId) throw denied('workspace is outside the authorized scope');

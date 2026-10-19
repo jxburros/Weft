@@ -52,6 +52,11 @@ export function capRetrieved(items, budgetTokens, wrap = kept => kept) {
   return { kept, omitted: items.length - kept.length, tokens: estimateTokens(JSON.stringify(wrap(kept))) };
 }
 const digest = value => createHash('sha256').update(value).digest('hex');
+/** Digest of everything a disclosure acknowledgement covers: destinations, each item's delivery, tools and reasons. */
+function disclosureDigest(disclosure) {
+  return digest(JSON.stringify({ destinations: disclosure.destinations, reasons: disclosure.acknowledgementReasons, tools: disclosure.tools, toolScope: disclosure.toolScope,
+    fallback: disclosure.fallback?.items ?? null, items: disclosure.items.map(item => [item.key, item.delivery ?? null, Boolean(item.withheld), Boolean(item.excluded), item.bytes ?? 0]) }));
+}
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 /** Loopback, private-network (RFC 1918, link-local, IPv6 ULA/link-local) and mDNS `.local` hosts. Only literal addresses count; `10.example.com` is a public name. */
@@ -671,7 +676,7 @@ export class Providers {
       items: items.filter(item => item.delivery === 'image-via-fallback').map(item => item.key),
       bytes: Buffer.byteLength(text) + fallbackImages.reduce((sum, { image }) => sum + image.bytes, 0),
       scope: 'Your new message text and the listed images only; no conversation history or other attachments.' } : null;
-    return { profile, caps, conversation, cloud, acknowledgementId, system, userContent, primaryImages, fallbackImages, retrievalTokens,
+    const result = { profile, caps, conversation, cloud, acknowledgementId, system, userContent, primaryImages, fallbackImages, retrievalTokens,
       fallbackProfile: fallbackImages.length ? fallback.profile : null, fallbackCaps: fallback?.caps, fallbackNotes: imageNotes.slice(primaryImages.length),
       history: history.filter(({ key }) => decisions.get(key) === 'history').map(({ message }) => message),
       textEntries,
@@ -689,6 +694,8 @@ export class Providers {
         tools: allowReadTools ? this.readTools(tabId, allowAppTools).map(tool => tool.function.name) : [],
         toolScope: allowReadTools ? { workspaceId: conversation.workspaceId, ...(tabId ? { tabId } : {}), maxCalls: allowAppTools ? 20 : 5 } : null,
         totalBytes: allItems.reduce((sum, item) => sum + (delivered(item) ? item.bytes : 0), 0) } };
+    result.disclosure.digest = disclosureDigest(result.disclosure);
+    return result;
   }
 
   async send(args, caller = {}) {
@@ -800,12 +807,20 @@ export class Providers {
       this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'unsupported_capability', outcome: 'denied', summary: { ...destinationEvent.summary, capability: disclosure.blocked.capability } });
       throw typed(disclosure.blocked.message, 'unsupported_capability', { capability: disclosure.blocked.capability, modelId: profile.id });
     }
-    if (disclosure.requiresAcknowledgement && !disclosureAck) this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'cloud_disclosure_required', outcome: 'denied',
+    // An acknowledgement is bound to what was previewed (#126): agents send the preview's disclosure.digest, so they
+    // cannot acknowledge data they never reviewed. `true` is accepted from the trusted interface and from the task
+    // runtime, which forwards a person's tasks.continue acknowledgement.
+    const trustedAck = ['human', 'admin'].includes(caller.actor) || caller.source === 'task';
+    if (disclosure.requiresAcknowledgement && typeof disclosureAck === 'string' && disclosureAck !== disclosure.digest) {
+      throw typed('The data or destination changed since chat.preview; preview again and acknowledge the new disclosure.digest.', 'stale_state', { reason: 'disclosure_changed' });
+    }
+    const acknowledged = disclosureAck === true ? trustedAck : typeof disclosureAck === 'string' && disclosureAck === disclosure.digest;
+    if (disclosure.requiresAcknowledgement && !acknowledged) this.audit({ ...destinationEvent, type: 'model', decision: 'deny', reason: 'cloud_disclosure_required', outcome: 'denied',
       summary: { ...destinationEvent.summary, acknowledgementReasons: disclosure.acknowledgementReasons.join(',') } });
-    if (disclosure.requiresAcknowledgement && disclosureAck) this.audit({ ...destinationEvent, type: 'override', decision: 'approve', reason: 'cloud_disclosure_acknowledged', outcome: 'recorded',
+    if (disclosure.requiresAcknowledgement && acknowledged) this.audit({ ...destinationEvent, type: 'override', decision: 'approve', reason: 'cloud_disclosure_acknowledged', outcome: 'recorded',
       summary: { ...destinationEvent.summary, acknowledgementReasons: disclosure.acknowledgementReasons.join(',') } });
-    if (disclosure.requiresAcknowledgement && !disclosureAck) {
-      throw new Error(`CLOUD_DISCLOSURE_REQUIRED: Preview chat.preview and explicitly acknowledge the destination and data before sending (${disclosure.acknowledgementReasons.join(', ')}).`);
+    if (disclosure.requiresAcknowledgement && !acknowledged) {
+      throw new Error(`CLOUD_DISCLOSURE_REQUIRED: Preview chat.preview and explicitly acknowledge the destination and data before sending (${disclosure.acknowledgementReasons.join(', ')})${disclosureAck === true ? '; agents acknowledge with the disclosure.digest from chat.preview' : ''}.`);
     }
     if (disclosure.acknowledgementReasons.includes('destination')) await this.mutate(() => this.persist(this.profiles, [...this.acknowledgements, prepared.acknowledgementId].slice(-1000)));
     if (allowReadTools && !caps.tools) {

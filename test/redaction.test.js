@@ -219,7 +219,7 @@ test('model attachments send the sanitized derivative in place of a restricted o
   const disclosure = await fixture.preview(model.id, { attachments });
   const image = disclosure.items.find(item => item.key.endsWith(':image'));
   assert.equal(image.regions.redacted, 1);
-  await fixture.send(model.id, { attachments, disclosureAck: true });
+  await fixture.send(model.id, { attachments, disclosureAck: disclosure.digest });
   const body = JSON.stringify(endpoint.requests.at(-1).body);
   assert.equal(body.includes(SECRET), false, 'the original text never reaches the model');
   assert.ok(body.includes(derivative.versionId), 'provenance names the derivative that was sent');

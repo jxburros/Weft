@@ -48,7 +48,7 @@ export const providerCommandDefinitions = {
   'models.delete': ['Delete a saved model connection and its encrypted key', { modelId: id }],
   'chat.send': ['Send text, selected attachments and context to the selected model, streaming when supported, with optional scoped read-only tools', {
     conversationId: id, modelId: id, text: z.string().trim().min(1).max(100000),
-    disclosureAck: z.boolean().optional(),
+    disclosureAck: z.union([z.boolean(), z.string().regex(/^[0-9a-f]{64}$/)]).optional().describe('Acknowledge the previewed cloud disclosure: agents pass disclosure.digest from chat.preview; the trusted interface may pass true.'),
     allowReadTools: z.boolean().optional(), allowAppTools: z.boolean().optional().describe("Allow command discovery and proposals; every proposed action requires human review."), tabId: z.number().int().positive().optional(),
     context: z.array(z.strictObject({
       title: z.string().max(300), content: z.string().max(100000),

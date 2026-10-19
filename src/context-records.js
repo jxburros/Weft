@@ -40,7 +40,7 @@ export function sharedInto(data, workspaceId) {
 
 /** Link paths are local machine detail: non-human callers receive the name only. */
 export function forCaller(collection, record, context = {}) {
-  if (collection !== 'materials' || !record || ['human', 'admin'].includes(context.actor ?? 'human')) return record;
+  if (collection !== 'materials' || !record || ['human', 'admin'].includes(context.actor)) return record;
   if (record.link?.path) record.link = { ...record.link, path: undefined, candidate: record.link.candidate ? { name: record.link.candidate.name, matchedBy: record.link.candidate.matchedBy } : undefined };
   if (record.link) record.link = Object.fromEntries(Object.entries(record.link).filter(([, value]) => value !== undefined));
   if (record.service?.versions) record.service = { ...record.service, versions: record.service.versions.map(({ textBase64, ...rest }) => rest) };

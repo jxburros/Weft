@@ -381,7 +381,7 @@ test('cloud sends require itemized acknowledgement, reuse scoped consent, and sa
   await assert.rejects(providers.execute('chat.send', args), /CLOUD_DISCLOSURE_REQUIRED/);
   assert.equal(requests.length, 0);
   assert.equal(conversations.get('conversation-1').messages.length, 0);
-  await providers.execute('chat.send', { ...args, disclosureAck: true });
+  await providers.execute('chat.send', { ...args, disclosureAck: disclosure.digest });
   assert.equal(JSON.stringify(requests).includes('Private value'), false);
   assert.equal(manifests.at(-1).status, 'complete');
   assert.deepEqual(manifests.at(-1).contextIds, ['ref-a']);
@@ -405,7 +405,7 @@ test('local-only context taints derived assistant history and cannot cross to cl
   await send({ context: [{ title: 'Private source', content: 'Sensitive original', localOnly: true }] });
   assert.equal(conversations.get('conversation-1').messages.every(message => message.localOnly), true);
   await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model });
-  await send({ disclosureAck: true });
+  await send({ disclosureAck: (await providers.execute('chat.preview', { conversationId: 'conversation-1', modelId: model.id, text: 'Hello' })).disclosure.digest });
   assert.equal(JSON.stringify(requests[1]).includes('Sensitive'), false);
 });
 
@@ -423,7 +423,7 @@ test('local-only search results are withheld from cloud tools and recorded in th
   const { providers, workspace, model, send } = fixtureData;
   workspace.recordTurnManifest = async (_id, manifest) => manifests.push(structuredClone(manifest));
   await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model, tools: true });
-  await send({ allowReadTools: true, disclosureAck: true });
+  await send({ allowReadTools: true, disclosureAck: (await providers.execute('chat.preview', { conversationId: 'conversation-1', modelId: model.id, text: 'Hello', allowReadTools: true })).disclosure.digest });
   assert.equal(JSON.stringify(requests[1]).includes('secret reference'), false);
   assert.equal(manifests.at(-1).tools[0].withheldLocalOnly, true);
 });
@@ -503,4 +503,19 @@ test('model connections are written durably and survive a reopen (#114)', async 
   const reopened = await new Providers({ directory, workspace: { getConversation() {}, async appendMessage() {} }, env: {} }).init();
   t.after(() => reopened.close());
   assert.equal((await reopened.execute('models.list', {})).find(item => item.id === model.id).name, 'Renamed');
+});
+
+test('agents acknowledge a cloud disclosure only with the digest of what they previewed (#126)', async t => {
+  const requests = [];
+  const { providers, model } = await fixture(t, () => {}, { fetchImpl: async (_url, options) => { requests.push(JSON.parse(options.body)); return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] })); } });
+  await providers.execute('models.save', { id: model.id, name: model.name, provider: model.provider, endpoint: 'https://cloud.example/v1', model: model.model });
+  const args = { conversationId: 'conversation-1', modelId: model.id, text: 'Summarize' };
+  const agent = { actor: 'client:11111111-1111-1111-1111-111111111111', clientId: '11111111-1111-1111-1111-111111111111' };
+  const { disclosure } = await providers.execute('chat.preview', args);
+  assert.match(disclosure.digest, /^[0-9a-f]{64}$/);
+  await assert.rejects(providers.execute('chat.send', { ...args, disclosureAck: true }, agent), /CLOUD_DISCLOSURE_REQUIRED.*disclosure\.digest/, 'an agent cannot self-acknowledge with a bare true');
+  await assert.rejects(providers.execute('chat.send', { ...args, text: 'Something else', disclosureAck: disclosure.digest }, agent), error => error.code === 'stale_state', 'a digest for other content does not acknowledge this one');
+  assert.equal(requests.length, 0);
+  await providers.execute('chat.send', { ...args, disclosureAck: disclosure.digest }, agent);
+  assert.equal(requests.length, 1);
 });

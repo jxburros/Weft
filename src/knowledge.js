@@ -13,7 +13,8 @@ import { ServiceCredentials, createLink, detectStatus, fetchService, readLinked,
  * for promotion, revision checks and evidence preservation.
  */
 const now = () => new Date().toISOString();
-const human = context => ['human', 'admin'].includes(context.actor ?? 'human');
+// A missing actor is never a person (#126): only an explicit human or admin context passes.
+const human = context => ['human', 'admin'].includes(context.actor);
 const fail = (code, message) => Object.assign(new Error(message), { code });
 const denied = message => fail('permission_required', `PERMISSION_REQUIRED: ${message}`);
 const stale = message => fail('stale_state', `STALE_STATE: ${message}`);

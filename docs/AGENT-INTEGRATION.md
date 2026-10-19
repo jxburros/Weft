@@ -173,9 +173,13 @@ without image input, fail before any request with the typed
 A vision fallback is used only when a human configured `visionFallbackId` on the
 selected connection; it receives only the new message text and the listed
 images, and its description returns to the selected model as untrusted text.
-Cloud destinations, images sent off-device and every fallback use require
-`disclosureAck: true` after preview. No request is ever retried against another
-provider or endpoint.
+Cloud destinations, images sent off-device and every fallback use require an
+acknowledgement after preview: agents send `disclosureAck` set to the
+`disclosure.digest` that `chat.preview` returned for the same arguments (a bare
+`true` is accepted only from the trusted interface and from a task step a person
+acknowledged with `tasks.continue`). A digest for different content or a changed
+destination is refused with `stale_state` (`disclosure_changed`); preview again.
+No request is ever retried against another provider or endpoint.
 
 `chat.send` can also give the model tools. `allowReadTools: true` offers
 `page_readable` (only the `tabId` you pass), `workspace_search` and
