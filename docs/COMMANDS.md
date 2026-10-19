@@ -47,7 +47,7 @@ Errors include a stable code, message, field, schema lookup and, when relevant, 
 
 Normalization rewrites `tabs.open` to `tabs.new`, recognized top-level snake_case fields to camelCase, and `href` to `url` only for tabs.new/page.navigate. Every rewrite appears in `normalized: [{from,to}]`. Conflicting aliases are rejected; values, unknown fields and nested free-form data are never coerced.
 
-MCP advertises nine tools: weft_tabs, weft_page, weft_workspace, weft_records, weft_knowledge (shared collections, linked sources, services, citations, freshness and conflicts), weft_artifacts, weft_browser, weft_models and weft_reference. Grouped calls use `{action: "canonical.command", args: {...}, deadlineMs?}`; reference uses `{command: "canonical.command"}` or no arguments for an index. Existing underscore command tool calls remain accepted but are not advertised. Results include structuredContent and the same JSON text envelope; screenshots also include native image content. Mixed read/write groups conservatively advertise destructive/read-only hints; the reference exposes exact per-command metadata. MCP resources (`resources/list`, `resources/read`) expose `weft://capabilities`, `weft://guide/{topic}`, `weft://reference/commands[/{command}]` and read-only `weft://workspaces/{workspaceId}/{collection}[/{id}]` records within the token's scope.
+MCP advertises ten tools: weft_tabs, weft_page, weft_workspace, weft_records, weft_memory (learned memory and background learning controls), weft_knowledge (shared collections, linked sources, services, citations, freshness and conflicts), weft_artifacts, weft_browser, weft_models and weft_reference. Grouped calls use `{action: "canonical.command", args: {...}, deadlineMs?}`; reference uses `{command: "canonical.command"}` or no arguments for an index. Existing underscore command tool calls remain accepted but are not advertised. Results include structuredContent and the same JSON text envelope; screenshots also include native image content. Mixed read/write groups conservatively advertise destructive/read-only hints; the reference exposes exact per-command metadata. MCP resources (`resources/list`, `resources/read`) expose `weft://capabilities`, `weft://guide/{topic}`, `weft://reference/commands[/{command}]` and read-only `weft://workspaces/{workspaceId}/{collection}[/{id}]` records within the token's scope.
 
 Collection commands marked pageable accept `page: {limit, cursor}` and then return `{items, nextCursor, total}` in a stable order (creation order; history, approvals and downloads newest first); without `page` they return the unpaged list as before. Cursors are opaque and bound to the command, workspace and filters. `weft.capabilities` (also `GET /v1/capabilities`) reports the API version, catalog hash, outcome table, limits and features.
 
@@ -75,6 +75,7 @@ Human-only describes an unconditional administration gate. Every other non-human
 | tabs.release | Release tab input control | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabs.setControlMode | Human sets the tab control mode: you-drive, assist (agent observes) or agent-drives | administration | Human only | GUI IPC, CLI, REST, MCP |
 | page.inspect | Inspect tab state and navigation version | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| page.message | Detect or preview an open webmail message or selected text for human capture; never stores or sends it | external_read | Human only | GUI IPC, CLI, REST, MCP |
 | page.readable | Read text and links from the current page | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.snapshot | Read a semantic/accessibility snapshot with frame-scoped element refs and coverage report | external_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | page.find | Find text in page; empty text clears results | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -103,6 +104,9 @@ Human-only describes an unconditional administration gate. Every other non-human
 | downloads.list | List workspace downloads in this browser run | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | downloads.cancel | Cancel a download | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | browser.close | Quit the browser and automation API | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| learning.status | Human reviews background learning configuration, progress and learned memory | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| learning.configure | Human opts into bounded background learning from saved materials, context, tasks and conversations; shared memory applies across workspaces | administration | Human only | GUI IPC, CLI, REST, MCP |
+| learning.erase | Erase learned memory and pause learning; existing source fingerprints remain suppressed | administration | Human only | GUI IPC, CLI, REST, MCP |
 | history.list | List recent workspace visits | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | history.clear | Clear workspace browsing history (human only) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | bookmarks.list | List pinned website materials | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -147,6 +151,11 @@ Human-only describes an unconditional administration gate. Every other non-human
 | artifacts.preview | Human opens an archived version in the offline preview (scripts, network, navigation and forms disabled) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | artifacts.closePreview | Human closes the offline archive preview | administration | Human only | GUI IPC, CLI, REST, MCP |
 | siteRules.review | Human records a site-rule review and optionally schedules the next review date | administration | Human only | GUI IPC, CLI, REST, MCP |
+| memories.list | List memories | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| memories.get | Get memories record | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| memories.create | Create memories record | administration | Human only | GUI IPC, CLI, REST, MCP |
+| memories.update | Update memories with optional revision check | administration | Human only | GUI IPC, CLI, REST, MCP |
+| memories.delete | Delete memories record | administration | Human only | GUI IPC, CLI, REST, MCP |
 | materials.list | List materials | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | materials.get | Get materials record | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | materials.create | Create materials record | local_write | Policy checked | GUI IPC, CLI, REST, MCP |

@@ -8,6 +8,7 @@ import { GUIDANCE, getGuidance, guidanceTopics } from './guidance.js';
 const groups = {
   tabs: ['tabs', 'tabGroups', 'display'], page: ['page'],
   workspace: ['workspace', 'workspaces', 'settings', 'history', 'bookmarks', 'activity', 'search', 'guide', 'plugins', 'plugin', 'backups', 'weft', 'events', 'transfers', 'encryption', 'resume', 'resources', 'browsingData'],
+  memory: ['memories', 'learning'],
   records: ['materials', 'context', 'tasks', 'conversations', 'workflows', 'siteRules', 'lists', 'handoffs', 'batch'],
   // Shared context, linked sources, services, citations, freshness and conflicts (ADR 013): split out so every tool stays under the size budget.
   knowledge: ['collections', 'sources', 'services', 'citations', 'freshness', 'conflicts'],

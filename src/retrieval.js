@@ -175,8 +175,9 @@ export class Retrieval {
     const storage = this.workspace.storage;
     const config = this.vectors.config(item.workspace_id);
     const record = (this.workspace.data[item.collection] ?? []).find(entry => entry.id === item.record_id);
-    if (!config?.enabled || !record || !indexable(item.collection, record) || record.workspaceId !== item.workspace_id) {
-      storage.transaction(() => { this.vectors.dequeue(item.collection, item.record_id); if (!record) this.vectors.replace(item.collection, item.record_id, item.workspace_id, []); });
+    const revision = record?.revision;
+    if (!config?.enabled || !record || !indexable(item.collection, record) || (item.collection === 'workspaces' ? record.id : record.workspaceId) !== item.workspace_id) {
+      storage.transaction(() => { this.vectors.dequeue(item.collection, item.record_id); this.vectors.replace(item.collection, item.record_id, item.workspace_id, []); });
       return;
     }
     const onDevice = config.locality === 'on-device endpoint';
@@ -218,14 +219,16 @@ export class Retrieval {
         batch[index].row.vector = vector;
       });
     }
-    // The record may have changed while the endpoint answered; it was re-queued, so keep this pass consistent with what was read.
+    if (this.closed || this.workspace.locked || !storage.db) return;
+    const latest = (this.workspace.data[item.collection] ?? []).find(entry => entry.id === item.record_id);
+    const currentConfig = this.vectors.config(item.workspace_id);
+    if (!latest || latest.revision !== revision || !currentConfig?.enabled || currentConfig.updated_at !== config.updated_at || currentConfig.model_key !== config.model_key) return;
     storage.transaction(() => {
       this.vectors.replace(item.collection, item.record_id, item.workspace_id, rows);
       this.vectors.dequeue(item.collection, item.record_id);
       this.vectors.setConfigState(item.workspace_id, { last_error: null });
     });
-    const latest = (this.workspace.data[item.collection] ?? []).find(entry => entry.id === item.record_id);
-    if (latest && latest.revision !== record.revision) storage.transaction(() => this.vectors.enqueue(item.collection, latest, this.clock()));
+
   }
 
   /** Query vector and exact cosine matches, or a reason the vector side was not used. */

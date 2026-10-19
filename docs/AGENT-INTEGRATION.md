@@ -772,3 +772,7 @@ weft sources.read '{"id":"mate_example","path":"notes/brief.txt","maxBytes":6553
 ## Workspace context, web watches and mailbox
 
 See [Workspace agents](WORKSPACE-AGENTS.md) for workspace instructions/memory, project lifecycle fields, model discovery, exact-action proposals, appearance settings, workflow web watches and local email ingestion. These additions use the existing command catalog and permission boundary.
+
+## Capture inbox, retrieval and learning (1.3)
+
+See [Capture and learning](CAPTURE-AND-LEARNING.md) for the implemented message adapters, reviewed capture flow, cited retrieval, optional workspace/global learning, permission boundaries and tested limits.

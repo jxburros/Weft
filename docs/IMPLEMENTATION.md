@@ -381,3 +381,7 @@ See [the issue-by-issue disposition](maintainers/ISSUE-STATUS.md), [validation](
 ## Workspace agents (1.2)
 
 Workspace instructions, memory and project/general lifecycle fields, live model discovery, capability labels, animated accessible icon navigation, permissioned Ask Weft actions and appearance preferences, local standby web watches, and an inert forwarded-email mailbox are implemented. See [behavior and limits](WORKSPACE-AGENTS.md). Watches require the app to remain running; email forwarding requires an external/local relay and does not provision an address. Provider and forwarding accounts are not live-validated.
+
+## Capture inbox, retrieval and learning (1.3)
+
+See [Capture and learning](CAPTURE-AND-LEARNING.md) for the implemented message adapters, reviewed capture flow, cited retrieval, optional workspace/global learning, permission boundaries and tested limits.

@@ -1,13 +1,13 @@
 /** Local FTS5 document extraction and injection-safe query compilation. */
-// Version 2 adds handoff records; a changed version rebuilds the index on open.
-export const SEARCH_INDEX_VERSION = 2;
+// Version 3 adds workspace memory; a changed version rebuilds the index on open.
+export const SEARCH_INDEX_VERSION = 3;
 // Profile policy and logs are not project text: storage modes and list subscriptions are not searchable records.
-const NOT_INDEXED = new Set(['workspaces', 'activity', 'history', 'siteLists', 'storagePolicies', 'tabGroups', 'resumeStates']);
+const NOT_INDEXED = new Set(['activity', 'history', 'siteLists', 'storagePolicies', 'tabGroups', 'resumeStates']);
 const MAX_BODY = 4 * 1024 * 1024;
 const join = (...values) => values.flat(Infinity).filter(value => typeof value === 'string' && value.trim()).join('\n').slice(0, MAX_BODY);
 const strings = value => Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
 
-export const indexable = (collection, record) => !NOT_INDEXED.has(collection) && typeof record?.workspaceId === 'string' && typeof record.id === 'string';
+export const indexable = (collection, record) => !NOT_INDEXED.has(collection) && (collection !== 'workspaces' || Boolean(record?.memory?.trim() || record?.description?.trim())) && typeof (collection === 'workspaces' ? record?.id : record?.workspaceId) === 'string' && typeof record.id === 'string';
 
 /**
  * One searchable document per record, plus one per immutable artifact version
@@ -15,10 +15,12 @@ export const indexable = (collection, record) => !NOT_INDEXED.has(collection) &&
  * they can mix local-only and shareable content inside one record.
  */
 export function recordDocument(collection, record) {
-  const base = { versionId: '', versionNumber: null, revision: Number.isSafeInteger(record.revision) ? record.revision : null, localOnly: record.localOnly === true, updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null };
+  const base = { versionId: '', versionNumber: null, revision: Number.isSafeInteger(record.revision) ? record.revision : null, localOnly: record.localOnly === true || (collection === 'workspaces' && record.contextLocalOnly === true), updatedAt: typeof record.updatedAt === 'string' ? record.updatedAt : null };
   let title = record.title;
   let body;
-  if (collection === 'materials') body = join(record.content, record.note, strings(record.tags), record.url, record.filename);
+  if (collection === 'workspaces') { title = `${record.name} · workspace memory`; body = join(record.description, record.memory); }
+  else if (collection === 'memories') body = join(record.content, strings(record.sources));
+  else if (collection === 'materials') body = join(record.content, record.note, strings(record.tags), record.url, record.filename);
   else if (collection === 'context') body = join(record.content, record.category, strings(record.tags), strings(record.sources));
   else if (collection === 'tasks') body = join(record.objective, record.blocker, record.checkpoint, record.nextStep, record.status, record.assignee);
   else if (collection === 'conversations') body = '';

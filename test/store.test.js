@@ -62,7 +62,7 @@ test('version-1 JSON stores migrate losslessly with preserved original, records,
   const service = open(t, directory);
   assert.equal(existsSync(join(directory, 'workspace-state.json')), false);
   assert.equal(readFileSync(join(directory, 'recovery', `workspace-state.${sha(original)}.json`), 'utf8'), original);
-  const expected = { ...structuredClone(legacy), schemaVersion: 2, history: [], handoffs: [], sharedCollections: [], conflicts: [], freshnessPolicies: [], tabGroups: [], resumeStates: [] };
+  const expected = { ...structuredClone(legacy), schemaVersion: 2, memories: [], history: [], handoffs: [], sharedCollections: [], conflicts: [], freshnessPolicies: [], tabGroups: [], resumeStates: [] };
   assert.deepEqual(JSON.parse(JSON.stringify(service.storage.materialize(service.data), (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)),
     JSON.parse(JSON.stringify(expected, (key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).sort()) : value)));
   // Browser containers are derived from workspace IDs; tab ownership survives.

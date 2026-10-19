@@ -14,6 +14,7 @@ import { createKeyProtector } from './encryption.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
 import { CommunityLists } from './community-lists.js';
+import { Learning } from './learning.js';
 import { Standby } from './standby.js';
 import { createDispatcher } from './dispatch.js';
 import { Authority } from './authority.js';
@@ -42,6 +43,7 @@ let server;
 let window;
 let dispatch;
 let standby;
+let learning;
 let lists;
 let listTimer;
 let freshnessTimer;
@@ -137,7 +139,7 @@ if (primary) app.whenReady().then(async () => {
     },
     readPage: ({ tabId, workspaceId }) => modelTool('page.readable', { tabId, workspaceId }, workspaceId),
     // Page mode returns citations plus coverage and the verified-absence signal for "not found" answers.
-    searchWorkspace: ({ workspaceId, query, limit = 20 }) => modelTool('search.query', { workspaceId, query, page: { limit } }, workspaceId),
+    searchWorkspace: ({ workspaceId, query, limit = 20 }) => modelTool('search.query', { workspaceId, query, passageChars: 3000, page: { limit } }, workspaceId),
   });
   await providers.init();
   // Optional embeddings: inert until a person enables them for a workspace with an existing connection.
@@ -210,11 +212,12 @@ if (primary) app.whenReady().then(async () => {
   payments.init();
   standby = new Standby({ workspace, dispatch, admission });
   standby.start();
-  const startTasks = async () => { if (workspace.locked) return; standby.start(); await dispatch.tasks.init(); dispatch.tasks.start(); };
+  learning = new Learning({ workspace, providers, admission }); learning.start();
+  const startTasks = async () => { if (workspace.locked) return; standby.start(); learning.start(); await dispatch.tasks.init(); dispatch.tasks.start(); };
   await startTasks();
   workspace.encryptionHooks = {
     // Lock: stop model turns, plugin processes and upload sessions, then close tabs so no workspace page stays loaded.
-    beforeLock: async ({ persist = true } = {}) => { standby.close(); await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
+    beforeLock: async ({ persist = true } = {}) => { standby.close(); learning.close(); await dispatch.tasks.suspendForLock(); providers.stopAll?.('cancelled'); plugins.close?.(); transfers.discardAll(); eventLog.reset('locked'); await browser.suspend({ persist }); events.emit('event', { type: 'encryption', status: 'locked', createdAt: new Date().toISOString() }); },
     afterUnlock: async () => {
       if (!extensionsRestored) { await extensions.restore(); extensionsRestored = true; }
       await browser.resume();
@@ -294,6 +297,7 @@ app.on('before-quit', event => {
   relay.close();
   plugins?.close();
   standby?.close();
+  learning?.close();
   dispatch?.tasks?.close();
   const cleanup = browser?.close();
   browser = null;

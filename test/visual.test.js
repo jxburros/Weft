@@ -113,6 +113,8 @@ if (process.argv.includes("--visual-child")) {
     await window.loadFile(join(root,"src/gui.html"));
     await until("innerWidth === 1200 && innerHeight === 800");
     await until('document.getElementById("content").textContent.includes("Make room")');
+    // Initial content paints before saved-view restoration finishes and moves focus.
+    await until('document.getElementById("status").textContent === "Ready"');
     // Native modal focus, accessible name, Escape, and restoration are exercised in Chromium.
     await run('document.getElementById("search-button").focus()');
     await click('#search-button');
