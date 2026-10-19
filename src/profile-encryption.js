@@ -239,15 +239,17 @@ export class ProfileEncryption {
   rotateWrapping({ passphrase = null }) {
     if (passphrase !== null && String(passphrase).length < PASSPHRASE_MIN) throw encryptionError('invalid_arguments', `Use a passphrase of at least ${PASSPHRASE_MIN} characters`);
     const unlockMode = this.keyring.unlockMode === 'os' && this.protector.describe().protects ? 'os' : 'manual';
-    const { keyring, recoveryKey } = rotateWrapping(this.keyring, this.keys, { protector: this.protector, unlockMode, passphrase, kdfParams: this.kdfParams, clock: this.clock });
-    writeKeyring(this.directory, keyring);
+    const { keyring, recoveryKey, apply, discard } = rotateWrapping(this.keyring, this.keys, { protector: this.protector, unlockMode, passphrase, kdfParams: this.kdfParams, clock: this.clock });
+    try { writeKeyring(this.directory, keyring); } catch (error) { discard(); throw error; }
+    apply();
     this.keyring = keyring;
     return recoveryKey;
   }
   beginDataKeyRotation() {
-    const next = beginDataKeyRotation(this.keyring, this.keys, { clock: this.clock });
-    writeKeyring(this.directory, next);
-    this.keyring = next;
+    const { keyring, apply, discard } = beginDataKeyRotation(this.keyring, this.keys, { clock: this.clock });
+    try { writeKeyring(this.directory, keyring); } catch (error) { discard(); throw error; }
+    apply();
+    this.keyring = keyring;
     this.rotationError = null;
   }
   finishDataKeyRotation() {
