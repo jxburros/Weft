@@ -554,7 +554,7 @@ if (process.argv.includes("--gui-workflows")) {
     assert.ok(!JSON.stringify(smuggled).includes("hunter2"));
     await click('[data-action="close-dialog"]');
     // Payments (ADR 019): an agent proposes a purchase and the person reviews a dedicated card of Weft-verified terms.
-    const api = async (command, args) => (await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token", "content-type": "application/json" }, body: JSON.stringify({ command, args }) })).json();
+    const api = async (command, args) => (await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token-0123456789abcdef", "content-type": "application/json" }, body: JSON.stringify({ command, args }) })).json();
     const checkoutTab = await api("tabs.new", { url: `${origin}/checkout`, workspaceId: first.id });
     assert.equal(checkoutTab.error, null, JSON.stringify(checkoutTab.error));
     let proposedPayment;
@@ -591,7 +591,7 @@ if (process.argv.includes("--gui-workflows")) {
     await until('(async()=> (await window.weft.execute("autonomy.get",{})).bootstrapLevel==="assist")()');
     await click('[data-action="close-dialog"]');
     const agentCall = async (args) => {
-      const response = await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token", "content-type": "application/json" }, body: JSON.stringify({ command: "materials.create", args }) });
+      const response = await fetch(`http://127.0.0.1:${process.env.WEFT_PORT}/v1/execute`, { method: "POST", headers: { authorization: "Bearer gui-fixture-token-0123456789abcdef", "content-type": "application/json" }, body: JSON.stringify({ command: "materials.create", args }) });
       return { ...(await response.json()), status: response.status };
     };
     const requested = await agentCall({ workspaceId: first.id, title: "Agent proposed note" });
@@ -688,7 +688,7 @@ if (process.argv.includes("--gui-workflows")) {
           env: electronEnv({
             WEFT_TEST_PROFILE: profile,
             WEFT_PORT: String(port),
-            WEFT_TOKEN: "gui-fixture-token",
+            WEFT_TOKEN: "gui-fixture-token-0123456789abcdef",
           }),
           stdio: ["ignore", "pipe", "pipe"],
         },

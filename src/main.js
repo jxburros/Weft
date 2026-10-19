@@ -1,7 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell, nativeImage } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser, applyEngineHardening } from './browser.js';
@@ -12,7 +11,7 @@ import { Retrieval } from './retrieval.js';
 import { WorkspaceService } from './workspace.js';
 import { createKeyProtector } from './encryption.js';
 import { AutomationAdmission } from './admission.js';
-import { ClientGrants } from './clients.js';
+import { ClientGrants, bootstrapToken } from './clients.js';
 import { CommunityLists } from './community-lists.js';
 import { Learning } from './learning.js';
 import { Standby } from './standby.js';
@@ -102,7 +101,8 @@ function trusted(event) {
 if (primary) app.whenReady().then(async () => {
   const port = Number(process.env.WEFT_PORT ?? 9222);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('WEFT_PORT must be between 1 and 65535');
-  const token = process.env.WEFT_TOKEN || randomBytes(32).toString('hex');
+  // A weak WEFT_TOKEN is refused: it grants full automation (ADR 005); client tokens use a separate per-profile key.
+  const { token, generated, file: tokenFile } = bootstrapToken(process.env);
   let launch = {};
   // Update bookkeeping must never block local use; failures leave updates unavailable.
   try { updates = createUpdates(); launch = updates.beginLaunch(); }
@@ -264,14 +264,15 @@ if (primary) app.whenReady().then(async () => {
   await browser.restore();
   browser.startResourceScheduler();
   await window.loadURL(guiUrl);
-  server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), executeReturnsOutcome: true, turns: relay, eventLog, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
+  server = createApiServer({ execute: (name, args, context) => dispatch(name, args, context), token, authenticate: supplied => clients.authenticate(supplied), authorizeStream: (identity, request) => authority.streamAccess(identity, request), executeReturnsOutcome: true, turns: relay, eventLog, subscribe: listener => { events.on('event', listener); return () => events.off('event', listener); } });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
   });
   server.on('error', error => { console.error('Weft API error:', error.message); app.quit(); });
   console.log(`Weft API: http://127.0.0.1:${port}`);
-  if (!process.env.WEFT_TOKEN) console.log(`Generated WEFT_TOKEN (local access only): ${token}`);
+  if (tokenFile) console.log(`Generated WEFT_TOKEN written to ${tokenFile} (readable only by you)`);
+  else if (generated) console.log(`Generated WEFT_TOKEN (local access only): ${token}`);
   if (launchHeadless) console.log(`Weft is running headless (profile ${profileFingerprint(app.getPath('userData'))}). Attach with "weft attach" or by launching Weft again.`);
   // Health check for the first launches of a new version: GUI loaded, API listening, store open.
   updates?.confirmHealthy({ gui: !window.isDestroyed() && window.webContents.getURL() === guiUrl, api: server.listening, workspace: workspace.locked || Boolean(workspace.data) });

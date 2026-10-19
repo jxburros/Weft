@@ -68,6 +68,22 @@ export class Authority {
     const task = (this.workspace?.data ?? this.workspace?.snapshot?.())?.tasks?.find(item => item.id === taskId);
     return Boolean(task) && !TERMINAL_TASK.includes(task.status);
   }
+  /**
+   * Authorization for long-lived event streams, checked at connect and on every recheck so a narrowed,
+   * revoked or task-closed grant ends the stream. A stream is treated as the read command it mirrors
+   * (`events.list` for /v1/events, `conversations.get` for turn streams), including its data classes.
+   * Returns null when allowed, otherwise the denial reason.
+   */
+  streamAccess(context, { command, workspaceId } = {}) {
+    if (human(context)) return null;
+    if (context.workspaceIds && workspaceId && !context.workspaceIds.includes(workspaceId)) return 'outside_workspace_grant';
+    if (!context.clientId) return null;
+    try { this.clients.assertAllowed(command, context, { workspaceId, recheck: true }); }
+    catch (error) { return error.details?.authority?.reason ?? 'client_scope'; }
+    const taskId = this.clients?.current?.(context.clientId)?.taskId ?? context.taskId;
+    if (taskId && !this.taskOpen(taskId)) return 'task_closed';
+    return null;
+  }
   destinationFor(command, args, target) {
     if (typeof args.url === 'string' && ['tabs.new', 'page.navigate'].includes(command)) return args.url;
     if (target.tabId == null || !this.browser?.tabs?.has?.(target.tabId)) return null;

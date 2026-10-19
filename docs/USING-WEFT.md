@@ -17,8 +17,11 @@ npm start
 ```
 
 The API binds only to `127.0.0.1:9222`. Without `WEFT_TOKEN`, the browser generates
-a random token and prints it to the local terminal. For automation, choose a
-strong token and use it in both processes:
+a random token and prints it to the local terminal; set `WEFT_TOKEN_FILE` to a path
+instead and the generated token is written there (owner-only) rather than printed,
+which keeps it out of service-manager logs. The CLI and MCP bridge read the same
+`WEFT_TOKEN_FILE`. For automation, choose a strong token (at least 32 characters;
+shorter values are refused at startup) and use it in both processes:
 
 ```sh
 export WEFT_TOKEN="$(node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))")"

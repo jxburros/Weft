@@ -11,7 +11,7 @@ import { electronEnv } from '../scripts/electron-env.js';
 import { budget } from './time-budget.js';
 
 const PASSPHRASE = 'gui encryption passphrase';
-const TOKEN = 'encryption-gui-token';
+const TOKEN = 'encryption-gui-token-0123456789abcdef';
 const phase = process.argv.find(arg => arg.startsWith('--encryption-gui='))?.split('=')[1];
 
 if (phase) {

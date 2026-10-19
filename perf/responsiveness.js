@@ -52,7 +52,7 @@ export async function runResponsiveness({ records = 5000, workspaces = 3, agents
     const port = reservation.address().port;
     await new Promise(resolve => reservation.close(resolve));
     const child = spawn(electron, ['--no-sandbox', '--disable-gpu', fileURLToPath(import.meta.url), '--responsiveness-harness'], {
-      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: 'responsiveness-token',
+      env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: 'responsiveness-token-0123456789abcdef',
         WEFT_BENCH: JSON.stringify({ agents, rounds, probes }) }), stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '';
     child.stdout.on('data', chunk => { output += chunk; });

@@ -304,7 +304,7 @@ if (mainSmoke) {
       await new Promise(resolve => portReservation.listen(0, '127.0.0.1', resolve));
       const port = portReservation.address().port;
       await new Promise(resolve => portReservation.close(resolve));
-      const token = 'browser-integration-test-token';
+      const token = 'browser-integration-test-token-0123456789abcdef';
       const main = spawn(electron, [...testFlags, `--user-data-dir=${profile}/main`, fileURLToPath(import.meta.url), '--weft-main-smoke'], {
         env: electronEnv({ WEFT_PORT: String(port), WEFT_TOKEN: token, WEFT_TEST_PROFILE: profile }),
         stdio: ['ignore', 'pipe', 'pipe'],
