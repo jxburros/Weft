@@ -161,6 +161,15 @@ if (process.argv.includes('--payments-smoke')) {
       assert.deepEqual(leaks(after), [], 'snapshots redact filled card fields');
       assert.ok(after.result.nodes.some(node => node.redacted === 'sensitive-field' && node.hasValue));
       assert.equal((await run('page.evaluate', { tabId, expectedVersion: await inspect(), expression: 'document.getElementById("number").value' }, agent)).error?.details?.credential, 'credential_residue');
+      // A filled card never authorizes a purchase: automation input that could press the pay button is refused (#103).
+      for (const [command, args] of Object.entries({ 'page.click': { selector: '#pay' }, 'page.fill': { selector: '#holder', value: 'Someone else' }, 'page.press': { key: 'Enter' } })) {
+        const refused = await run(command, { tabId, expectedVersion: await inspect(), ...args }, agent);
+        assert.equal(refused.error?.code, 'permission_required', `${command} after a card fill`);
+        assert.equal(refused.error.details.payment, 'card_filled');
+        assert.equal(refused.error.details.authority.reason, 'card_filled');
+      }
+      await delay(200);
+      assert.equal(posts.length, 0, 'no automation click reached the merchant');
 
       // 4. The total changes after approval: the submission is refused before any click and the approval is void.
       await setText('#total', '$54.99');

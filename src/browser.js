@@ -7,6 +7,8 @@ const mutatingCommands = new Set(['page.navigate', 'page.back', 'page.forward', 
 // Commands whose newly observable site block means the requested input did not complete.
 const inputCommands = new Set(['page.click', 'page.fill', 'page.clickAt', 'page.press', 'page.navigate', 'page.forward', 'page.reload']);
 const rawInputCommands = new Set(['page.clickAt', 'page.press']);
+// Page input that could submit a checkout. After a card fill only payments.submit (term-bound approval, ADR 019) may do that.
+const cardGuardedCommands = new Set(['page.click', 'page.fill', 'page.clickAt', 'page.press']);
 // During a protected operation and its cooldown, automation may only read tab metadata or give up its lease on that tab.
 const PROTECTED_ALLOWED = new Set(['page.inspect', 'tabs.list', 'tabs.release']);
 // Observation routes that would show a brokered secret if the page revealed or copied it as plain text.
@@ -1498,6 +1500,25 @@ export class Browser {
     }
   }
 
+  /**
+   * ADR 019: filling a card never authorizes a purchase. Once card details were filled, automation
+   * page input (click, fill, press, coordinates) is refused on the filled document, and on any later
+   * document of this tab (for example a back/forward restore) while a brokered field still holds a
+   * value, so a pay button can only be pressed through payments.propose/payments.submit.
+   */
+  async assertNoFilledCard(tab, name) {
+    if (tab.credentialFill?.kind !== 'payment_card') return;
+    const refuse = () => Object.assign(failure('permission_required', `${name} is refused for automation on a page holding filled card details: a purchase needs its own approval. Use payments.propose, then payments.submit.`,
+      { payment: 'card_filled', authority: { decision: 'deny', reason: 'card_filled' } }), { notStarted: true });
+    if (tab.credentialFill.document === (tab.documentSerial ?? 0)) throw refuse();
+    const contents = tab.view.webContents;
+    for (const frame of [contents.mainFrame, ...(contents.mainFrame?.framesInSubtree ?? []).filter(item => item !== contents.mainFrame)].filter(Boolean)) {
+      let present = true;
+      try { present = (await bounded(this.credentialFrameScript(contents, frame, 'residue'), 3000)) !== false; } catch { present = !frame.isDestroyed?.(); }
+      if (present) throw refuse();
+    }
+  }
+
   async assertObservable(tab, name, context) {
     if (isHuman(context.actor)) return;
     const reason = this.protectedReason(tab);
@@ -1664,6 +1685,7 @@ export class Browser {
     if (!human && ['cookies.list', 'cookies.set', 'cookies.clear', 'storage.clear'].includes(name)) throw new Error('Storage administration requires the trusted browser interface');
     if (name !== 'tabs.move' && args.tabId != null && args.workspaceId != null && this.tab(args.tabId).workspaceId !== args.workspaceId) throw new Error('Tab belongs to a different workspace');
     if (!human && name === 'page.allowOnce') throw new Error('Site exceptions require the trusted browser interface');
+    if (!human && cardGuardedCommands.has(name)) await this.assertNoFilledCard(this.tab(args.tabId), name);
     if (mutatingCommands.has(name)) this.checkControl(this.tab(args.tabId), args, context, name);
     if (/^(storage\.(policy|setSiteMode|setDefaultMode)|threats\.|launches\.|downloads\.configureScanner$|siteRules\.explain$)/.test(name)) return this.executeSecurity(name, args, context, workspaceId);
 
