@@ -85,6 +85,12 @@ values in `scripts/release/fuses.cjs`, checked after every build):
 | `OnlyLoadAppFromAsar` | on | the app is loaded only from `app.asar`, never from a loose `app/` folder |
 | `RunAsNode` | **on** | `ELECTRON_RUN_AS_NODE` still works; see below |
 
+Packaged builds also ship only the runtime packages the app imports (today only `zod`).
+The MCP bridge (`node bin/weft.js mcp`) runs from a source checkout, and `bin/` is not
+packaged, so `@modelcontextprotocol/sdk` and the HTTP transports it depends on
+(express, hono, cors, jose and others) stay out of `app.asar`; `test/release.test.js`
+fails if shipped code starts importing an excluded package.
+
 `RunAsNode` stays enabled because the plugin sandbox (`src/plugins/sandbox.js`) and the
 credential broker (`src/credentials.js`) are child processes of the Electron binary
 started with `ELECTRON_RUN_AS_NODE` and Node's permission-model flags, with an

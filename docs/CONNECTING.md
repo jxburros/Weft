@@ -8,7 +8,11 @@ enforced. For guidance on writing an integration, see
 
 ## CLI and MCP
 
-Keep the browser running and give the CLI the same token:
+Keep the browser running and give the CLI the same token. The CLI and MCP bridge
+use `WEFT_API_URL` (default `http://127.0.0.1:9222`; `localhost` is connected as
+`127.0.0.1`, and `[::1]` is refused because the API listens on IPv4 loopback only).
+If you changed the port with `WEFT_PORT` (for example because Chrome's DevTools
+already uses 9222), set the same port in `WEFT_API_URL`:
 
 ```sh
 node bin/weft.js commands

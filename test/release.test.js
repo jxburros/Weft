@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderInstallerArt } from '../scripts/generate-installer-art.js';
 import { changelogSection, releaseMetadata } from '../scripts/release/metadata.js';
@@ -133,6 +133,33 @@ test('packaging policy: per-user assisted installer, data kept, stable GitHub ch
   const signed = load({ AZURE_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net', AZURE_SIGNING_ACCOUNT: 'weft', AZURE_SIGNING_PROFILE: 'release', WEFT_WINDOWS_PUBLISHER: 'Weft Contributors', APPLE_API_KEY: '/k.p8', APPLE_API_KEY_ID: 'id', APPLE_API_ISSUER: 'issuer' });
   assert.equal(signed.win.azureSignOptions.publisherName, 'Weft Contributors');
   assert.equal(signed.mac.notarize, true);
+});
+
+test('packaged builds ship only the runtime packages that shipped code imports (#126)', () => {
+  const config = require('../electron-builder.config.cjs');
+  const shipped = ['zod'];
+  assert.ok(config.files.includes('!**/node_modules/**/*'));
+  for (const name of shipped) assert.ok(config.files.includes(`**/node_modules/${name}/**/*`), name);
+  const imports = new Map();
+  const walk = directory => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) { walk(path); continue; }
+      if (!/\.[cm]?js$/.test(entry.name)) continue;
+      for (const [, specifier] of readFileSync(path, 'utf8').matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)['"]([@a-z0-9][\w@./-]*)['"]/g)) {
+        if (!specifier.startsWith('node:')) imports.set(specifier, [...(imports.get(specifier) ?? []), relative(root, path).replaceAll('\\', '/')]);
+      }
+    }
+  };
+  walk(join(root, 'src'));
+  for (const [specifier, files] of imports) {
+    const name = specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0];
+    if (name === 'electron' || shipped.includes(name)) continue;
+    // The MCP bridge is reached only through bin/weft.js, which is not packaged.
+    assert.equal(name, '@modelcontextprotocol/sdk', `${name} is imported by ${files.join(', ')} but excluded from packaged builds`);
+    assert.deepEqual([...new Set(files)], ['src/mcp.js']);
+  }
+  assert.ok(!config.files.some(pattern => pattern.startsWith('bin')), 'bin/ (the CLI and MCP bridge) is not packaged');
 });
 
 test('the release label and the packaging config make one signing decision (#123)', () => {

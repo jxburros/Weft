@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,6 +12,7 @@ import { PROVIDER_PRESETS, reportedCapabilities } from '../src/provider-presets.
 import { describeCapabilities, MCP_RESOURCES, MAX_DEADLINE_MS } from '../src/capabilities.js';
 import { ENCRYPTION_COVERAGE } from '../src/profile-encryption.js';
 import { runStoreCommand } from '../src/store-cli.js';
+import { createClient } from '../src/client.js';
 import { WorkspaceService } from '../src/workspace.js';
 import { commands } from '../src/commands.js';
 import { budget } from './time-budget.js';
@@ -141,4 +143,14 @@ test('the offline store CLI validates its arguments, lists, verifies and restore
   t.after(() => reopened.close());
   assert.equal((await reopened.execute('materials.get', { id: note.id })).content, 'v1');
   assert.ok(readFileSync(join(directory, '.workspace.lock'), 'utf8').includes(String(process.pid)), 'the reopened service holds the lock again');
+});
+
+test('the CLI client reaches the IPv4-only API through localhost and refuses [::1] with the reason (#126)', async t => {
+  const server = createServer((request, response) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ commands: [request.headers.host] })); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const { port } = server.address();
+  assert.deepEqual(await createClient({ url: `http://localhost:${port}`, token: 'x' }).listCommands(), [`127.0.0.1:${port}`]);
+  assert.throws(() => createClient({ url: `http://[::1]:${port}`, token: 'x' }), /listens only on 127\.0\.0\.1/);
+  assert.throws(() => createClient({ url: 'http://example.com:9222', token: 'x' }), /loopback HTTP origin/);
 });

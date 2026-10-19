@@ -22,6 +22,10 @@ module.exports = {
     'assets/logo/icons/favicon.ico', 'assets/logo/icons/app-icon-plum-512.png',
     'assets/logo/dark/mark-dark.svg', 'assets/logo/dark/horizontal-dark.svg',
     'assets/graphics/motion/**/*',
+    // The MCP bridge runs only from a source checkout (`node bin/weft.js mcp`), and bin/ is not packaged, so
+    // the MCP SDK and the HTTP transports it depends on (express, hono, cors, jose, ...) are unreachable in
+    // the app. Only zod is used at runtime (#126); test/release.test.js checks this list against src imports.
+    '!**/node_modules/**/*', '**/node_modules/zod/**/*',
   ],
   asar: true,
   // No NODE_OPTIONS, no --inspect, app code only from a verified app.asar (#117). Checked by
