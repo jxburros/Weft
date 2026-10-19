@@ -59,6 +59,26 @@ test('detection assistance finds common formats, masks previews and never claims
   assert.throws(() => redactText('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!', [{ pattern: '(a+)+$' }]), /too long|failed/, 'pathological patterns are bounded');
 });
 
+test('case-insensitive literal redaction keeps offsets when case mapping changes length', () => {
+  const cases = [
+    // İ lowercases to two code units; spans after it must not shift.
+    ['İİİ token SECRET123 end', 'secret123', 'İİİ token [REDACTED] end'],
+    // ẞ and ß fold to "ss" on both sides of the match.
+    ['ẞtraße and STRASSE end', 'strasse', '[REDACTED] and [REDACTED] end'],
+    // A ligature inside the secret is covered whole.
+    ['ﬁle-key FILE-KEY end', 'file-key', '[REDACTED] [REDACTED] end'],
+    // A length-changing character inside the match is removed, not partly kept.
+    ['x İstanbul y', 'i̇stanbul', 'x [REDACTED] y']
+  ];
+  for (const [text, literal, expected] of cases) {
+    const result = redactText(text, [{ literal, caseSensitive: false }]);
+    assert.equal(result.text, expected, text);
+    assert.deepEqual(result.unmatched, []);
+  }
+  // Case-sensitive matching is unchanged.
+  assert.equal(redactText('Secret secret', [{ literal: 'secret' }]).text, 'Secret [REDACTED]');
+});
+
 test('PNG redaction replaces pixels and drops ancillary chunks', () => {
   const source = screenshot();
   assert.ok(source.includes(Buffer.from(SECRET)));

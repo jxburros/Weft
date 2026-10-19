@@ -69,6 +69,25 @@ function patternMatches(text, pattern, flags, index) {
 }
 
 /**
+ * Full case folding per code point (lower, upper, lower: ß/ẞ -> ss, ﬁ -> fi, İ -> i̇), with
+ * the source range each folded code unit came from. A match that starts or ends inside an
+ * expansion covers the whole source character, so redaction never leaves part of it visible.
+ */
+function foldWithOffsets(text) {
+  let folded = '';
+  const starts = [];
+  const ends = [];
+  let offset = 0;
+  for (const char of text) {
+    const piece = char.toLowerCase().toUpperCase().toLowerCase();
+    for (let i = 0; i < piece.length; i++) { starts.push(offset); ends.push(offset + char.length); }
+    folded += piece;
+    offset += char.length;
+  }
+  return { folded, starts, ends };
+}
+
+/**
  * Resolve span selectors to concrete [start, end) ranges over `text`.
  * Selectors: { start, end } offsets; { literal, caseSensitive? } every occurrence;
  * { pattern, flags? } regular expression; { detector } every assistance match of a kind.
@@ -84,9 +103,14 @@ export function resolveSpans(text, selectors = []) {
       if (selector.start < 0 || selector.end > source.length || selector.end <= selector.start) throw Object.assign(new Error(`Redaction ${index}: offsets are outside the text`), { code: 'invalid_arguments' });
       spans.push({ start: selector.start, end: selector.end, label, selector: index, method: 'offsets' });
     } else if (typeof selector.literal === 'string' && selector.literal.length) {
-      const haystack = selector.caseSensitive === false ? source.toLocaleLowerCase() : source;
-      const needle = selector.caseSensitive === false ? selector.literal.toLocaleLowerCase() : selector.literal;
-      for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + needle.length)) spans.push({ start: at, end: at + needle.length, label, selector: index, method: 'literal' });
+      if (selector.caseSensitive === false) {
+        // Case folding can change length (İ, ß, ligatures), so search the folded text and map hits back to source offsets.
+        const { folded, starts, ends } = foldWithOffsets(source);
+        const needle = foldWithOffsets(selector.literal).folded;
+        for (let at = folded.indexOf(needle); at >= 0 && needle.length; at = folded.indexOf(needle, at + needle.length)) spans.push({ start: starts[at], end: ends[at + needle.length - 1], label, selector: index, method: 'literal' });
+      } else {
+        for (let at = source.indexOf(selector.literal); at >= 0; at = source.indexOf(selector.literal, at + selector.literal.length)) spans.push({ start: at, end: at + selector.literal.length, label, selector: index, method: 'literal' });
+      }
     } else if (typeof selector.pattern === 'string') {
       for (const [start, end] of patternMatches(source, selector.pattern, selector.flags, index)) spans.push({ start, end, label, selector: index, method: 'pattern' });
     } else if (selector.detector) {
