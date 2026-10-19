@@ -92,7 +92,18 @@ wrap AAD, so lowering them fails instead of weakening the key.
   index, and zeroes key buffers. Every command except `encryption.status`,
   `encryption.unlock`, `encryption.checkRecoveryKey` and `guide.get` returns
   `locked` (HTTP 423, CLI exit 9, MCP `isError` with the same outcome), before
-  any target lookup reads workspace data. There is no idle auto-lock yet.
+  any target lookup reads workspace data.
+- **Idle auto-lock** (amended in 1.4.0). Off by default. A person sets it in
+  Settings → Encryption → Unlock options (`encryption.configure`
+  `autoLockMinutes` 1–1440 or null, `lockOnScreenLock`); agents cannot change
+  it. The main process polls OS idle time (`powerMonitor.getSystemIdleTime`)
+  every 30 s and, past the limit, locks through the same lock path with lock
+  reason `idle`; with `lockOnScreenLock` the OS `lock-screen` and `suspend`
+  events lock with reason `screen_locked`. Idle means no human keyboard or mouse
+  use of the computer: agent commands never keep the profile unlocked, and
+  running agent work stops at lock as with a manual lock. The setting lives in
+  `<profile>/auto-lock.json` (not secret; a person with write access to the
+  profile can turn it off, which is outside the at-rest threat model).
 - **Unlock** is human-only administration from the trusted GUI (agents get
   `permission_required`). A wrong secret is `key_invalid`; an OS key that
   cannot unwrap (moved profile, other account, denied keychain) is

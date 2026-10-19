@@ -87,7 +87,9 @@ Locking (`encryption.lock`) closes the database, drops decrypted state and keys
 and closes tabs; every command except `encryption.status`, `encryption.unlock`,
 `encryption.checkRecoveryKey` and `guide.get` then returns `locked` (HTTP 423,
 CLI exit 9). Profiles in manual unlock mode start locked. Only a person in the
-Weft window unlocks.
+Weft window unlocks. An optional idle auto-lock (off by default; Settings →
+Encryption → Unlock options) locks the same way after a chosen number of minutes
+without human use of the computer, and optionally when the screen locks.
 
 Enabling, disabling and data-key rotation are crash-safe: one SQLite
 transaction switches every value, a `pending` marker in the keyring lets the

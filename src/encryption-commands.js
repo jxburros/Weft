@@ -13,8 +13,10 @@ export const encryptionCommandDefinitions = {
   'encryption.lock': ['Human locks encrypted workspace data: keys leave memory and every surface returns locked until a person unlocks', {}],
   'encryption.unlock': ['Human unlocks encrypted workspace data with the OS key, passphrase or recovery key (Weft window only)', {
     method: z.enum(['os', 'passphrase', 'recovery']), secret: secret.optional().describe('Passphrase or recovery key; omit for the OS key.') }],
-  'encryption.configure': ['Human changes how encrypted data unlocks (OS key at startup or manual) and sets, changes or removes the passphrase', {
-    unlockMode: unlockMode.optional(), passphrase: secret.nullable().optional().describe('New passphrase, or null to remove it.') }],
+  'encryption.configure': ['Human changes how encrypted data unlocks (OS key at startup or manual), sets, changes or removes the passphrase, and sets idle auto-lock', {
+    unlockMode: unlockMode.optional(), passphrase: secret.nullable().optional().describe('New passphrase, or null to remove it.'),
+    autoLockMinutes: z.number().int().min(1).max(1440).nullable().optional().describe('Lock automatically after this many minutes without human use of the computer (OS idle time); null turns it off. Off by default.'),
+    lockOnScreenLock: z.boolean().optional().describe('Also lock when the OS screen locks or the computer sleeps.') }],
   'encryption.rotate': ['Human rotates keys: wrapping (new profile and recovery key) or dataKey (new data key with resumable re-encryption)', {
     target: z.enum(['wrapping', 'dataKey']), passphrase: secret.optional().describe('wrapping only: passphrase to keep under the new profile key; omitted removes the passphrase.') }],
   'encryption.checkRecoveryKey': ['Human checks that a recovery key opens this profile, without unlocking or changing anything', { recoveryKey: secret }],

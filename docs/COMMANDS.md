@@ -331,7 +331,7 @@ Human-only describes an unconditional administration gate. Every other non-human
 | encryption.enable | Human turns on workspace encryption in place; returns the recovery key once | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.lock | Human locks encrypted workspace data: keys leave memory and every surface returns locked until a person unlocks | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.unlock | Human unlocks encrypted workspace data with the OS key, passphrase or recovery key (Weft window only) | administration | Human only | GUI IPC, CLI, REST, MCP |
-| encryption.configure | Human changes how encrypted data unlocks (OS key at startup or manual) and sets, changes or removes the passphrase | administration | Human only | GUI IPC, CLI, REST, MCP |
+| encryption.configure | Human changes how encrypted data unlocks (OS key at startup or manual), sets, changes or removes the passphrase, and sets idle auto-lock | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.rotate | Human rotates keys: wrapping (new profile and recovery key) or dataKey (new data key with resumable re-encryption) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.checkRecoveryKey | Human checks that a recovery key opens this profile, without unlocking or changing anything | administration | Human only | GUI IPC, CLI, REST, MCP |
 | encryption.disable | Human turns off encryption and rewrites workspace data as plaintext on this disk | administration | Human only | GUI IPC, CLI, REST, MCP |
