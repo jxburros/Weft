@@ -13,7 +13,7 @@ wait for those exact renderer dimensions. This avoids distro-dependent menu
 heights changing the screenshot size. Captures reset transient status and move
 the pointer off controls. No provider or external network is used. The twelve
 committed goldens cover
-empty workspace, populated materials/sidebar, Ask Weft, settings, agent connections, and restricted
+empty workspace, populated materials with the sidebar icon grid, Ask Weft, settings, agent connections, and restricted
 destination in both themes. The harness also drives the Update Center with
 fixture update states (no captures). This tests browser-owned chrome, not page rendering.
 
@@ -45,5 +45,9 @@ update goldens to silence an unexplained failure. The initial references were
 captured and inspected on Linux using Electron 44.9.0. They were regenerated and
 reviewed for the accessibility and design-system pass (#31, #36: 11 px type floor,
 consolidated spacing/radius scales, disabled-state treatment, trusted stop-page
-band, landmark and heading fixes) with the pinned font configuration above. Cross-platform screen-reader
+band, landmark and heading fixes) with the pinned font configuration above.
+Since 1.1.2 the harness forces `prefers-reduced-motion`, so goldens show the
+resting frame of each animation; they were regenerated for the 1.2 sidebar icon
+grid and again for the 1.3 Ask Weft, connections and Settings changes.
+Cross-platform screen-reader
 and brand acceptance are separate outstanding work (see `docs/DESIGN-SYSTEM.md`).

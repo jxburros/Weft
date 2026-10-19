@@ -1,6 +1,6 @@
 # Accessibility audit and manual test script
 
-Last verified against code: 2026-10-18.
+Last verified against code: 2026-10-19.
 
 This is the record for issue #31 (keyboard, screen reader, scaling and theme
 accessibility). It separates what is **checked automatically in real Electron**
@@ -48,38 +48,46 @@ WEFT_A11Y_REPORT=/tmp/a11y.json xvfb-run -a node --test test/accessibility.test.
 ## Audit matrix
 
 Result legend: **pass** = checked automatically with no finding after the fixes
-below; **manual** = needs the manual script; **n/a** = not applicable. Every row
-was audited in both the light and the dark theme (102 audited states).
+below; **manual** = needs the manual script; **n/a** = not applicable. Every
+audited row was checked in both the light and the dark theme (111 audited states in the
+2026-10-19 run). The sidebar's section links are an icon grid present in every
+view: each icon button has its section name as its accessible name and tooltip,
+the text stays in the DOM visually hidden, and the current section has
+`aria-current="page"`.
 
 | View or surface | axe | Contrast and states | Focus ring | Targets | Keyboard / trap | Restore focus | Zoom 200% / text 200% | Screen reader |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Overview (with restore notice, resume panel, attention list) | pass | pass | pass | pass | pass (56 controls) | pass (4 dialogs) | pass / pass | manual |
-| Materials, Context, Conversations, Workflows, Artifacts | pass | pass | — | pass | — | — | — | manual |
-| Tasks (runtime task, waiting task, handoffs) | pass | pass | — | pass | pass (52) | pass | pass / pass | manual |
+| Overview (with restore notice, resume panel, attention list) | pass | pass | pass | pass | pass (58 controls) | pass (4 dialogs) | pass / pass | manual |
+| Materials, Context, Conversations, Workflows, Artifacts, Mailbox (empty state) | pass | pass | — | pass | — | — | — | manual |
+| Tasks (runtime task, waiting task, handoffs) | pass | pass | — | pass | pass (54) | pass | pass / pass | manual |
 | Activity, History, Bookmarks, Downloads, Tabs table, Updates | pass | pass | — | pass | — | — | — | manual |
-| Agent requests (generic and payment approval cards) | pass | pass | pass | pass | pass (46) | — | pass / pass | manual |
+| Agent requests (generic and payment approval cards) | pass | pass | pass | pass | pass (48) | — | pass / pass | manual |
 | Shared context | pass | pass | — | pass | — | — | — | manual |
-| Settings (incl. display & resources, encryption, lists, agent input entries) | pass | pass | pass | pass | pass (71) | pass (2 dialogs) | pass / pass | manual |
-| Privacy & site rules | pass | pass | pass | pass | pass (50) | — | pass / pass | manual |
-| Community site lists | pass | pass | — | pass | pass (41) | pass | pass / pass | manual |
+| Settings (incl. display & resources, encryption, lists, agent input entries) | pass | pass | pass | pass | pass (74) | pass (2 dialogs) | pass / pass | manual |
+| Privacy & site rules | pass | pass | pass | pass | pass (52) | — | pass / pass | manual |
+| Community site lists | pass | pass | — | pass | pass (43) | pass | pass / pass | manual |
 | Live page chrome (address bar, ownership chip, frame) | pass | pass | — | pass | boundary pass | — | — | manual |
 | Stop page (site rule) | pass | pass | — | pass | — | — | — | manual |
 | Split view (pane headers and frames) | pass (light) | pass | — | pass | pane focus pass | — | — | manual |
 | Agent panel (chat) | pass | pass | — | pass | Escape returns focus | pass | — | manual |
-| Command palette, tab search, command desk | pass | pass | pass | pass | modal pass (26) | pass | pass / pass | manual |
-| Record editors (material, task, workspace) | pass | pass | pass | pass | modal pass (12) | pass | pass / pass | manual |
+| Command palette, tab search, command desk | pass | pass | pass | pass | modal pass (27) | pass | pass / pass | manual |
+| Record editors (material, task, workspace with instructions and memory) | pass | pass | pass | pass | modal pass (12) | pass | pass / pass | manual |
 | Task review, artifact viewer, compare versions | pass | pass | pass | pass | modal pass (9) | — | — | manual |
 | Redaction editor | pass | pass | pass | pass | modal pass (8, incl. keyboard area entry) | — | — | manual |
 | Agent connections, create connection, agent input | pass | pass | pass | pass | modal pass (5, 6) | pass | pass / pass | manual |
-| Saved sign-ins, payments, plugins, extensions, backups, resource limits, export, encryption, retention, model connection, semantic search, explain address, storage coverage, page tools | pass | pass | pass | pass | — | — | — | manual |
+| Saved sign-ins, payments, plugins, extensions, backups, resource limits, export, encryption, retention, model connection, learning & memory, background learning, add memory, semantic search, explain address, storage coverage, page tools | pass | pass | pass | pass | — | — | — | manual |
 | Subscribe to a community list (and its preview) | pass | pass | pass | pass | modal pass (12) | pass | pass / pass | manual |
 | Lock screen | pass | pass | pass | pass | trapped inside, app inert | pass after unlock | — | manual |
 | Credential entry window (separate secret window) | n/a | token-checked only | manual | manual | manual | n/a | manual | manual |
+| Send to Weft preview, Ask Weft action review, email reader, workflow watch fields, Mailbox with messages | not audited | not audited | not audited | not audited | not audited | not audited | not audited | manual |
 | Website content inside the live page | n/a (the website's own) | n/a | n/a | n/a | boundary only | n/a | n/a | n/a |
 
 A dash means that combination is not exercised separately; the row's other
 checks cover its markup. The credential entry window is a separate sandboxed
-window and is not yet driven by the audit.
+window and is not yet driven by the audit; neither are the surfaces in the
+"not audited" row. `test/gui.test.js` drives the Send to Weft preview,
+action review, email reader and a populated Mailbox, but runs no accessibility
+checks on them; the workflow editor is not opened by any GUI test.
 
 ## Findings fixed in this pass
 
@@ -131,8 +139,9 @@ checks; VoiceOver on the current macOS; Orca on GNOME (Wayland and X11).
    controls", "Agent conversation" (when open), "Status". Use the heading list:
    each view has one level-1 heading.
 2. **Skip link and views.** `Tab` once: "Skip to workspace content". Activate it;
-   focus is in the view. Choose each sidebar section; the new view's heading is
-   read and the section is marked current.
+   focus is in the view. Choose each sidebar section; each icon button is read by
+   its section name, the new view's heading is read and the section is marked
+   current.
 3. **Ownership.** Open a website. Expect "Move focus into the page (F6)" to be
    read. The ownership badge beside the address bar reads "You drive". From the
    second client let an agent claim the tab: one announcement "… Agent drives:
@@ -176,7 +185,8 @@ tables or code.
 rings, ownership badges, state markers and disabled controls stay visible.
 
 **Reduced motion.** Turn on the OS setting: the loading line and working markers
-are static, handoffs show no border animation while the text still changes, views,
+are static, the sidebar icons do not move on hover or focus, handoffs show no
+border animation while the text still changes, views,
 dialogs, the toast and the agent panel appear without an entrance, and the Vixl
 animations (the overview mark, "Waiting for your model") show their resting frame.
 
