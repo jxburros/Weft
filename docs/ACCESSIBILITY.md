@@ -78,14 +78,16 @@ the text stays in the DOM visually hidden, and the current section has
 | Saved sign-ins, payments, plugins, extensions, backups, resource limits, export, encryption, retention, model connection, learning & memory, background learning, add memory, semantic search, explain address, storage coverage, page tools | pass | pass | pass | pass | — | — | — | manual |
 | Subscribe to a community list (and its preview) | pass | pass | pass | pass | modal pass (12) | pass | pass / pass | manual |
 | Lock screen | pass | pass | pass | pass | trapped inside, app inert | pass after unlock | — | manual |
-| Credential entry window (separate secret window) | n/a | token-checked only | manual | manual | manual | n/a | manual | manual |
+| Credential entry window (separate secret window; sign-in and payment card, light and dark OS theme) | pass | pass | pass | pass | pass (4 and 6 controls; Escape cancels and closes) | n/a (own window) | manual | manual |
 | Send to Weft preview, Ask Weft action review, email reader, workflow watch fields, Mailbox with messages | not audited | not audited | not audited | not audited | not audited | not audited | not audited | manual |
 | Website content inside the live page | n/a (the website's own) | n/a | n/a | n/a | boundary only | n/a | n/a | n/a |
 
 A dash means that combination is not exercised separately; the row's other
 checks cover its markup. The credential entry window is a separate sandboxed
-window and is not yet driven by the audit; neither are the surfaces in the
-"not audited" row. `test/gui.test.js` drives the Send to Weft preview,
+window; since 1.4.0 the audit opens it directly (the CI Linux keyring is
+`basic_text`, so `credentials.create` refuses before prompting) for both kinds
+under both OS themes. Zoom and text scaling of that fixed-size window are not
+checked. The surfaces in the "not audited" row are not driven by the audit. `test/gui.test.js` drives the Send to Weft preview,
 action review, email reader and a populated Mailbox, but runs no accessibility
 checks on them; the workflow editor is not opened by any GUI test.
 
@@ -107,6 +109,7 @@ checks on them; the workflow editor is not opened by any GUI test.
 | The rail overlapped its own buttons at 200% zoom. | The rail scrolls. |
 | Opening the agent panel left focus on the toggle; the palette had no arrow-key navigation. | Opening from the keyboard focuses the message field, `Escape` returns to the toggle; arrow keys move through palette results and `Enter` opens the first. |
 | A stray `}` in `gui.css` silently dropped the tab-group styles. | Removed. |
+| Credential entry window (1.4.0): the trusted band sat outside every landmark (axe `region`). | The band is the window's `header` (banner landmark). |
 
 ## Keyboard reference
 

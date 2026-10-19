@@ -43,6 +43,7 @@ These are working records for people changing Weft, not guides for using it.
 | [Implementation coverage](IMPLEMENTATION.md) | Compare shipped behavior to the specification, with evidence and gaps |
 | [Validation](VALIDATION.md) and [browser safety audit](BROWSER-SAFETY-AUDIT.md) | See what the checks do and do not establish |
 | [Issue disposition](maintainers/ISSUE-STATUS.md) | Trace each completed or partial backlog item |
+| [Credential review brief](maintainers/CREDENTIAL-REVIEW.md) | Scope and checklist for the independent credential and payment security review |
 | [Changelog](../CHANGELOG.md) | See what changed in each version |
 
 Documents that make verification claims (implementation coverage and

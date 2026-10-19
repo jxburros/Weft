@@ -54,7 +54,7 @@ export function installChecks() {
   };
   const interactive = (root = document) => [...root.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, summary, [tabindex]:not([tabindex="-1"])')]
     .filter((el) => visible(el) && !el.closest("#command-desk[hidden]"));
-  const scope = () => (document.getElementById("lock-screen") || (document.getElementById("dialog").open ? document.getElementById("dialog") : document));
+  const scope = () => (document.getElementById("lock-screen") || (document.getElementById("dialog")?.open ? document.getElementById("dialog") : document));
   const textOf = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
   const large = (el) => { const s = getComputedStyle(el); const size = parseFloat(s.fontSize); return size >= 24 || (size >= 18.66 && Number(s.fontWeight) >= 600); };
 

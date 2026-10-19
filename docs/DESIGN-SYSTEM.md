@@ -223,3 +223,20 @@ does not make them:
    the icon-only section grid, and the optional ocean, forest and rose accents.
 6. Appearance of the Windows installer art and of the icons on each platform's
    dock/taskbar at native sizes.
+
+### Sign-off record
+
+Issue #36 was closed as code complete; these decisions remain a product owner's.
+To sign off, review each item on the reference platforms (Windows 11, current
+macOS, a GNOME/KDE Linux desktop) in both themes, then fill in the row. A
+"change" outcome becomes a new issue; do not edit tokens without updating the
+visual goldens (`WEFT_VISUAL=1 WEFT_UPDATE_GOLDEN=1`, see `test/visual/README.md`) and `npm run logo:validate`.
+
+| # | Decision | Reviewed by | Date | Platforms | Outcome (accept / change) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Logo, wordmark, optical small-size variant | | | | |
+| 2 | Typeface and type scale | | | | |
+| 3 | Dark, status, focus and trusted-surface palette | | | | |
+| 4 | Workspace naming | | | | |
+| 5 | Sidebar density, breakpoints, motion, accents | | | | |
+| 6 | Installer art and platform icons | | | | |
