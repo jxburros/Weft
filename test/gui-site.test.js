@@ -84,7 +84,7 @@ if (process.argv.includes("--gui-site")) {
     await new Promise((r) => reservation.listen(0, "127.0.0.1", r));
     const port = reservation.address().port;
     await new Promise((r) => reservation.close(r));
-    const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--gui-site"], { env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-site-fixture-token", WEFT_DISABLE_UPDATES: "1" }), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(electron, ["--no-sandbox", "--disable-gpu", fileURLToPath(import.meta.url), "--gui-site"], { env: electronEnv({ WEFT_TEST_PROFILE: profile, WEFT_PORT: String(port), WEFT_TOKEN: "gui-site-fixture-token-0123456789abcdef", WEFT_DISABLE_UPDATES: "1" }), stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.on("data", (x) => (output += x));
     child.stderr.on("data", (x) => (output += x));
