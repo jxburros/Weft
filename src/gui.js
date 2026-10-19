@@ -5,6 +5,8 @@ import { icon, illustration } from "./icons.js";
 import { knowledgeUI } from "./gui-knowledge.js";
 import { announce, focusView, keyboardScrollable, stateBadge, trustedBand } from "./gui-a11y.js";
 import { listsUI } from "./gui-lists.js";
+import { panesUI, PANE_HEADER, PANE_NAMES } from "./gui-panes.js";
+import { EVERYTHING_ID } from "./everything.js";
 const $ = (id) => document.getElementById(id);
 // Errors thrown across the preload bridge keep only their message, so the outcome is unwrapped here:
 // the shared outcome code ("locked", "approval_required", …) and status stay available to the GUI.
@@ -114,8 +116,6 @@ let tabs = [],
   liveTurn = null,
   filter = "",
   taskFilter = "",
-  splitTabId = null,
-  focusedPane = "primary",
   lastAutomation = null,
   refreshPromise = null,
   lastSnapshot = "",
@@ -123,14 +123,19 @@ let tabs = [],
   dialogRestore,
   previewing = null;
 let dialogGeneration = 0;
+// Each window shows its own workspace (#100): the main window follows the active workspace; a second
+// window shows the workspace that was moved into it.
+let windowInfo = { windowId: 1, main: true, workspaceId: null, workspaceIds: null, assignments: {} };
+const currentWorkspaceId = () => (windowInfo.main ? state.activeWorkspaceId : windowInfo.workspaceId);
 const ws = () =>
-  state.workspaces.find((w) => w.id === state.activeWorkspaceId) || {
+  state.workspaces.find((w) => w.id === currentWorkspaceId()) || {
     name: "My workspace",
     id: "",
   };
+const isEverything = (w) => w?.id === EVERYTHING_ID || w?.builtin === "everything";
 const records = (key) =>
   (state[key] || []).filter((r) => r.workspaceId === ws().id);
-const active = () => tabs.find((t) => t.active);
+const active = () => tabs.find((t) => t.active && t.workspaceId === ws().id);
 const visibleTabs = () =>
   tabs.filter((t) => !t.workspaceId || t.workspaceId === ws().id);
 const displayTitle = (t) =>
@@ -165,6 +170,8 @@ const knowledge = knowledgeUI({ $: (id) => $(id), esc, short, date, action, head
 // Community site list subscriptions (#28, src/gui-lists.js).
 const lists = listsUI({ esc, action, heading: (...a) => heading(...a), empty: (...a) => empty(...a), openDialog: (...a) => openDialog(...a), formDialog: (...a) => formDialog(...a), closeDialog: () => closeDialog(),
   field: (...a) => field(...a), area: (...a) => area(...a), choice: (...a) => choice(...a), execute: (...a) => execute(...a), toast: (m) => toast(m), errorMessage: (e) => errorMessage(e), ws: () => ws() });
+// 1–4 pane layouts of tabs, captures and documents (#101, src/gui-panes.js).
+const panes = panesUI({ esc, icon, action, execute: (...a) => execute(...a), ownerBadge: (t) => ownerBadge(t), controlMode: (t) => controlMode(t), displayTitle: (t) => displayTitle(t), announce });
 // Polling replaces controls. Keep keyboard focus on the equivalent new control.
 function rememberFocus() {
   const element = document.activeElement;
@@ -320,7 +327,7 @@ function theme() {
 const known = { owners: new Map(), pending: null, stopped: null, attention: null };
 const handoffUntil = new Map();
 function noticeChanges(automation) {
-  const shown = new Set([active()?.id, splitTab()?.id].filter(Boolean));
+  const shown = new Set([active()?.id, ...panes.items.filter((item) => item?.type === "tab").map((item) => item.id)].filter(Boolean));
   for (const t of visibleTabs()) {
     const label = controlLabel(t);
     const before = known.owners.get(t.id);
@@ -361,12 +368,16 @@ function renderShell() {
   $("workspace-name").textContent = ws().name;
   $("breadcrumb-workspace").textContent = ws().name;
   $("breadcrumb-section").textContent = names[section] || "Workspace";
+  document.title = `${ws().name} — Weft`;
   setHTML($("workspace-buttons"), state.workspaces
     .filter((w) => !w.archived)
-    .map(
-      (w) =>
-        `<button class="rail-button workspace-dot ${w.id === ws().id ? "active" : ""}" data-action="switch-workspace" data-id="${esc(w.id)}" aria-label="${esc(w.name)}" title="${esc(w.name)}" ${w.id === ws().id ? 'aria-current="true"' : ""}>${esc(w.icon && w.icon.length < 4 ? w.icon : w.name.slice(0, 2).toUpperCase())}</button>`,
-    )
+    .sort((a, b) => Number(isEverything(b)) - Number(isEverything(a)))
+    .map((w) => {
+      const owner = windowInfo.assignments?.[w.id] ?? 1;
+      const elsewhere = owner !== windowInfo.windowId;
+      const label = `${w.name}${isEverything(w) ? " (unfiled pages and links from other apps)" : ""}${elsewhere ? (owner === 1 ? " (in the main window)" : " (open in another window)") : ""}`;
+      return `<button class="rail-button workspace-dot ${w.id === ws().id ? "active" : ""} ${isEverything(w) ? "everything" : ""} ${elsewhere ? "elsewhere" : ""}" data-action="switch-workspace" data-id="${esc(w.id)}" aria-label="${esc(label)}" title="${esc(label)}" ${w.id === ws().id ? 'aria-current="true"' : ""} ${isEverything(w) ? "" : 'draggable="true"'}>${isEverything(w) ? icon("grid") : esc(w.icon && w.icon.length < 4 ? w.icon : w.name.slice(0, 2).toUpperCase())}${elsewhere ? '<span class="window-mark" aria-hidden="true">↗</span>' : ""}</button>`;
+    })
     .join(""));
   setHTML($("sections"), sections
     .map(
@@ -408,7 +419,8 @@ function renderShell() {
   $("forward").disabled = !active()?.canGoForward;
   $("stop").hidden = !active()?.loading;
   $("reload").hidden = !!active()?.loading;
-  $("split-view").classList.toggle("sage-color", !!splitTabId);
+  $("split-view").classList.toggle("sage-color", panes.multi());
+  $("split-view").setAttribute("aria-pressed", String(panes.multi()));
 }
 function heading(title, subtitle, button = "") {
   return `<div class="page-heading"><div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div>${button}</div>`;
@@ -478,7 +490,7 @@ function overview() {
  ${artifacts.length ? `<section class="settings-section"><div class="section-heading"><h2>Recently saved captures</h2>${action("section", "Open collection", "arrow", 'data-section="artifacts"', "text-button")}</div><div class="record-grid">${artifacts.map(artifactCard).join("")}</div></section>` : ""}<div class="workspace-footnote icon">${icon("lock")} Local by default. Your workspace stays ready for your next session.</div>`;
 }
 function renderContent() {
-  if (section === "browse" && previewing) {
+  if (section === "browse" && previewing && !panes.items.some((item) => item?.type === "preview")) {
     setHTML($("content"), `<div class="preview-banner" role="status"><div><strong>Offline archive preview</strong> · ${esc(previewing.title || "Saved capture")} · version ${esc(String(previewing.number || ""))}<small>Archived content only. Scripts, network requests, navigation, form submission, popups and downloads are disabled. ${esc(String(previewing.unavailable?.length || 0))} damaged and ${esc(String(previewing.notStored || 0))} unarchived resources are not shown.</small></div>${action("close-preview", "Close preview", "close")}</div><div id="preview-area" class="preview-area" aria-label="Archived page (not live)"></div>`);
     layout();
     return;
@@ -491,6 +503,16 @@ function renderContent() {
     const stop = blocked
       ? `<div class="browser-placeholder stop-page" role="region" aria-labelledby="stop-title">${trustedBand(blocked.kind === "security" ? "Security stop" : "Site rule stop", icon("shield"))}<h1 id="stop-title">${blocked.kind === "security" ? "Known harmful destination" : "This destination is restricted"}</h1><p>${esc(blocked.reason || "A site rule stopped this page. Review the matching rule in Privacy & site rules.")}</p><p>${esc(blocked.url)}</p>${blocked.kind === "security" ? `<p>Security intelligence from ${esc(blocked.publisher || blocked.source)}${blocked.stale ? " (stale list)" : ""}. This is not a personal preference rule.</p>` : ""}${blocked.provenance ? (blocked.provenance.signed ? `<p>Signed community list (untrusted claim; ${esc(blocked.provenance.claimKind)}): ${esc(blocked.provenance.listName)} sequence ${esc(blocked.provenance.sequence)}, entry ${esc(blocked.provenance.entryId)} revision ${esc(blocked.provenance.entryRevision)}. Review it in Community site lists.</p>` : `<p>Community list provenance (untrusted): ${esc(blocked.provenance.sourceRepo)} @ ${esc(blocked.provenance.commit)}</p>`) : ""}<div class="inline-actions">${action("blocked-back", "Go back", "back")}${action("allow-once", blocked.kind === "security" ? "Proceed anyway…" : "Allow this visit", "globe")}${action("explain-url", "Why?", "search", `data-url="${esc(blocked.url)}"`)}${action("section", "Change rule", "shield", 'data-section="privacy"')}${blocked.provenance?.signed ? action("manage-lists", "Community site lists", "") : ""}</div>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`
       : `<div class="browser-placeholder" ${live ? "hidden" : ""}><img class="only-light" src="../assets/logo/svg/mark-full-color.svg" alt=""><img class="only-dark" src="../assets/logo/dark/mark-dark.svg" alt=""><h1>Where would you like to go?</h1><p>Enter a website or a search in the address bar above.</p>${action("section", "Back to workspace", "back", 'data-section="overview"', "text-button")}</div>`;
+    if (panes.multi()) {
+      // 1–4 panes (#101): live pages are native views over their pane; captures and documents are drawn here.
+      panes.sync(visibleTabs(), tab);
+      const origin = $("content").getBoundingClientRect();
+      setHTML($("content"), `${tab?.loading ? '<div class="loading-line" aria-hidden="true"></div>' : ""}<h1 class="visually-hidden">Panes: ${esc(panes.items.length)} in ${esc(panes.layout)} layout</h1>${panes.render({ box: paneBox(origin), origin, tabs: visibleTabs(), records, previewing, handoff: (id) => (handoffUntil.get(id) || 0) > Date.now() })}`);
+      void panes.hydrate(records, $("content")).catch(() => {});
+      if (panes.collapsed) $("status").textContent = `This window is too small for ${panes.items.length} panes; showing fewer. Enlarge the window to see them all.`;
+      layout();
+      return;
+    }
     setHTML($("content"), `${tab?.loading ? '<div class="loading-line" aria-hidden="true"></div>' : ""}${live ? `<h1 class="visually-hidden">Live page: ${esc(displayTitle(tab))}</h1>${paneFrames(tab)}` : ""}${stop}`);
     layout();
     return;
@@ -546,12 +568,12 @@ function renderContent() {
     html =
       heading(
         "Browsing history",
-        "Recent visits in this workspace. Stored URL metadata omits known sensitive parameters.",
+        "Recent visits. Stored URL metadata omits known sensitive parameters.",
         action("clear-history", "Clear history", "trash"),
-      ) +
+      ) + scopeSelect() +
       `<div class="activity-list">${
         (state.history || [])
-          .filter((r) => r.workspaceId === ws().id)
+          .filter(inScope)
           .slice()
           .reverse()
           .map(
@@ -571,10 +593,10 @@ function renderContent() {
         "Bookmarks",
         "Useful live pages, saved with this project.",
         action("bookmark-page", "Bookmark current page", "bookmark"),
-      ) +
+      ) + scopeSelect() +
       `<h2 class="visually-hidden">Saved bookmarks</h2><div class="record-grid">${
-        records("materials")
-          .filter((r) => r.kind === "website" && r.pinned)
+        (state.materials || [])
+          .filter((r) => inScope(r) && r.kind === "website" && r.pinned)
           .map((r) => recordCard("materials", r))
           .join("") ||
         empty(
@@ -606,6 +628,7 @@ function renderContent() {
   if (section === "approvals") void loadApprovals();
   if (section === "overview") void loadResumePanel().catch(() => {});
   if (section === "settings") void loadDisplayPanel().catch(() => {});
+  if (section === "settings") void loadExternalPanel().catch(() => {});
   if (section === "privacy") loadPrivacyPanels();
   if (section === "lists") void lists.load();
   if (section === "updates") loadUpdates();
@@ -872,7 +895,7 @@ async function loadPrivacyPanels() {
 function settingsView() {
   return (
     heading("Settings", "Make this space work for you.") +
-    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. Content is sent for requests or background features you enable. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; app actions require your approval of an exact proposal.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Learning & memory</h2><p>Optionally learn from saved workspace content. Review, edit or erase workspace and shared memories.</p>${action("manage-learning", "Manage learning & memory", "spark")}</section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
+    `<section class="settings-section"><h2>Appearance</h2><div class="settings-row"><div><strong>Color theme</strong><small>Warm surfaces, in light or dark.</small></div><select id="theme-select" aria-label="Color theme"><option value="system" ${state.settings.theme === "system" ? "selected" : ""}>System</option><option value="light" ${state.settings.theme === "light" ? "selected" : ""}>Light</option><option value="dark" ${state.settings.theme === "dark" ? "selected" : ""}>Dark</option></select></div></section><section class="settings-section"><div class="section-heading"><h2>Model connections</h2>${action("new-model", "Add connection", "plus", "", "text-button")}</div><p>Choose where your messages go. Content is sent for requests or background features you enable. Replies stream when the provider supports it. Images go only to connections you mark or probe as image-capable, or to a vision fallback you choose, after you review each request. Optional read-only tools can read an explicitly selected page or search this workspace; app actions require your approval of an exact proposal.</p>${models.map((m) => `<div class="settings-row"><div><strong>${esc(m.name)}</strong><small>${esc(m.model)} · ${esc(m.endpoint)}</small><small>${esc(m.hasApiKey ? "Key available" : m.locality === "on-device endpoint" ? "Local endpoint · no key configured" : "No key configured")} · ${esc(m.locality)} · ${m.capabilities?.images ? "text + images" : "text only"}${m.capabilities?.visionFallback ? ` · vision fallback: ${esc(m.capabilities.visionFallback.name || "unavailable")}` : ""}${m.pricing ? " · cost estimates on" : ""}</small></div>${action("edit-model", "Configure", "", 'data-id="' + esc(m.id) + '"')}</div>`).join("")}</section><section class="settings-section"><h2>Workspace data</h2><p>Project records are stored in a local database; captures and files are stored as verified local files. Exported projects exclude browser sessions and model credentials. Notes and captures may contain personal information.</p><div class="inline-actions">${action("export-workspace", "Export workspace", "download")}${action("import-workspace", "Import workspace", "upload")}${action("export-package", "Export large project", "download")}${action("import-package", "Import large project", "upload")}${action("workspace-menu", "Manage workspaces", "grid")}</div></section><section class="settings-section"><div class="section-heading"><h2>Semantic search</h2>${action("configure-embeddings", "Configure", "search", "", "text-button")}</div><p>Search always matches words locally. Optionally, Weft can also match meaning using an embedding model that is already available at one of your model connections; nothing is downloaded. Off until you turn it on for this workspace.</p><div id="embedding-status"><p>Loading…</p></div></section><section class="settings-section"><h2>Learning & memory</h2><p>Optionally learn from saved workspace content. Review, edit or erase workspace and shared memories.</p>${action("manage-learning", "Manage learning & memory", "spark")}</section><section class="settings-section"><h2>Backups</h2><p>Weft keeps verified local backups automatically each day and lets you make one at any time. Restoring keeps your current data in the profile recovery folder.${encryption?.enabled ? " Backups of encrypted data stay encrypted." : ""}</p><div class="inline-actions">${action("backup-now", "Back up now", "download")}${action("manage-backups", "Manage backups", "clock")}</div></section>${encryptionSection()}<section class="settings-section"><h2>Browsing</h2><div class="inline-actions">${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("import-browsing", "Import bookmarks and history", "upload")}</div></section><section class="settings-section"><h2>Display & resources</h2><div id="display-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Links from other apps</h2><div id="external-panel"><p>Loading…</p></div></section><section class="settings-section"><h2>Agent connections & automation</h2><p>The authenticated CLI, MCP, and REST API share the browser’s command catalog. Use the command desk to inspect available actions.</p><div class="inline-actions">${action("manage-clients", "Manage agent connections", "lock")}${action("automation-settings", "Agent input…", "settings")}${action("commands", "Open command desk", "terminal")}${action("emergency-stop", "Stop all agent activity", "stop", "", "secondary danger")}${action("section", "Workflows", "workflow", 'data-section="workflows"')}</div><div class="notice">Tasks with steps run only after you start them, as the identity you choose, and every step passes the same approvals. External agents connect through the authenticated API. Keep its token private.</div></section><section class="settings-section"><h2>Saved sign-ins</h2><p>Let an agent sign in without ever seeing a password. You enter each secret in a separate Weft window; agents see only a label, the exact sites and a masked account, and you approve every use.</p><div class="inline-actions">${action("manage-credentials", "Manage saved sign-ins", "lock")}</div></section><section class="settings-section"><h2>Payments</h2><p>Agents can propose a purchase but never complete one on their own: you approve its exact merchant, total, currency and recurrence, card details are filled separately with your approval, and Weft checks the checkout again right before paying. Virtual cards from a card issuer are optional and off until you set them up.${encryption?.enabled ? " Payment records are encrypted with your workspace data and stay unreadable while it is locked." : ""}</p><div class="inline-actions">${action("manage-payments", "Payments in this workspace", "lock")}${action("payment-provider", "Virtual cards")}</div></section><section class="settings-section"><h2>Community site lists</h2><p>Opt-in, signed lists of sites from publishers you choose, with a preview of every change, label/warn/block modes, exceptions and rollback.</p><div class="inline-actions">${action("manage-lists", "Manage community lists", "shield")}</div></section><section class="settings-section"><h2>Plugins & browser extensions</h2><p>Plugins add export formats, page extractors and reports through named hooks. Browser extensions run inside one workspace’s pages. Nothing third-party runs until you review its scope and enable it.</p><div class="inline-actions">${action("manage-plugins", "Manage plugins", "spark")}${action("manage-extensions", "Manage extensions for this workspace", "shield")}</div></section><section class="settings-section"><h2>Updates</h2><p>Weft looks for new stable releases only when you ask, unless you turn on daily checks. Downloads are verified first, and installing always waits for you.</p><div class="inline-actions">${action("section", "Open update center", "download", 'data-section="updates"')}</div></section>`
   );
 }
 const dataClassLabels = { workspace_records: "Workspace records", conversations: "Conversations", page_content: "Page text", page_capture: "Screenshots and PDFs", browsing_history: "History and downloads", activity: "Activity and requests", restricted_original: "Restricted capture originals (each read still needs your approval)" };
@@ -1156,8 +1179,9 @@ async function sha256Hex(text) {
 // Live pages are native views drawn over #content. Weft keeps a thin margin around them (#36):
 // the frame shows who controls the page, carries the handoff transition and, in split view,
 // a divider and an unmistakable frame on the focused pane. Pages can never draw in this margin.
-const PANE_INSET = 3, PANE_GAP = 6, PANE_HEADER = 32;
-const splitTab = () => (splitTabId && splitTabId !== active()?.id ? visibleTabs().find((t) => t.id === splitTabId && !t.blocked && !t.suspended && t.url !== "about:blank") : null);
+const PANE_INSET = 3;
+/** The browse area for panes, in window coordinates. */
+const paneBox = (box) => ({ x: Math.round(box.x), y: Math.round(box.y), width: Math.max(1, Math.floor(box.width)), height: Math.max(1, Math.floor(box.height)) });
 const controlMode = (t) => t?.controlMode || (t?.controller === "human" ? "you-drive" : !t?.controller || t.controller === "available" ? "available" : "agent-drives");
 function ownerBadge(t) {
   const mode = controlMode(t);
@@ -1166,54 +1190,48 @@ function ownerBadge(t) {
   return stateBadge(state, `${esc(label)}${t?.activity ? ` · working: ${esc(t.activity.command)}` : ""}`);
 }
 function paneFrames(tab) {
-  const other = splitTab();
-  const panes = other ? [["primary", tab], ["secondary", other]] : [["primary", tab]];
-  const headers = other
-    ? `<div class="pane-headers" role="group" aria-label="Split view panes">${panes.map(([pane, t]) => `<div class="pane-header ${focusedPane === pane ? "focused" : ""}" data-pane="${pane}"><button type="button" data-action="focus-pane-to" data-pane="${pane}" aria-pressed="${focusedPane === pane}">${pane === "primary" ? "Left" : "Right"} pane</button><span class="pane-title">${esc(displayTitle(t))}</span>${ownerBadge(t)}${focusedPane === pane ? '<span class="pane-focus-label">Focused</span>' : ""}</div>`).join("")}</div>`
-    : "";
-  return `${headers}<div class="pane-frames" aria-hidden="true">${panes.map(([pane, t]) => `<div class="pane-frame ${other && focusedPane === pane ? "focused" : ""} ${controlMode(t) === "agent-drives" ? "agent" : ""} ${(handoffUntil.get(t.id) || 0) > Date.now() ? "handoff" : ""}" data-pane="${pane}" data-tab="${t.id}"></div>`).join("")}</div>`;
+  return `<div class="pane-frames" aria-hidden="true"><div class="pane-frame ${controlMode(tab) === "agent-drives" ? "agent" : ""} ${(handoffUntil.get(tab.id) || 0) > Date.now() ? "handoff" : ""}" data-pane="primary" data-tab="${tab.id}"></div></div>`;
 }
-/** Position the frames and pane headers to match the rectangles the native views receive. */
-function placeFrames(page, content, split) {
-  const half = split ? Math.floor((page.width - PANE_GAP) / 2) : page.width;
-  const rects = { primary: { x: page.x, width: half }, secondary: { x: page.x + half + PANE_GAP, width: page.width - half - PANE_GAP } };
+/** Position the single-page frame to match the rectangle the native view receives. */
+function placeFrames(page, content) {
   for (const frame of document.querySelectorAll(".pane-frame")) {
-    const r = rects[frame.dataset.pane];
-    Object.assign(frame.style, { left: `${r.x - content.x - PANE_INSET}px`, top: `${page.y - content.y - PANE_INSET}px`, width: `${r.width + 2 * PANE_INSET}px`, height: `${page.height + 2 * PANE_INSET}px` });
-  }
-  for (const header of document.querySelectorAll(".pane-header")) {
-    const r = rects[header.dataset.pane];
-    Object.assign(header.style, { left: `${r.x - content.x}px`, width: `${r.width}px` });
+    Object.assign(frame.style, { left: `${page.x - content.x - PANE_INSET}px`, top: `${page.y - content.y - PANE_INSET}px`, width: `${page.width + 2 * PANE_INSET}px`, height: `${page.height + 2 * PANE_INSET}px` });
   }
 }
 function layout() {
   if (!window.weft.layout) return;
-  const area = previewing && section === "browse" ? $("preview-area") : null;
+  const multi = section === "browse" && panes.multi();
+  const area = previewing && section === "browse" && !multi ? $("preview-area") : null;
   const box = (area || $("content")).getBoundingClientRect();
+  if (multi) {
+    // Pane rectangles come from the same geometry the panes were drawn with.
+    const nativePanes = $("dialog").open ? [] : panes.nativePanes(paneBox(box), visibleTabs(), previewing);
+    const focusedTab = panes.focusedItem()?.type === "tab" ? panes.focusedItem().id : null;
+    $("focus-page").hidden = !nativePanes.length;
+    return window.weft.layout({ ...paneBox(box), visible: nativePanes.length > 0, panes: nativePanes, ...(focusedTab && nativePanes.some((p) => p.tabId === focusedTab) ? { focusedTabId: focusedTab } : {}) }).catch(() => {});
+  }
   const show =
     section === "browse" &&
     !$("dialog").open &&
     (Boolean(area) || (!!active() &&
     active().url !== "about:blank" &&
     !active().blocked));
-  const split = !area && show && Boolean(splitTab());
   const inset = area ? 0 : PANE_INSET;
-  const top = split ? PANE_HEADER : 0;
-  const page = { x: Math.round(box.x) + inset, y: Math.round(box.y) + top + inset, width: Math.max(1, Math.floor(box.width) - 2 * inset), height: Math.max(1, Math.floor(box.height) - top - 2 * inset) };
-  if (!area) placeFrames(page, $("content").getBoundingClientRect(), split);
+  const page = { x: Math.round(box.x) + inset, y: Math.round(box.y) + inset, width: Math.max(1, Math.floor(box.width) - 2 * inset), height: Math.max(1, Math.floor(box.height) - 2 * inset) };
+  if (!area) placeFrames(page, $("content").getBoundingClientRect());
   $("focus-page").hidden = !show;
-  return window.weft
-    .layout({
-      ...page,
-      visible: show,
-      ...(splitTabId ? { splitTabId, focusedPane } : {}),
-    })
-    .catch(() => {});
+  return window.weft.layout({ ...page, visible: show }).catch(() => {});
 }
 /** Keyboard path into the page (#31): F6 or the "Move focus into the page" control. */
 async function focusPage() {
+  const item = panes.multi() ? panes.focusedItem() : null;
+  // A focused capture or document pane takes keyboard focus in the Weft window itself.
+  if (item && item.type !== "tab" && item.type !== "preview") {
+    const region = document.querySelector(`.pane-doc[data-pane-index="${panes.focused}"]`);
+    if (region) { region.focus(); return announce(`Focus is in the ${panes.label(panes.focused)}.`); }
+  }
   const result = await window.weft.focusPage?.().catch(() => null);
-  if (result?.focused) announce(`Focus is in the ${splitTab() ? (focusedPane === "secondary" ? "right" : "left") + " pane" : "page"}. Press F6 to return to Weft.`);
+  if (result?.focused) announce(`Focus is in the ${panes.multi() ? panes.label(panes.focused) : "page"}. Press F6 to return to Weft.`);
   else announce("No page is shown. Open a website first.");
 }
 /** Plays the view entrance (gui.css `.view-enter`) once; re-renders after it has finished stay still. */
@@ -1340,7 +1358,7 @@ function formDialog(
 function workspaceForm(record) {
   formDialog(
     record ? "Edit workspace" : "Create a workspace",
-    field("Workspace name", "name", record?.name || "", "text", true) +
+    (isEverything(record) ? `<p><strong>Everything</strong> is built in: it holds pages that are not part of a project and links from other apps. It cannot be renamed, archived or deleted.</p><input type="hidden" name="name" value="${esc(record.name)}">` : field("Workspace name", "name", record?.name || "", "text", true)) +
       area(
         "What are you working on?",
         "description",
@@ -1830,16 +1848,21 @@ function editRecord(kind, id, prefill = null) {
             `data-kind="${kind}" data-id="${esc(r.id)}"`,
             "secondary danger",
           ) + (["context", "materials"].includes(kind) ? knowledge.shareButton(kind, r.id) : "")
+          + (["materials", "tasks"].includes(kind) ? action("open-in-pane", "Open in new pane", "split", `data-kind="${kind === "materials" ? "material" : "task"}" data-id="${esc(r.id)}"`) : "")
+          + (kind === "materials" ? action("move-record", "Move to workspace…", "", `data-kind="materials" data-id="${esc(r.id)}"`) : "")
         : kind === "materials" ? knowledge.materialDialogExtras() : "",
     },
   );
 }
 async function confirmDelete(kind, id) {
+  // Deleting a workspace lists its open pages and can reopen them in Everything (#99).
+  const open = kind === "workspaces" ? tabs.filter((t) => t.workspaceId === id && t.url !== "about:blank" && !t.blocked) : [];
   formDialog(
     "Delete this item?",
-    `<p>This permanently removes the selected ${kind === "workspaces" ? "workspace and its saved project contents" : "item"}. This cannot be undone.</p>`,
-    async () => {
-      await execute(`${kind}.delete`, { id });
+    `<p>This permanently removes the selected ${kind === "workspaces" ? "workspace and its saved project contents" : "item"}. This cannot be undone.</p>`
+      + (open.length ? `<p>${open.length} open page${open.length === 1 ? "" : "s"} in this workspace:</p><ul>${open.map((t) => `<li>${esc(displayTitle(t))} <small>${esc(host(t.url))}</small></li>`).join("")}</ul><label class="inline-check"><input type="checkbox" name="move-tabs" checked> Reopen these pages in Everything (sign-ins and page state are not moved)</label>` : ""),
+    async (values) => {
+      await execute(`${kind}.delete`, { id, ...(kind === "workspaces" && open.length ? { moveTabsToEverything: Object.hasOwn(values, "move-tabs") } : {}) });
     },
     { save: "Delete permanently" },
   );
@@ -1850,7 +1873,7 @@ async function workspaceMenu() {
     state.workspaces
       .map(
         (w) =>
-          `<div class="settings-row"><div><strong>${esc(w.name)}</strong><small>${w.archived ? "Archived" : w.workspaceType === "project" ? "Project" : "General · ongoing"}${w.dueDate ? " · due " + esc(w.dueDate) : ""} · ${date(w.updatedAt)}</small></div><div class="inline-actions">${action(w.archived ? "restore-workspace" : "switch-workspace", w.archived ? "Restore" : "Open", "", 'data-id="' + esc(w.id) + '"')}${action("edit-workspace", "Edit", "", 'data-id="' + esc(w.id) + '"')}${action("archive-workspace", w.archived ? "Delete" : "Archive", "", 'data-id="' + esc(w.id) + '"')}</div></div>`,
+          `<div class="settings-row"><div><strong>${esc(w.name)}</strong><small>${w.archived ? "Archived" : w.workspaceType === "project" ? "Project" : "General · ongoing"}${w.dueDate ? " · due " + esc(w.dueDate) : ""} · ${date(w.updatedAt)}</small></div><div class="inline-actions">${action(w.archived ? "restore-workspace" : "switch-workspace", w.archived ? "Restore" : "Open", "", 'data-id="' + esc(w.id) + '"')}${action("edit-workspace", "Edit", "", 'data-id="' + esc(w.id) + '"')}${isEverything(w) ? "" : action("archive-workspace", w.archived ? "Delete" : "Archive", "", 'data-id="' + esc(w.id) + '"')}${isEverything(w) || w.archived ? "" : (windowInfo.assignments?.[w.id] ? action("return-window", "Return to main window", "", 'data-id="' + esc(w.id) + '"') : action("move-window", "Move to new window", "external", 'data-id="' + esc(w.id) + '"'))}</div></div>`,
       )
       .join("") +
       `<div class="notice">Duplicating copies project records and saved references. Browser login sessions and model credentials are excluded. Copied rules and workflows stay inactive until reviewed.</div><div class="inline-actions">${action("duplicate-workspace", "Duplicate current", "tabs")}${action("export-workspace", "Export current", "download")}</div>`,
@@ -2014,6 +2037,8 @@ async function viewArtifact(id, versionId) {
       + (!version.purged ? action("redact-version", "Review & redact", "shield", vattr) : "")
       + (version.access === "restricted" ? action("allow-version", "Allow agent access", "", vattr) : action("restrict-version", "Restrict original", "lock", vattr))
       + action("verify-artifact", "Verify", "", vattr)
+      + action("open-in-pane", "Open in new pane", "split", `data-kind="artifact" data-id="${esc(id)}" data-version="${esc(version.id || "")}"`)
+      + action("move-record", "Move to workspace…", "", `data-kind="artifacts" data-id="${esc(id)}"`)
       + (!version.purged ? action("purge-version", "Purge content", "trash", vattr, "secondary danger") : "")
       + action("delete-record", "Delete all versions", "trash", `data-kind="artifacts" data-id="${esc(id)}"`, "secondary danger")
       + knowledge.shareButton("artifacts", id)
@@ -2027,6 +2052,8 @@ async function viewArtifact(id, versionId) {
 async function openPreview(id, versionId) {
   const result = await execute("artifacts.preview", { id, versionId }, true);
   previewing = result;
+  // With several panes, the offline preview takes a pane instead of the whole browse area (#101).
+  if (panes.multi()) { panes.open({ type: "preview" }, visibleTabs(), active()); savePanes(); }
   closeDialog();
   navigateSection("browse");
   toast(result.unavailable?.length ? `${result.unavailable.length} archived resources failed verification and are not shown.` : "Showing the archived page offline.");
@@ -2034,6 +2061,7 @@ async function openPreview(id, versionId) {
 async function closePreview(quiet = false) {
   if (!previewing) return;
   previewing = null;
+  if (panes.items.some((item) => item?.type === "preview")) { panes.remove("preview"); savePanes(); }
 let dialogGeneration = 0;
   try { await weftExecute("artifacts.closePreview", {}); } catch { /* already closed */ }
   if (!quiet) { renderContent(); layout(); }
@@ -2842,7 +2870,9 @@ function saveResume(partial) {
     void weftExecute("resume.save", { workspaceId, ...body }).catch(() => {});
   }, 250);
 }
-const focusLabel = () => (splitTabId ? ` · Focused pane: ${focusedPane === "secondary" ? "right" : "left"}` : "");
+const focusLabel = () => (panes.multi() ? ` · Focused pane: ${panes.label(panes.focused).replace(/ pane$/, "").toLowerCase()}` : "");
+/** Save the pane layout with the workspace's resume record (#101). */
+const savePanes = () => saveResume({ panes: panes.state() });
 let restoreNotices = [];
 let navigationSerial = 0;
 async function applyResume(announce = false) {
@@ -2851,8 +2881,7 @@ async function applyResume(announce = false) {
   const serial = announce ? 0 : navigationSerial;
   const resume = await execute("resume.get", { workspaceId: ws().id }, true);
   if (serial !== navigationSerial) return;
-  splitTabId = resume.view.split.tabId;
-  focusedPane = resume.view.split.focusedPane || "primary";
+  panes.load(resume.view.panes);
   if (resume.view.panels.conversationId) conversationId = resume.view.panels.conversationId;
   if (resume.view.panels.agentPanelOpen === true && !agentOpen) openAgent();
   if (resume.view.panels.agentPanelOpen === false && agentOpen) closeAgent();
@@ -2989,7 +3018,7 @@ function openCommands() {
 function palette() {
   openDialog(
     "Find anything",
-    '<input id="palette-query" class="palette-input" aria-label="Search workspaces and commands" placeholder="Search your project or choose an action…"><div id="palette-results" class="palette-results"></div>',
+    '<input id="palette-query" class="palette-input" aria-label="Search workspaces and commands" placeholder="Search your project or choose an action…">' + scopeSelect("palette-scope") + '<div id="palette-results" class="palette-results"></div>',
     "",
     true,
   );
@@ -3017,12 +3046,13 @@ function palette() {
       )
       .join("");
     if (q) {
-      const results = await execute(
-        "search.query",
-        { query: q, workspaceId: ws().id, limit: 20 },
-        true,
-      );
-      const rows = Array.isArray(results) ? results : results.results || [];
+      // Scope (#99): this workspace (default), Everything, or every workspace, searched one at a time.
+      const targets = recordScope === "all" ? state.workspaces.filter((w) => !w.archived).map((w) => w.id) : [recordScope === "everything" ? EVERYTHING_ID : ws().id];
+      const rows = [];
+      for (const workspaceId of targets) {
+        const results = await execute("search.query", { query: q, workspaceId, limit: 20 }, true);
+        rows.push(...(Array.isArray(results) ? results : results.results || []));
+      }
       html += rows
         .map(
           (r) =>
@@ -3045,6 +3075,7 @@ function palette() {
     const index = items.indexOf(document.activeElement);
     if (["ArrowDown", "ArrowUp"].includes(e.key) && index >= 0) { e.preventDefault(); (items[index + (e.key === "ArrowDown" ? 1 : -1)] || $("palette-query")).focus(); }
   };
+  $("palette-scope").onchange = (e) => { recordScope = e.target.value; void $("palette-query").oninput(); };
   $("palette-query").oninput();
 }
 async function openUrl(value) {
@@ -3343,14 +3374,28 @@ async function act(button) {
     case "edit-workspace":
       workspaceForm(state.workspaces.find((w) => w.id === id));
       break;
-    case "switch-workspace":
-      await execute("workspaces.switch", { id });
+    case "switch-workspace": {
+      // A workspace shown in another window is brought forward there (#100); a second window switches among its own.
+      const owner = windowInfo.assignments?.[id] ?? 1;
+      if (owner !== windowInfo.windowId) { await window.weft.windows({ action: "show", workspaceId: id }); break; }
+      if (!windowInfo.main) { await window.weft.windows({ action: "showHere", workspaceId: id }); await refreshWindow(); }
+      else await execute("workspaces.switch", { id });
       conversationId = null;
-      splitTabId = null;
+      panes.load(null);
       if ($("dialog").open) closeDialog();
       navigateSection("overview", false);
       await applyResume().catch(() => {});
       if (agentOpen) renderAgent();
+      break;
+    }
+    case "move-window":
+      await window.weft.windows({ action: "move", workspaceId: id });
+      closeDialog();
+      toast("Opened in its own window. Close that window to bring the workspace back here.");
+      break;
+    case "return-window":
+      await window.weft.windows({ action: "move", workspaceId: id, windowId: 1 });
+      closeDialog();
       break;
     case "archive-workspace":
       if (state.workspaces.find((w) => w.id === id)?.archived)
@@ -3433,8 +3478,10 @@ async function act(button) {
     case "open-tab-result": {
       const target = Number(id);
       if (button.dataset.ws && button.dataset.ws !== ws().id) {
-        await execute("workspaces.switch", { id: button.dataset.ws });
-        splitTabId = null;
+        if ((windowInfo.assignments?.[button.dataset.ws] ?? 1) !== windowInfo.windowId) { await window.weft.windows({ action: "show", workspaceId: button.dataset.ws }); break; }
+        if (windowInfo.main) await execute("workspaces.switch", { id: button.dataset.ws });
+        else await window.weft.windows({ action: "showHere", workspaceId: button.dataset.ws });
+        panes.load(null);
       }
       await execute("tabs.activate", { tabId: target });
       saveResume({ activeTabId: target });
@@ -3476,12 +3523,43 @@ async function act(button) {
       restoreNotices = [];
       renderSafetyNotices(null);
       break;
-    case "focus-pane-to":
-      focusedPane = button.dataset.pane === "secondary" ? "secondary" : "primary";
-      saveResume({ split: { tabId: splitTabId, focusedPane } });
+    case "focus-pane-to": {
+      const item = panes.focus(Math.max(0, PANE_NAMES.indexOf(button.dataset.pane)));
+      // The focused tab pane is the active tab: address bar, find, zoom and print act on it.
+      if (item?.type === "tab" && item.id !== active()?.id) await execute("tabs.activate", { tabId: item.id }, true);
+      savePanes();
+      await refresh(true);
       renderShell();
       renderContent();
       await focusPage();
+      break;
+    }
+    case "close-pane":
+      panes.close(Number(button.dataset.index));
+      if (!panes.items.some((item) => item?.type === "preview") && previewing) await closePreview(true);
+      savePanes();
+      renderShell();
+      renderContent();
+      announce(`${panes.items.length} pane${panes.items.length === 1 ? "" : "s"} shown.`);
+      break;
+    case "pane-layout":
+      paneLayoutDialog();
+      break;
+    case "pane-choose":
+      paneChooser(Number(button.dataset.index), kind);
+      break;
+    case "open-in-pane": {
+      const item = { type: kind, id: kind === "tab" ? Number(id) : id, ...(button.dataset.version ? { versionId: button.dataset.version } : {}) };
+      if (Number.isInteger(Number(button.dataset.index))) { panes.focus(Number(button.dataset.index)); panes.open(item, visibleTabs(), active()); }
+      else panes.open(item, visibleTabs(), active());
+      if (item.type === "tab") await execute("tabs.activate", { tabId: item.id }, true);
+      savePanes();
+      closeDialog();
+      navigateSection("browse");
+      break;
+    }
+    case "move-record":
+      moveRecordDialog(kind, id);
       break;
     case "manage-lists":
       if ($("dialog").open) closeDialog();
@@ -3490,15 +3568,19 @@ async function act(button) {
     case "automation-settings":
       automationSettings();
       break;
-    case "focus-pane":
-      focusedPane = focusedPane === "primary" ? "secondary" : "primary";
-      saveResume({ split: { tabId: splitTabId, focusedPane } });
+    case "focus-pane": {
+      const next = (panes.focused + 1) % Math.max(1, panes.items.length);
+      const item = panes.focus(next);
+      if (item?.type === "tab") await execute("tabs.activate", { tabId: item.id }, true);
+      savePanes();
       closeDialog();
+      await refresh(true);
       renderShell();
       renderContent();
       layout();
-      toast(`Focused pane: ${focusedPane === "secondary" ? "right" : "left"}.`);
+      toast(`Focused pane: ${panes.label(next)}.`);
       break;
+    }
     case "display-hide":
       openDialog("Run Weft in the background?",
         "<p>The window hides and Weft keeps running with this profile, its policies and the agent API. Open pages reload so they can render without a window: unsent form input and in-page state in them are lost.</p><p>Show the window again with <code>weft attach</code> or by launching Weft. Agent requests that need your decision wait until then.</p>",
@@ -4105,18 +4187,21 @@ $("toggle-sidebar").onclick = () => {
   layout();
 };
 $("split-view").onclick = () => {
-  // Only a second live page can share the view: blank, blocked and suspended tabs are skipped.
-  const other = visibleTabs().find((t) => t.id !== active()?.id && t.url !== "about:blank" && !t.blocked && !t.suspended);
-  if (!splitTabId && !other) return toast("Open a second web page to use split view.");
-  splitTabId = splitTabId ? null : other.id;
-  focusedPane = "primary";
-  saveResume({ split: { tabId: splitTabId, focusedPane } });
+  // One click toggles one and two panes; Page tools > Pane layout offers up to four (#101).
+  if (panes.multi()) panes.setLayout("1", visibleTabs(), active());
+  else {
+    const other = visibleTabs().find((t) => t.id !== active()?.id && t.url !== "about:blank" && !t.blocked && !t.suspended);
+    if (!other) return toast("Open a second web page to use split view, or choose Page tools > Pane layout to show captures and documents.");
+    panes.setLayout("2-columns", visibleTabs(), active());
+    panes.focus(0);
+  }
+  savePanes();
   navigateSection("browse");
 };
 $("page-more").onclick = () =>
   openDialog(
     "Page tools",
-    `<div class="inline-actions">${action("capture-selection", "Send selected text to Weft", "chat")}${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${splitTabId ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
+    `<div class="inline-actions">${action("pane-layout", "Pane layout…", "split")}${action("capture-selection", "Send selected text to Weft", "chat")}${action("find-page", "Find in page", "search")}${action("bookmark-page", "Bookmark page", "bookmark")}${action("section", "History", "clock", 'data-section="history"')}${action("section", "Bookmarks", "bookmark", 'data-section="bookmarks"')}${action("duplicate-tab", "Duplicate tab", "tabs")}${action("move-tab", "Move to workspace", "folder")}${action("save-pdf", "Print to PDF", "download")}${action("show-tabs", "Manage tabs", "tabs")}${action("search-tabs", "Search tabs", "search")}${panes.multi() ? action("focus-pane", "Switch focused pane", "split") : ""}${active() ? action("takeover", "Take control", "lock", 'data-id="' + active().id + '"') : ""}</div><div class="settings-row"><strong>Page zoom</strong><div class="inline-actions">${[0.75, 1, 1.25, 1.5].map((f) => action("zoom-page", Math.round(f * 100) + "%", "", `data-factor="${f}"`)).join("")}</div></div>`,
   );
 for (const name of ["back", "forward", "reload", "stop"])
   $(name).onclick = () => void execute(`page.${name}`).catch(() => {});
@@ -4137,7 +4222,10 @@ function chromeRegions() {
   const pageShown = !$("focus-page").hidden;
   return [
     { name: "address", focus: () => { $("address").focus(); $("address").select(); }, owns: (el) => el?.closest?.("#navigation") },
-    ...(pageShown ? [{ name: "page", focus: () => void focusPage(), owns: () => false }] : []),
+    ...(pageShown && !panes.multi() ? [{ name: "page", focus: () => void focusPage(), owns: () => false }] : []),
+    // Every pane is a region of its own (#101); a document pane is focusable in the Weft window.
+    ...(section === "browse" && panes.multi() ? panes.items.map((item, index) => ({ name: index === panes.focused ? "page" : `pane-${index}`, focus: () => void act({ dataset: { action: "focus-pane-to", pane: PANE_NAMES[index] } }),
+      owns: (el) => Number(el?.closest?.(".pane-doc")?.dataset.paneIndex) === index })) : []),
     ...(agentOpen ? [{ name: "agent", focus: () => $("chat-input")?.focus(), owns: (el) => el?.closest?.("#agent-panel") }] : []),
     { name: "sidebar", focus: () => (document.querySelector("#tabs .tab.active button, #sections .section-link.active, #sections .section-link") || $("search-button")).focus(), owns: (el) => el?.closest?.(".workspace-sidebar, .workspace-rail") },
     { name: "content", focus: () => focusView($("content")), owns: (el) => el?.closest?.("#content, .topbar, #safety-notices") },
@@ -4186,9 +4274,154 @@ document.addEventListener("keydown", (e) => {
     if (key === "j") navigateSection("downloads");
   }
 });
-new ResizeObserver(layout).observe($("content"));
+
+// ---- History, bookmarks and search scope (#99) -------------------------------------
+let recordScope = "current";
+const inScope = (r) => (recordScope === "all" ? true : r.workspaceId === (recordScope === "everything" ? EVERYTHING_ID : ws().id));
+function scopeSelect(id = "record-scope") {
+  const options = [["current", isEverything(ws()) ? "Everything (this workspace)" : "This workspace"], ...(isEverything(ws()) ? [] : [["everything", "Everything"]]), ["all", "All workspaces"]];
+  return `<label class="scope-select">Show from <select id="${id}" aria-label="Scope">${options.map(([value, text]) => `<option value="${value}" ${recordScope === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></label>`;
+}
+
+// ---- Panes (#101) -----------------------------------------------------------------
+function paneLayoutDialog() {
+  const layouts = [["1", "One pane"], ["2-columns", "Two side by side"], ["2-rows", "Two stacked"], ["3-main", "One large and two stacked"], ["3-columns", "Three columns"], ["4-grid", "Four in a grid"]];
+  formDialog("Pane layout",
+    `<p>Show up to four tabs, captures, materials or tasks at once. Agents act on tabs by id as before; panes are only what you see.</p>${choice("Layout", "layout", layouts, panes.layout)}`,
+    async (values) => {
+      await refresh(true);
+      panes.setLayout(values.layout, visibleTabs(), active());
+      savePanes();
+      navigateSection("browse");
+    }, { save: "Apply layout" });
+}
+function paneChooser(index, kind) {
+  const list = kind === "tab" ? visibleTabs().filter((t) => !panes.items.some((item) => item?.type === "tab" && item.id === t.id)).map((t) => [String(t.id), displayTitle(t)])
+    : records(kind === "artifact" ? "artifacts" : kind === "material" ? "materials" : "tasks").map((r) => [r.id, r.title]);
+  if (!list.length) return toast(kind === "tab" ? "Every open tab is already shown." : "Nothing to show yet in this workspace.");
+  formDialog(`Show in ${panes.label(index)}`, choice(kind === "tab" ? "Tab" : kind === "artifact" ? "Capture" : kind === "material" ? "Material" : "Task", "choice", list, list[0][0]),
+    async (values) => {
+      panes.focus(index);
+      panes.open({ type: kind, id: kind === "tab" ? Number(values.choice) : values.choice }, visibleTabs(), active());
+      if (kind === "tab") await execute("tabs.activate", { tabId: Number(values.choice) }, true);
+      savePanes();
+      navigateSection("browse");
+    }, { save: "Show" });
+}
+// Dividers: drag with a pointer, or focus one and use the arrow keys (Shift for bigger steps, Home resets, double-click resets).
+document.addEventListener("keydown", (e) => {
+  if (!e.target?.classList?.contains("pane-divider")) return;
+  if (panes.dividerKey(e)) { e.preventDefault(); e.stopPropagation(); savePanes(); renderContent(); document.querySelector(`.pane-divider[data-divider="${e.target.dataset.divider}"]`)?.focus(); }
+}, true);
+document.addEventListener("pointerdown", (e) => {
+  const divider = e.target?.closest?.(".pane-divider");
+  if (!divider) return;
+  e.preventDefault();
+  const index = Number(divider.dataset.divider);
+  const box = paneBox($("content").getBoundingClientRect());
+  const move = (event) => { panes.dragTo(index, box, { x: event.clientX, y: event.clientY }); renderContent(); };
+  const up = () => { document.removeEventListener("pointermove", move); document.removeEventListener("pointerup", up); savePanes(); };
+  document.addEventListener("pointermove", move);
+  document.addEventListener("pointerup", up);
+});
+document.addEventListener("dblclick", (e) => {
+  if (!e.target?.closest?.(".pane-divider")) return;
+  panes.resetSizes(); savePanes(); renderContent();
+});
+
+// ---- Moving records between workspaces (#99) ------------------------------------------
+function moveRecordDialog(collection, id) {
+  const record = (state[collection] || []).find((r) => r.id === id);
+  const targets = state.workspaces.filter((w) => !w.archived && w.id !== record?.workspaceId).map((w) => [w.id, w.name]);
+  if (!record || !targets.length) return toast("There is no other workspace to move this to.");
+  formDialog("Move to workspace", `<p>${esc(record.title)} moves with its revisions${collection === "artifacts" ? " and capture versions" : ""}. Agents keep the access their grants give them in each workspace.</p>${choice("Destination", "workspaceId", targets, targets[0][0])}`,
+    async (values) => {
+      await execute("workspaces.moveRecord", { collection, id, workspaceId: values.workspaceId, expectedRevision: record.revision });
+      toast(`Moved to ${state.workspaces.find((w) => w.id === values.workspaceId)?.name || "the workspace"}.`);
+    }, { save: "Move" });
+}
+
+// ---- Windows (#100) ---------------------------------------------------------------
+async function refreshWindow() {
+  const next = await window.weft.window?.().catch(() => null);
+  if (next) windowInfo = next;
+}
+window.weft.onWindows?.(() => void refreshWindow().then(() => refresh(true)).catch(() => {}));
+// Drag a workspace out of the rail to open it in its own window, or onto another window's rail to move it there.
+const WORKSPACE_DRAG = "application/x-weft-workspace";
+document.addEventListener("dragstart", (e) => {
+  const button = e.target?.closest?.(".workspace-dot[draggable='true']");
+  if (!button) return;
+  e.dataTransfer.setData(WORKSPACE_DRAG, button.dataset.id);
+  e.dataTransfer.effectAllowed = "move";
+});
+document.addEventListener("dragend", (e) => {
+  const button = e.target?.closest?.(".workspace-dot[draggable='true']");
+  if (!button || e.dataTransfer.dropEffect !== "none") return;
+  const outside = e.screenX < window.screenX || e.screenX > window.screenX + window.outerWidth || e.screenY < window.screenY || e.screenY > window.screenY + window.outerHeight;
+  if (outside) void window.weft.windows({ action: "move", workspaceId: button.dataset.id, x: e.screenX, y: e.screenY }).catch((error) => toast(errorMessage(error)));
+});
+$("workspace-buttons").addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes(WORKSPACE_DRAG)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } });
+$("workspace-buttons").addEventListener("drop", (e) => {
+  const id = e.dataTransfer.getData(WORKSPACE_DRAG);
+  if (!id) return;
+  e.preventDefault();
+  if ((windowInfo.assignments?.[id] ?? 1) !== windowInfo.windowId) void window.weft.windows({ action: "move", workspaceId: id, windowId: windowInfo.windowId }).catch((error) => toast(errorMessage(error)));
+});
+
+// ---- Links from other apps (#99) ------------------------------------------------------
+const destinationLabels = [["everything", "Open in Everything"], ["ask", "Ask which workspace each time"], ["last-used", "Open in the workspace the main window shows"]];
+async function loadExternalPanel() {
+  const panel = $("external-panel");
+  if (!panel) return;
+  const status = await window.weft.defaultBrowser?.("status").catch(() => null);
+  if (!$("external-panel")) return;
+  const current = state.settings.externalLinks?.destination || "everything";
+  const registered = status?.http && status?.https;
+  setHTML(panel, `<div class="settings-row"><div><strong>Where links and files from other apps open</strong><small>A link from another app is treated as data: it never starts an agent action or gives an agent access, and it is checked by your site rules like a typed address. Files (.html, .htm, .pdf) are copied in as materials.</small></div><select id="external-destination" aria-label="Where links from other apps open">${destinationLabels.map(([value, text]) => `<option value="${value}" ${current === value ? "selected" : ""}>${esc(text)}</option>`).join("")}</select></div>`
+    + `<div class="settings-row"><div><strong>Default browser</strong><small>${status?.supported ? (registered ? "Weft is registered for web links." : "Weft is not your default browser.") : esc(status?.reason || "Unavailable in this build.")}${status?.notice ? " " + esc(status.notice) : ""}</small></div>${status?.supported ? (registered ? (status.canRemove ? action("default-browser", "Stop using Weft for web links", "", 'data-kind="unset"') : "") : action("default-browser", "Use Weft for web links", "", 'data-kind="set"')) : ""}</div>`);
+}
+document.addEventListener("change", (event) => {
+  if (event.target.id === "external-destination")
+    void execute("settings.update", { externalLinks: { destination: event.target.value } }, true).then(() => toast("Saved.")).catch((e) => toast(errorMessage(e)));
+  if (["record-scope"].includes(event.target.id)) { recordScope = event.target.value; renderContent(); }
+});
+document.addEventListener("click", (event) => {
+  const button = event.target.closest?.('button[data-action="default-browser"]');
+  if (!button) return;
+  void window.weft.defaultBrowser(button.dataset.kind).then(() => loadExternalPanel()).catch((e) => toast(errorMessage(e)));
+});
+function chooseExternal(item) {
+  const options = state.workspaces.filter((w) => !w.archived).map((w) => [w.id, w.name]);
+  openDialog("Open a link from another app",
+    `<p>Another app asked Weft to open ${item.kind === "url" ? "this address" : "this file"}. It opens as a page or material only; no agent acts on it.</p><p class="external-label"><code>${esc(item.label)}</code></p>${choice("Workspace", "external-workspace", options, ws().id)}`,
+    `<button type="button" class="secondary" data-action="external-dismiss" data-id="${esc(item.id)}">Don't open</button><button type="button" class="primary" data-action="external-open" data-id="${esc(item.id)}">Open</button>`);
+}
+document.addEventListener("click", (event) => {
+  const button = event.target.closest?.('button[data-action="external-open"], button[data-action="external-dismiss"]');
+  if (!button) return;
+  const workspaceId = button.dataset.action === "external-open" ? document.querySelector('[name="external-workspace"]')?.value ?? null : null;
+  closeDialog();
+  void window.weft.external({ action: "choose", id: button.dataset.id, workspaceId }).catch((e) => toast(errorMessage(e)));
+});
+window.weft.onExternal?.((event) => {
+  if (event?.type === "choose" && !lockScreenOpen) return chooseExternal(event.item);
+  if (event?.type === "refused") return toast(`Not opened: ${event.items.map((item) => item.reason).join("; ")}`);
+  if (event?.type === "failed") return toast(`Could not open the link: ${event.reason}`);
+  if (event?.type === "opened") {
+    const name = state.workspaces.find((w) => w.id === event.workspaceId)?.name || "Everything";
+    void refreshWindow().then(() => refresh(true)).then(() => {
+      if (event.workspaceId !== ws().id) return;
+      navigateSection(event.kind === "url" ? "browse" : "materials");
+      toast(event.kind === "url" ? `Opened a link from another app in ${name}.` : `Added a file from another app to ${name}'s materials.`);
+    }).catch(() => {});
+  }
+});
+// A resized window re-draws panes, which may collapse a layout that no longer fits (#101).
+new ResizeObserver(() => { if (section === "browse" && panes.multi()) renderContent(); else layout(); }).observe($("content"));
 window.addEventListener("resize", layout);
 try {
+  await refreshWindow();
   catalog = await window.weft.commands();
   for (const name of Object.keys(catalog)) {
     const option = document.createElement("option");
@@ -4210,6 +4443,8 @@ try {
   // Reopen this workspace where it was left (#24) and disclose what a restore cannot bring back.
   await applyResume(true).catch(() => {});
   setInterval(() => void refresh().catch(() => {}), 1500);
+  // Links that arrived before this window was ready and are waiting for a choice.
+  for (const item of (await window.weft.external?.({ action: "list" }).catch(() => [])) || []) chooseExternal(item);
   $("status").textContent = "Ready";
 } catch (error) {
   $("status").textContent = `Startup error: ${errorMessage(error)}`;

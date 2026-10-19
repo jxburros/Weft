@@ -162,6 +162,8 @@ export class WindowManager {
   watch(id, window) {
     window.on('move', () => this.scheduleSave());
     window.on('resize', () => this.scheduleSave());
+    // Page views are detached before the window is destroyed, so closing a window never closes its tabs.
+    window.on('close', () => { if (this.browser.windows.has(id)) this.browser.removeWindow(id); });
     window.on('closed', () => {
       this.windows.delete(id);
       // Closing a window returns its workspaces to the main window; quitting or locking keeps the arrangement for next time.

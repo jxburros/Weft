@@ -2251,3 +2251,84 @@ dialog.trusted .trusted-band {
 :root[data-accent="rose"] { --brand:var(--accent-rose); }
 :root[data-density="compact"] .settings-row { padding-block:8px; }
 :root[data-density="compact"] .record-card { padding:12px; }
+
+/* Everything workspace (#99) and workspaces shown in another window (#100). */
+.workspace-dot.everything {
+  border-style: dashed;
+  border-width: 2px;
+}
+.workspace-dot.everything svg {
+  width: 20px;
+  height: 20px;
+}
+.workspace-dot.elsewhere {
+  opacity: 0.72;
+}
+.workspace-dot .window-mark {
+  position: absolute;
+  right: -2px;
+  bottom: -4px;
+  font-size: var(--font-size-11);
+  line-height: 1;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  padding: 1px 2px;
+}
+.scope-select {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0 0 var(--space-12);
+  font-size: var(--font-size-13);
+}
+
+/* 1–4 pane layouts (#101): headers, document panes and resizable dividers. */
+.pane-header .pane-close {
+  margin-left: auto;
+  padding: 0 var(--space-4);
+}
+.pane-header .pane-close svg {
+  width: 14px;
+  height: 14px;
+}
+.pane-doc {
+  position: absolute;
+  overflow: auto;
+  padding: var(--space-12);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-sizing: border-box;
+}
+.pane-doc:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: -3px;
+}
+.pane-doc .artifact-image {
+  max-width: 100%;
+}
+.pane-doc-meta {
+  color: var(--muted);
+  font-size: var(--font-size-12);
+}
+.pane-divider {
+  position: absolute;
+  z-index: 2;
+  background: transparent;
+}
+.pane-divider.vertical {
+  cursor: col-resize;
+}
+.pane-divider.horizontal {
+  cursor: row-resize;
+}
+.pane-divider:hover,
+.pane-divider:focus-visible {
+  background: var(--focus-ring);
+  outline: none;
+}
+.external-label code {
+  word-break: break-all;
+}
