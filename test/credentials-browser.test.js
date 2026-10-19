@@ -14,14 +14,17 @@ import { AutomationAdmission } from '../src/admission.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { CredentialService } from '../src/credentials.js';
 import { electronEnv } from '../scripts/electron-env.js';
+import { budget } from './time-budget.js';
 
 const SECRET = 'Tr0ub4dor-and-3-staples';
 const USERNAME = 'ada.lovelace@example.com';
 const FRAME_SECRET = 'frame-only-secret-5512';
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve)).then(() => `http://127.0.0.1:${server.address().port}`);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(check, message = 'Condition timed out') {
-  for (let attempt = 0; attempt < 250; attempt++) { if (await check()) return; await delay(20); }
+// Polls instead of fixed sleeps (#121); the deadline scales with WEFT_TEST_TIME_SCALE.
+async function until(check, message = 'Condition timed out', timeoutMs = 5000) {
+  const deadline = Date.now() + budget(timeoutMs);
+  while (Date.now() < deadline) { if (await check()) return; await delay(20); }
   throw new Error(message);
 }
 
@@ -85,6 +88,8 @@ if (process.argv.includes('--credentials-smoke')) {
     try {
       await browser.restore();
       const tabId = browser.activeId;
+      // The protected operation and its cooldown have ended once the tab carries no protection.
+      const protectionEnded = () => until(() => !browser.tabs.get(tabId)?.protection, 'protection cooldown ended');
       const tab = browser.tab(tabId);
       const contents = tab.view.webContents;
       const go = async path => {
@@ -146,7 +151,7 @@ if (process.argv.includes('--credentials-smoke')) {
       assert.deepEqual(await fieldValues(), [USERNAME, SECRET, ''], 'username and the visible password field were filled; the hidden trap field was not');
       // Cooldown: still refused right after the operation.
       assert.equal((await run('page.snapshot', { tabId }, agent)).error?.details?.credential, 'protected_operation', 'cooldown');
-      await delay(800);
+      await protectionEnded();
 
       // 2. After the cooldown: observation redacts the filled fields; page.evaluate stays refused on this document.
       const snapshot = await run('page.snapshot', { tabId }, agent);
@@ -169,7 +174,7 @@ if (process.argv.includes('--credentials-smoke')) {
       const revealFill = await agentFill();
       assert.equal(revealFill.error, null, JSON.stringify(revealFill.error));
       await until(async () => (await fieldValues())[3] === SECRET, 'page copied the value');
-      await delay(800);
+      await protectionEnded();
       for (const command of ['page.snapshot', 'page.screenshot', 'page.pdf']) {
         const outcome = await run(command, { tabId }, agent);
         assert.equal(outcome.error?.details?.credential, 'credential_revealed', command);
@@ -200,7 +205,7 @@ if (process.argv.includes('--credentials-smoke')) {
       assert.equal(frameFill.error, null, JSON.stringify(frameFill.error));
       assert.equal(frameFill.result.frame, 'subframe');
       assert.deepEqual((await fieldValues(frame)).slice(0, 2), ['frame-user', FRAME_SECRET]);
-      await delay(800);
+      await protectionEnded();
 
       // 6. Redirect between the origin check and the fill: the secret is released but never written into the new page.
       await go('/login');
@@ -209,7 +214,7 @@ if (process.argv.includes('--credentials-smoke')) {
       assert.equal(redirected?.details?.credential, 'navigated');
       assert.equal(new URL(contents.getURL()).origin, attackerOrigin);
       assert.deepEqual(await fieldValues(), ['', '', '']);
-      await delay(800);
+      await protectionEnded();
 
       // 7. Login-field verification: honeypot-only and ambiguous pages are refused; a snapshot ref selects one form.
       await go('/hidden');
@@ -221,7 +226,7 @@ if (process.argv.includes('--credentials-smoke')) {
       const refFill = await agentFill({ ref: passwordRef, snapshotId: twoSnapshot.result.snapshotId });
       assert.equal(refFill.error, null, JSON.stringify(refFill.error));
       assert.deepEqual((await fieldValues()).filter(Boolean), [USERNAME, SECRET], 'only the referenced form was filled');
-      await delay(800);
+      await protectionEnded();
 
       // 8. Submit: only the authorized origin receives the secret, as the form post it was meant for.
       await go('/login');
@@ -229,12 +234,12 @@ if (process.argv.includes('--credentials-smoke')) {
       assert.equal(submitted.error, null, JSON.stringify(submitted.error));
       assert.equal(submitted.result.status, 'submitted');
       await until(() => contents.getTitle() === 'Signed in', 'post-submit navigation');
-      await delay(800);
+      await protectionEnded();
       const after = await run('page.evaluate', { tabId, expectedVersion: await inspect(), expression: 'document.title' }, agent);
       assert.equal(after.result, 'Signed in', 'a new document without credential fields is ordinary again');
       assert.ok(received.authorized.some(entry => entry.startsWith('POST /session') && entry.includes(encodeURIComponent(SECRET))), 'the authorized site received the form post');
       assert.ok(!received.attacker.some(entry => [SECRET, encodeURIComponent(SECRET), 'redirect-secret', encodeURIComponent(USERNAME)].some(value => entry.includes(value))), 'the attacker origin never received a secret');
-      await delay(800);
+      await protectionEnded();
 
       // 9. Revocation applies to the next use.
       await run('credentials.revoke', { id: c1 }, human);

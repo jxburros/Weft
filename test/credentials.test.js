@@ -12,6 +12,7 @@ import { ClientGrants } from '../src/clients.js';
 import { createDispatcher } from '../src/dispatch.js';
 import { commands } from '../src/commands.js';
 import { CredentialService, safeStorageProtector } from '../src/credentials.js';
+import { budget } from './time-budget.js';
 
 const require = createRequire(import.meta.url);
 const broker = require('../src/credential-broker-child.cjs');
@@ -226,12 +227,14 @@ test('credentials.fill needs an exact one-time approval showing the credential a
 
 test('expired, revoked, tampered and other-workspace references are refused before any release', async t => {
   const f = await fixture(t);
-  const soon = (await f.create({ expiresAt: new Date(Date.now() + 1200).toISOString() })).result;
+  // The broker is a separate process with its own clock, so the expiry is real time: set it with room for a slow
+  // broker start (scaled on slow runners) and wait until the stored expiry has passed instead of a fixed sleep (#121).
+  const soon = (await f.create({ expiresAt: new Date(Date.now() + budget(1500)).toISOString() })).result;
   const revoked = (await f.create({ label: 'To revoke' })).result;
   const tampered = (await f.create({ label: 'To tamper' })).result;
   const other = await f.dispatch('workspaces.create', { name: 'Other' }, human);
   const elsewhere = (await f.create({ workspaceId: other.result.id, label: 'Elsewhere' })).result;
-  await new Promise(resolve => setTimeout(resolve, 1300));
+  while (Date.now() <= Date.parse(soon.expiresAt) + 10) await new Promise(resolve => setTimeout(resolve, 25));
   assert.equal((await f.dispatch('credentials.revoke', { id: revoked.id }, human)).result.status, 'revoked');
   const file = join(f.directory, 'credentials', 'vault', 'vault.json');
   const vault = JSON.parse(readFileSync(file, 'utf8'));
