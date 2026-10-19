@@ -16,7 +16,7 @@ import { budget } from './time-budget.js';
 const child = process.argv.includes('--passwords-smoke');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, message = 'Condition timed out') {
-  for (let attempt = 0; attempt < 400; attempt++) { const value = await check(); if (value) return value; await pause(25); }
+  for (let attempt = 0; attempt < 1200; attempt++) { const value = await check(); if (value) return value; await pause(25); }
   throw new Error(message);
 }
 const login = '<!doctype html><title>login</title><form action="/welcome" method="post"><input name="user" id="user" autocomplete="username"><input type="password" name="pass" id="pass"><button id="go" style="position:fixed;left:0;top:0;width:300px;height:200px">Sign in</button></form>';

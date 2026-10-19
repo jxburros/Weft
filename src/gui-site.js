@@ -33,9 +33,9 @@ export function siteUI(ui) {
     const p = tab?.protection || {};
     const buttons = [];
     const blocked = (p.blockedPopups || []).length;
-    if (blocked) buttons.push(`<button type="button" class="indicator" data-action="popups-blocked" aria-label="${blocked} pop-up${blocked === 1 ? "" : "s"} blocked on this page" title="Pop-up blocked">${icon("blocked")}<span>${blocked}</span></button>`);
+    if (blocked) buttons.push(`<button type="button" class="indicator" data-action="popups-blocked" aria-label="${blocked} pop-up${blocked === 1 ? "" : "s"} blocked on this page" title="Pop-up blocked">${icon("external")}<span>${blocked}</span></button>`);
     const using = [...new Set([...(p.permissionUses || []), ...(p.sharing ? ["display-capture"] : [])])];
-    if (using.length) buttons.push(`<button type="button" class="indicator in-use" data-action="permissions-in-use" aria-label="This page is using your ${esc(listNames(using))}" title="In use: ${esc(listNames(using))}">${icon("you")}<span>${p.sharing ? "Sharing" : "In use"}</span></button>`);
+    if (using.length) buttons.push(`<button type="button" class="indicator in-use" data-action="permissions-in-use" aria-label="This page is using your ${esc(listNames(using))}" title="In use: ${esc(listNames(using))}">${icon("play")}<span>${p.sharing ? "Sharing" : "In use"}</span></button>`);
     if (p.savedLogins) buttons.push(`<button type="button" class="indicator" data-action="passwords-menu" aria-label="Saved sign-ins for this site" title="Saved sign-ins">${icon("lock")}</button>`);
     if (extensions.length) buttons.push(`<button type="button" class="indicator" data-action="extensions-menu" aria-label="Extensions (${extensions.length})" title="Extensions">${icon("grid")}</button>`);
     const html = buttons.join("");

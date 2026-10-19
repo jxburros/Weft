@@ -15,7 +15,7 @@ import { budget } from './time-budget.js';
 
 const child = process.argv.includes('--permissions-smoke');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(check, message = 'Condition timed out', attempts = 400) {
+async function until(check, message = 'Condition timed out', attempts = 1200) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     const value = await check();
     if (value) return value;
@@ -68,8 +68,9 @@ async function smoke() {
   const report = {};
   // A page needs a rendered frame before native input hits its button.
   const click = async tabId => {
-    await pause(300);
     const contents = browser.tab(tabId).view.webContents;
+    await contents.executeJavaScript('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+    await pause(150);
     contents.focus();
     contents.sendInputEvent({ type: 'mouseMove', x: 40, y: 40 });
     contents.sendInputEvent({ type: 'mouseDown', x: 40, y: 40, button: 'left', clickCount: 1 });

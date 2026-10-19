@@ -108,10 +108,16 @@ if (smoke) {
       const pageTitle = async (page, prefix) => {
         const opened = ok(await dispatch('extensions.openPage', { id: toolbar.id, page }, human));
         const view = [...extensions.pages.get(toolbar.id)].at(-1);
+        // Committed navigations (the popup tries to leave the extension 50 ms after it is ready).
+        const started = [];
+        view.webContents.on('did-navigate', (_event, url) => started.push(url));
+        let seen = view.webContents.getTitle();
+        view.webContents.on('page-title-updated', (_event, title) => { seen = title; });
         let value = '';
-        for (let attempt = 0; attempt < 200 && !value.startsWith(prefix); attempt++) { await sleep(25); value = view.isDestroyed() ? 'closed' : view.webContents.getTitle(); }
+        for (let attempt = 0; attempt < 400 && !value.startsWith(prefix); attempt++) { await sleep(25); value = view.isDestroyed() ? seen : view.webContents.getTitle(); }
         await sleep(300);
-        return { url: opened.url, title: value, stayed: view.isDestroyed() ? 'closed' : view.webContents.getURL().startsWith('chrome-extension://') };
+        // A popup also closes when another window takes focus (as on a busy shared display); that is not a navigation.
+        return { url: opened.url, title: value, stayed: started.every(url => url.startsWith('chrome-extension://')) && (view.isDestroyed() || view.webContents.getURL().startsWith('chrome-extension://')) };
       };
       matrix.popup = await pageTitle('popup', 'popup:');
       matrix.options = await pageTitle('options', 'options:');

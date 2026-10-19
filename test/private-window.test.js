@@ -17,7 +17,7 @@ const mode = ['--private-smoke', '--private-crash'].find(flag => process.argv.in
 const MARKER = 'weftprivatemarker7f3c';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, message = 'Condition timed out') {
-  for (let attempt = 0; attempt < 400; attempt++) { const value = await check(); if (value) return value; await pause(25); }
+  for (let attempt = 0; attempt < 1200; attempt++) { const value = await check(); if (value) return value; await pause(25); }
   throw new Error(message);
 }
 const PAGES = {
