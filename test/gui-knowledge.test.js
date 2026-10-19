@@ -110,13 +110,13 @@ if (process.argv.includes("--gui-knowledge")) {
     await click('[data-action="collection-create"]');
     await fill("name", "Supplier facts");
     await submit();
-    await until('document.getElementById("dialog-title")?.textContent === "Manage Supplier facts" && document.getElementById("collection-grant-form") !== null');
+    // Everything is always another workspace, so wait for the partner workspace itself to be offered.
+    await until(`document.getElementById("dialog-title")?.textContent === "Manage Supplier facts" && document.querySelector('#collection-grant-form [name="workspaceId"] option[value=${JSON.stringify(second.id)}]') !== null`);
     await run(`document.querySelector('#collection-add-form [name="item"]').value = "context:${proposal.result.id}"`);
     await run('document.getElementById("collection-add-form").requestSubmit()');
     await until('document.getElementById("dialog-content").textContent.includes("Shipping day")');
-    await run(`document.querySelector('#collection-grant-form [name="workspaceId"]').value = ${JSON.stringify(second.id)}`);
-    await run(`document.querySelector('#collection-grant-form [name="role"]').value = "read"`);
-    await run('document.getElementById("collection-grant-form").requestSubmit()');
+    // Choose and submit in one step: a refresh re-renders the dialog and would reset the choice in between.
+    await run(`(() => { const form = document.getElementById("collection-grant-form"); form.querySelector('[name="workspaceId"]').value = ${JSON.stringify(second.id)}; form.querySelector('[name="role"]').value = "read"; form.requestSubmit(); })()`);
     await until('document.getElementById("dialog-content").textContent.includes("Granted read access")');
     await click('[data-action="close-dialog"]');
     await until('document.getElementById("content").textContent.includes("Partner project") && document.getElementById("content").textContent.includes("Read only")');
