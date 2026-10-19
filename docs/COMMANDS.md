@@ -239,6 +239,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | extensions.enable | Human loads an installed extension into its workspace session after re-verifying files and scope | administration | Human only | GUI IPC, CLI, REST, MCP |
 | extensions.disable | Human revokes an extension: it is unloaded from its workspace session immediately | administration | Human only | GUI IPC, CLI, REST, MCP |
 | extensions.remove | Human unloads and deletes an installed extension copy | administration | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.actions | Human lists the toolbar buttons (action popup, options page) of extensions enabled in a workspace | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| extensions.openPage | Human opens an enabled extension's action popup or options page in a browser-owned window | administration | Human only | GUI IPC, CLI, REST, MCP |
 | plugin.markdown.digest | Render workspace context records as a Markdown digest that keeps categories and sources (built-in plugin markdown 1.0.0) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | plugin.session-stats.summary | Summarize command outcomes observed for a workspace since Weft started (built-in plugin session-stats 1.0.0) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | handoffs.create | Record a structured handoff with current tab state, exact evidence and next step; secrets are rejected | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -362,3 +364,20 @@ Human-only describes an unconditional administration gate. Every other non-human
 | payments.issueCard | Human creates a merchant-locked or single-use virtual card limited to the payment's ceiling from the configured provider and stores it in the credential vault | administration | Human only | GUI IPC, CLI, REST, MCP |
 | payments.closeCard | Human closes the payment's virtual card at the provider and revokes its vault entry | administration | Human only | GUI IPC, CLI, REST, MCP |
 | payments.configureProvider | Human configures the optional virtual-card issuer adapter (off by default; implemented against a fake issuer only, not validated with a real account) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.list | List per-site permission and popup decisions, pending prompts and which requests Weft asks about or always denies | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| permissions.respond | Human answers a pending browser-owned permission prompt (deny when dismissed) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.set | Human reviews or revokes a remembered site permission or popup decision in a workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.configure | Human turns the global "never ask" setting on or off (every prompted request is denied without a prompt) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| permissions.stop | Human stops camera, microphone or screen sharing on a tab: one-page grants end and the page reloads | administration | Human only | GUI IPC, CLI, REST, MCP |
+| popups.allow | Human opens a blocked popup once in a new tab, optionally allowing popups from the site in this workspace from now on | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.list | Human lists the saved sign-ins of a workspace (sites and usernames, never passwords), sites never saved, and pending save offers | local_read | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.respondOffer | Human answers a save-password offer after a sign-in: save (or update), never for this site, or not now | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.save | Human saves a sign-in by hand | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.update | Human edits a saved sign-in or shares it with other workspaces | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.delete | Human deletes a saved sign-in | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.reveal | Human shows one saved password after confirming in a browser-owned dialog | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.fill | Human fills a saved sign-in into a tab whose page is on the saved site (never another site or frame) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.generate | Human fills a generated strong password into the new-password fields of the current page | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.forgetNever | Human lets Weft offer to save passwords on a site again | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.import | Human imports sign-ins from a Chrome, Edge, Firefox or Safari CSV export chosen in a file dialog | administration | Human only | GUI IPC, CLI, REST, MCP |
+| passwords.export | Human exports this workspace's sign-ins as a plaintext CSV file (acknowledgement required) | administration | Human only | GUI IPC, CLI, REST, MCP |

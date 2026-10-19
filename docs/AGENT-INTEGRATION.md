@@ -319,6 +319,20 @@ prefetch/prerender requests are cancelled for every destination. Browser
 enforcement covers requests made by Weft's Chromium sessions only; your own
 HTTP clients, shells and tools are outside it and need their own controls.
 
+Web permissions (camera, microphone, location, notifications, clipboard
+read, screen sharing, MIDI, sensors) are answered only by the person in a
+browser-owned prompt. `permissions.list` shows the workspace's decisions and
+pending prompts; `permissions.respond`, `permissions.set`,
+`permissions.configure`, `permissions.stop` and `popups.allow` are human-only
+(MCP `weft_site`). A page you drive without recent human input is denied
+without a prompt, so a site feature that needs a permission fails; report it
+and ask the person. Pop-ups an action opens become tabs whose `opener` field
+names the tab that opened them; they never inherit your lease. The person's
+saved passwords (`passwords.*`) and private windows are not available to any
+agent: a tab id that belongs to a private window fails with
+`permission_required`. Use brokered sign-ins (`credentials.fill`, below) for
+logins you are allowed to perform.
+
 ## Headless sessions, limits, queues and suspended tabs
 
 Weft can run headless: start it with `--headless` (or `WEFT_HEADLESS=1`) and it

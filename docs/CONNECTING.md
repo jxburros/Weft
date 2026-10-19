@@ -43,9 +43,11 @@ For MCP, configure your client:
 }
 ```
 
-MCP advertises ten tools: `weft_tabs`, `weft_page`, `weft_workspace`,
-`weft_memory`, `weft_records`, `weft_knowledge`, `weft_artifacts`,
-`weft_browser`, `weft_models` and `weft_reference` for command discovery.
+MCP advertises eleven tools: `weft_tabs`, `weft_page`, `weft_workspace`,
+`weft_memory`, `weft_records`, `weft_knowledge`, `weft_site` (site
+permissions, pop-ups and saved passwords; every decision there is human-only),
+`weft_artifacts`, `weft_browser`, `weft_models` and `weft_reference` for
+command discovery.
 Execution tools accept a canonical command as `action` and its `args`;
 legacy underscore names such as `page_readable` remain accepted but unadvertised.
 Schemas and structured outcomes are shared. Screenshots retain MCP image content.
