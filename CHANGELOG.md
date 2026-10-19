@@ -54,6 +54,7 @@ Everyday-browser parity, the Everything workspace, multiple windows and 1–4 pa
 
 - Commands diff only the records they read or added (about 4× faster single updates in a 10k-record store), and the GUI fetches a workspace snapshot only when its revision moves (#108, #109).
 - ESLint and an unused-export check run in `npm run check`; `npm test` collects only `test/**/*.test.js`; shared bounded-file, capped-body, queue and typed-error helpers replace drifted copies; fewer wall-clock-dependent tests; direct tests for atomic JSON writes, presets, capabilities, encryption coverage and the store CLI (#118, #120–#122, #124, #125).
+- `gui.js` (4,497 → 2,015 lines) dispatches actions through per-feature handler maps and renders views from separate modules; `Browser` page and browser commands run from dispatch tables, with chrome, credential/payment and capture concerns in collaborator modules; `WorkspaceService` moves artifacts, transfer and encryption into their own modules. Behaviour is unchanged (#119).
 - GitHub Actions are pinned by commit SHA; PRs run `npm audit --omit=dev`; performance budgets run in CI; one signing decision drives both the build and the release label; unsigned macOS release notes include Gatekeeper steps (#123).
 - Packaged builds no longer include the MCP SDK and its HTTP transports, which the app never loads (#126).
 - High-contrast (`forced-colors`, `prefers-contrast`) styles; the credential entry window is covered by the automated accessibility audit (#31, #126).
