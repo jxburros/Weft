@@ -211,3 +211,15 @@ needed.
   perf budget (`perf/budgets.js`) bound it.
 - Not validated against a real Ollama or OpenAI-compatible embedding server or
   external MCP clients' resource UIs.
+
+## Note (2026-10-19)
+
+Later changes extend this decision without altering it. In encrypted profiles the
+vectors are sealed at rest (amendment in [ADR 014](014-workspace-encryption-and-key-management.md)).
+Since 1.3.0 the indexes also cover workspace description and memory and learned
+memories; `search.query` accepts `passageChars` (300–6000) for longer cited
+passages; and the chat's "Find relevant workspace context" control sends a
+`search` attachment of up to eight results with 3,000-character passages under
+the same retrieval cap. An embedding pass discards its result if the record,
+the embedding configuration or the lock state changed while it ran. See
+[CAPTURE-AND-LEARNING.md](../CAPTURE-AND-LEARNING.md).

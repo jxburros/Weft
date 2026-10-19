@@ -10,3 +10,6 @@ It has been modified for Weft task states. The original is licensed under the
 was reviewed for its per-trigger cooldown and reserve-before-dispatch design.
 Weft independently implements those scheduling ideas; no GWatch source is
 copied into this MIT-licensed application.
+
+The bundled Source Sans 3 font (`assets/fonts/`) is © Adobe and licensed under
+the SIL Open Font License 1.1; see [assets/fonts/LICENSE.md](assets/fonts/LICENSE.md).

@@ -34,16 +34,36 @@ uses separately chosen pairs (guide 4.2), not an inversion.
 | `disabled-surface` / `disabled-ink` | `#e9e5de` / `#7a727c` | `#39343c` / `#9a919d` | Disabled controls: readable at 3:1, plus a dashed edge on labelled buttons |
 | `trusted-surface` / `trusted-border` / `trusted-ink` | `#f1ebf2` / `#70516f` / `#4f3a4e` | `#3a3140` / `#cda9cb` / `#e7cfe5` | Browser-owned decisions (below) |
 | `group-*` | sky, sand, rose, slate | lighter pairs | Tab-group accents, always shown with the color's name |
+| `accent-ocean`, `accent-forest`, `accent-rose` | `#28657c`, `#436743`, `#93526b` | `#83b9cd`, `#a0c49a`, `#d6a0b4` | Optional interface accents (below) |
 
 Rendered contrast of text, selected, error, disabled and focus states is measured
 in real Electron in both themes by `test/accessibility.test.js`; token pairs are
 checked by `test/design-tokens.test.js`. Neither is a certification.
 
+### Appearance preferences
+
+`settings.update` takes `appearance: {accent, density, textScale}` beside `theme`
+(`system`, `light`, `dark`). Settings → Appearance offers only the color theme;
+the other preferences are set through `settings.update`, including an approved
+Ask Weft proposal ([WORKSPACE-AGENTS.md](WORKSPACE-AGENTS.md)).
+
+- **Accent**: `plum` (default), `ocean`, `forest` or `rose`, set as `data-accent`
+  on the root. A non-plum accent rebinds `brand` to the matching `accent-*` token,
+  so primary actions, selection, the agent frame and the working and agent markers
+  described below as plum take the accent; `brand-soft`, `focus-ring` and the
+  trusted-surface tokens stay plum. The accent tokens are not yet in the automated
+  contrast checks.
+- **Density**: `comfortable` (default) or `compact` (`data-density`). Compact
+  reduces settings-row and record-card padding only.
+- **Text scale**: 0.85–1.3, applied as the root font size (16 px × scale), so every
+  rem type token scales with it.
+
 ## Type
 
 Source Sans 3 (regular and semibold, bundled, OFL) is used in the main window and
 the credential entry window; monospace appears only for fingerprints, digests and
-command data. Sizes are rem tokens, so text scaling works:
+command data. Sizes are rem tokens, so browser zoom, text scaling and the text
+scale preference all apply:
 
 | Token (px) | Use |
 | --- | --- |
@@ -64,16 +84,19 @@ metadata that remains readable" (5.1, 14); nothing renders below 11 px now.
 | Spacing | 2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40 px | Replaces 30 ad-hoc pixel values (each moved to the nearest step). Compact chrome uses 4–12, content and cards 16–40. |
 | Radius | 4 (tags, badges, frames), 6 (images), 8 (controls), 12 (cards, panels, dialogs, rail buttons) | "Modestly rounded" (guide 6). |
 | Elevation | `shadow-subtle` (active tab, lock card), `shadow` (dialogs, toast) | Two levels; borders carry most separation. |
-| Motion | `motion-fast` 150 ms ease-out (hover, selection, quick-card lift), `motion-enter` 200 ms `motion-enter-easing` (dialogs, toast and agent panel rise or slide in; a new view fades in once on navigation, opacity only so live page bounds never move), `motion-loading` 1 s (loading line, working marker), `motion-handoff` 600 ms (control handoff) | `prefers-reduced-motion` sets them all to 0 and disables animations; state is always also in text. |
+| Motion | `motion-fast` 150 ms ease-out (hover, selection, quick-card lift), `motion-enter` 200 ms `motion-enter-easing` (dialogs, toast and agent panel rise or slide in; a new view fades in once on navigation, opacity only so live page bounds never move), `motion-loading` 1 s (loading line, working marker), `motion-handoff` 600 ms (control handoff). The section icon grid's hover/focus lift uses a fixed 160 ms ease, not a token. | `prefers-reduced-motion` sets them all to 0, disables animations and removes the icon lift; state is always also in text. |
 
 ## Layout and sidebar density
 
 64 px workspace rail (scrolls when short), 242 px sidebar (222 px under 1200 px,
 200 px under 950 px, hidden under 700 px or when the agent panel opens under
-1050 px), 320 px agent panel (285 px under 1200 px). Section links are 14 px text
-with 8/12 px padding; tab rows are at least 36 px; every control is at least
-24 × 24 px. At the minimum window (1000 × 640) with 200% zoom or 200% text the
-layout reflows without overlap (audited).
+1050 px), 320 px agent panel (285 px under 1200 px). Workspace sections are a
+three-column icon grid above the tab list: 24 px icons in buttons at least 54 px
+tall, with a count on Materials, Tasks and Artifacts. Section names are visually
+hidden but remain each button's accessible name and hover tooltip, and the
+current section has `aria-current="page"`. Tab rows are at least 36 px; every
+control is at least 24 × 24 px. At the minimum window (1000 × 640) with 200% zoom
+or 200% text the layout reflows without overlap (audited).
 
 ## Components finished in this pass
 
@@ -160,8 +183,9 @@ checks the favicon against the exports and re-measures both conclusions under Xv
 
 ## Terminology
 
-Navigation uses Workspaces, Tabs, Materials, Context, Tasks, Conversations,
-Artifacts and Activity (guide 3, 7.2). `test/gui-terminology.test.js` rejects
+The section grid uses Overview, Materials, Context, Tasks, Conversations,
+Artifacts, Activity, Workflows and Mailbox, beside Workspaces and Tabs (guide 3,
+7.2). `test/gui-terminology.test.js` checks that section list, rejects
 textile vocabulary in interface strings, keeps "woven" to the brand tagline and
 allows "desk" only in "Command desk" and the empty-task line "A clear desk".
 
@@ -195,6 +219,7 @@ does not make them:
    treatment as the permanent look of browser-owned UI.
 4. Workspace naming (Workspaces, Desks or Hubs); "Command desk" would need a new
    name if "Desks" is chosen.
-5. Sidebar density and panel breakpoints, motion durations, and the handoff pulse.
+5. Sidebar density and panel breakpoints, motion durations, the handoff pulse,
+   the icon-only section grid, and the optional ocean, forest and rose accents.
 6. Appearance of the Windows installer art and of the icons on each platform's
    dock/taskbar at native sizes.

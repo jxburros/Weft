@@ -4,6 +4,8 @@
 **Date:** October 17, 2026  
 **Status:** Proposed aesthetic direction for review
 
+This guide is the design direction. The values implemented against it (tokens, type scale, spacing, motion, layout and components) are recorded in [docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md), together with the choices that still need human sign-off. Where this guide says a value is not yet defined, see that document.
+
 ## 1. Brand and product
 
 **Name:** Weft  
@@ -49,7 +51,7 @@ The workspace naming choice—Workspaces, Desks, or Hubs—remains open. Designs
 | `accent-sage` | Muted sage | `#718676` | Secondary accents and workspace identities |
 | `accent-clay` | Warm terracotta | `#B97359` | Occasional emphasis and workspace identities |
 
-Use warm neutrals for most of the interface. Plum should establish identity without overwhelming page content. Sage and clay are supporting accents, not substitutes for a complete semantic status palette.
+Use warm neutrals for most of the interface. Plum should establish identity without overwhelming page content. Plum is the default interface accent; a person can choose an ocean, forest or rose accent instead, which replaces plum on primary actions and selection but does not change the logo, the focus indicator or the browser-owned control band. Sage and clay are supporting accents, not substitutes for a complete semantic status palette.
 
 These are starting colors, not accessibility-certified combinations. Validate text, icons, borders, selected states, and disabled states against their actual backgrounds before implementation. Do not assume every accent supports small text or white lettering.
 
@@ -57,7 +59,7 @@ These are starting colors, not accessibility-certified combinations. Validate te
 
 Use ink-charcoal backgrounds, warm gray surfaces, and a lighter orchid accent. Preserve the same calm studio character and information hierarchy as light mode.
 
-Dark-mode hex values are not yet selected. Design its surfaces, contrast, separators, focus indicators, and status treatments deliberately rather than mechanically inverting the light palette.
+Dark-mode values are implemented in `assets/tokens.json` but await sign-off (see [docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)). Design its surfaces, contrast, separators, focus indicators, and status treatments deliberately rather than mechanically inverting the light palette.
 
 ### 4.3 Workspace colors
 
@@ -91,7 +93,7 @@ No final typeface has been selected.
 
 Use monospace sparingly for CLI commands, identifiers, and technical inspection. Ordinary chat, tasks, and browsing controls should remain in the main interface typeface.
 
-Exact type sizes, weights, and line heights should be established during interface prototyping.
+Source Sans 3 and a rem-based type scale are implemented (see [docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)); the final typeface and scale still need sign-off. Text follows browser zoom and a text scale preference.
 
 ## 6. Surfaces, shape, and depth
 
@@ -105,7 +107,7 @@ Avoid simulated fabric backgrounds behind reading or browsing content. A very fa
 
 Browser-owned controls must be visually distinct from website content, especially credential dialogs, permissions, site blocks, and approval prompts. A website must not visually appear to own the browser's trusted controls.
 
-Exact radius, spacing, border, and elevation scales remain to be defined in a component system.
+Radius, spacing, border, and elevation scales are implemented as tokens in [docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md), pending sign-off.
 
 ## 7. Application layout
 
@@ -120,7 +122,7 @@ The central page should retain visual priority during ordinary browsing. Side pa
 
 ### 7.2 Workspace sidebar
 
-Provide familiar entry points for Tabs, Materials, Context, Tasks, Conversations, Artifacts, and Activity. Keep active selection clear without filling every row with accent color.
+Provide familiar entry points for the workspace sections (Overview, Materials, Context, Tasks, Conversations, Artifacts, Activity, Workflows, and Mailbox) and the workspace's tabs. Sections appear as a grid of icons; each keeps its name as the accessible label and hover tooltip, so the icons never stand alone for assistive technology. Keep active selection clear without filling every row with accent color.
 
 ### 7.3 Workspace overview
 
@@ -206,7 +208,7 @@ Motion should explain state changes and activity without distracting from the pa
 - Avoid continuous background fabric animation or decorative movement behind content.
 - Provide reduced-motion alternatives with persistent static state labels.
 
-Exact durations and easing curves remain to be defined. Motion must never be the only evidence that an action occurred.
+Durations and easing curves are implemented as motion tokens (see [docs/DESIGN-SYSTEM.md](docs/DESIGN-SYSTEM.md)) and still need sign-off. Motion must never be the only evidence that an action occurred.
 
 ## 12. Artifact collection
 

@@ -3,7 +3,9 @@
 **Working name:** Unnamed AI Workspace Browser  
 **Specification version:** 1.0  
 **Date:** October 17, 2026  
-**Status:** Product definition for review; no implementation stack selected
+**Status:** Product definition for review, written before implementation began
+
+This document describes product direction, not implemented behavior. Several choices it lists as open (sections 1.2 and 23) have since been made: the product is named Weft, built on Electron/Chromium in JavaScript and released under the MIT license; other decisions are recorded in [docs/decisions](docs/decisions/). A local client for the community-list extension (section 18) exists ([docs/COMMUNITY-LISTS.md](docs/COMMUNITY-LISTS.md)). Implemented coverage and its limits are in [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 
 ## 1. Purpose and decision status
 

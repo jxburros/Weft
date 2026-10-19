@@ -1,6 +1,6 @@
 # Community site lists
 
-Verified against code: 2026-10-17. Implements #28 on top of the offline pinned installs from #59. Decisions on hosting and publisher verification are in [ADR 004](decisions/004-community-list-hosting-and-verification.md).
+Verified against code: 2026-10-19. Implements #28 on top of the offline pinned installs from #59. Decisions on hosting and publisher verification are in [ADR 004](decisions/004-community-list-hosting-and-verification.md).
 
 Community lists are opt-in, human-controlled claims about sites, published by a group as signed files. Weft ships no list service and contacts nobody unless a human configures a source URL and asks (or opts into a scheduled check). Nothing from the workspace, browsing history, personal rules or other subscriptions is ever uploaded. List text is untrusted data; it never carries instructions or authority beyond the rule effect a human's chosen mode allows.
 
