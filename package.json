@@ -11,7 +11,7 @@
     "start": "electron .",
     "cli": "node bin/weft.js",
     "mcp": "node bin/weft.js mcp",
-    "test": "node --test",
+    "test": "node --test \"test/**/*.test.js\"",
     "check": "node scripts/check.mjs",
     "lint": "eslint .",
     "test:unit": "node scripts/test-unit.mjs",

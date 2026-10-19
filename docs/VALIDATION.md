@@ -28,6 +28,10 @@ leaked handle shows up before Windows CI. Crash tests accept Windows termination
 `SIGKILL`; AppImage replacement tests run only off Windows, and the open-database
 replacement scenario asserts that Windows refuses the replacement instead.
 
+`npm test` runs exactly the files matching `test/**/*.test.js`; helpers and
+fixtures under `test/` and `scripts/test-unit.mjs` are never collected as tests
+(#122), so a new helper with top-level side effects cannot run by accident.
+
 The separate Linux Chromium job runs **all** tests under `xvfb-run -a npm test`,
 including native browser isolation and GUI workflows, then compares the GUI
 goldens (`WEFT_VISUAL=1`; `test/visual.test.js` skips without it; see
