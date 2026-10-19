@@ -87,9 +87,11 @@ test('imported filenames are inert basenames and HTML remains stored data', { ti
 });
 
 test('control-plane origins use a narrow syntactic loopback allowlist without DNS trust', { timeout: budget(5000) }, () => {
-  for (const url of ['http://127.0.0.1:9222', 'http://localhost:9222', 'http://[::1]:9222', 'http://2130706433:9222']) {
+  for (const url of ['http://127.0.0.1:9222', 'http://localhost:9222', 'http://2130706433:9222']) {
     assert.doesNotThrow(() => createClient({ url, token: 'fixture' }), url);
   }
+  // Syntactically loopback, but the API listens on IPv4 only: refused with the reason (#126).
+  assert.throws(() => createClient({ url: 'http://[::1]:9222', token: 'fixture' }), /listens only on 127\.0\.0\.1/);
   for (const url of ['https://localhost', 'http://localhost.', 'http://localhost.evil.test', 'http://127.0.0.1.nip.io', 'http://[::ffff:127.0.0.1]', 'http://0.0.0.0', 'http://127.0.0.2', 'http://example.com', 'file:///tmp', 'http://user:pass@localhost', 'http://localhost/path', 'http://localhost?token=fixture', 'http://localhost#fragment']) {
     assert.throws(() => createClient({ url, token: 'fixture' }), /loopback/, url);
   }
