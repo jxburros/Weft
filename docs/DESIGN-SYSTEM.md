@@ -112,10 +112,15 @@ or 200% text the layout reflows without overlap (audited).
   draw (pages are native views and cannot paint there). The frame is dashed plum
   while an agent drives; a change of controller plays a 600 ms border pulse and is
   announced once. Reduced motion removes the pulse; the badge text still changes.
-- **Split view** (guide 7.4). A 6 px divider between panes; each pane has a header
-  with "Left pane"/"Right pane" buttons (`aria-pressed`), the page title, its
-  ownership badge and a "Focused" label; the focused pane has a focus-ring frame
-  and an underline. Choosing a pane moves keyboard focus into it.
+- **Panes** (guide 7.4). One to four panes with 6 px dividers that show the focus
+  ring on hover and keyboard focus; each pane has a header with its position
+  button ("Left pane", "Top right pane", …; `aria-pressed`), the title, the
+  ownership badge for tabs, a "Focused" label and a close button; the focused pane
+  has a focus-ring frame and an underline. Captures and documents render on the
+  surface color inside the pane. Choosing a pane moves keyboard focus into it.
+- **Everything and windows.** Everything's rail button has a dashed 2 px border and
+  the grid icon; a workspace shown in another window is dimmed with a small ↗ mark,
+  and its accessible name says where it is.
 - **Browser-owned surfaces** (guide 6, 13). One visual language: a band reading
   "Weft browser control · <kind>" on the trusted surface with a plum edge, a
   shield icon and a 4 px top edge on dialogs. Used for agent requests, payment

@@ -20,14 +20,14 @@ import { ResourceScheduler } from './resources.js';
 import { ResumeService } from './resume.js';
 import { executeBrowsingCommand } from './browsing-import.js';
 
-const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'captures.cancel', 'payments.status'];
+const TARGETLESS = ['guide.get', 'browser.info', 'workspaces.list', 'approvals.list', 'autonomy.get', 'activity.verify', 'plugins.list', 'update.status', 'weft.capabilities', 'events.list', 'transfers.list', 'resources.status', 'display.status', 'display.show', 'windows.list', 'captures.cancel', 'payments.status'];
 // Commands that page natively; every other pageable command is paged here from its full list.
 const NATIVE_PAGED = new Set(['search.query', 'conversations.messages', 'artifacts.versions', 'transfers.list']);
 const DEADLINE = Symbol('deadline');
 const hookCommands = new Set(['workspaces.exportAs', 'artifacts.render', 'activity.report', 'page.extract']);
 
 /** One command boundary for GUI, HTTP, CLI/MCP, internal model tools, plugins and future automation callers. */
-export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, onEvent = () => {} }) {
+export function createDispatcher({ workspace, browser, providers, clients, lists, extensions, updates, credentials = null, payments = null, transfers = null, eventLog = null, plugins = new PluginRegistry(), knowledge, admission, authority, tasks, scheduler, resume, display, windows = null, onEvent = () => {} }) {
   knowledge ??= new Knowledge({ workspace });
   if (providers) { providers.commandCatalog = commands; providers.validateAppCommand = validateCommand; }
   // Agent concurrency, capture queue and budgets apply to every caller (#30), including task-runtime steps.
@@ -286,6 +286,10 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     if (command.startsWith('display.')) {
       if (!display) throw Object.assign(new Error('Display controls are available only in the Weft application'), { code: 'unavailable' });
       return display.execute(command, args, context);
+    }
+    if (command.startsWith('windows.')) {
+      if (!windows) throw Object.assign(new Error('Windows are available only in the Weft application'), { code: 'unavailable' });
+      return windows.execute(command, args, context);
     }
     if (command === 'resources.status') {
       const visible = tab => !context.workspaceIds || context.workspaceIds.includes(tab.workspaceId);

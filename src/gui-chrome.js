@@ -62,7 +62,8 @@ export function chromeUI(deps) {
       case "downloads": return navigateSection("downloads");
       case "search-tabs": return tabSearch();
       case "private-window": return typeof window.weft.openPrivateWindow === "function" ? window.weft.openPrivateWindow() : toast("Private windows are not available in this version of Weft.");
-      case "new-window": return typeof window.weft.newWindow === "function" ? window.weft.newWindow() : toast("Multiple windows are not available in this version of Weft.");
+      // A window always shows a workspace (#100): the shortcut moves the current one into a window of its own.
+      case "new-window": return window.weft.windows ? window.weft.windows({ action: "move", workspaceId: deps.ws().id }).catch((error) => toast(deps.errorMessage(error))) : toast("Multiple windows are not available in this version of Weft.");
       case "capture-selection": return captureSelection();
       case "save-page": return savePage();
       default: return undefined;

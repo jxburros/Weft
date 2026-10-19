@@ -78,6 +78,17 @@ menu is captured before it is shown; printing is stubbed). The print dialog on
 Windows, macOS and Linux desktops and macOS Cmd shortcuts have not been checked
 by hand yet.
 
+`test/windows-browser.test.js` (real Electron under Xvfb, Linux only) opens a
+link from the first launch and from a second launch into Everything, moves a
+workspace into a second window and back without reloading its page, and shows
+four live pages in a 2×2 pane grid. On the 4-core CI-class container used on
+2026-10-19 (software rendering), applying the four-pane layout took about 20 ms
+until all four native views were placed, with 8 page renderers open (four
+visible, four in other workspaces) using about 770 MiB of working set in total.
+This is a single local measurement, not a budget; real pointer drags out of the
+rail, multiple physical displays and macOS/Windows window behaviour were not
+exercised.
+
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
 malware-feed, payment-provider, model-provider account, signed-in webmail,
 email-forwarding relay or multi-user deployment validation. Model discovery,

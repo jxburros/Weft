@@ -99,8 +99,8 @@ them. Page tools (the ⋯ button) lists every shortcut.
 | F6 / Shift F6 | Move between the address bar, page, Ask Weft panel, sidebar and content, including from inside a website |
 | Escape | Close the current dialog |
 
-Ctrl Shift N (private window) and Ctrl Alt N (new window) are reserved; this
-version of Weft says so when you press them.
+Ctrl Shift N opens a private window. Ctrl Alt N moves the current workspace into
+a window of its own (Everything always stays in the main window).
 
 ## Everyday browsing
 
@@ -120,7 +120,7 @@ version of Weft says so when you press them.
   bar shows its zoom; select it to reset. Zoom is remembered per site and per
   workspace, and survives suspending and reopening tabs.
 - **Print.** Ctrl P or Page tools → Print… opens the system print dialog for the
-  page you are looking at (the focused pane in split view). Save as PDF remains
+  page you are looking at (the focused pane). Save as PDF remains
   in Page tools.
 - **Context menu.** Right-click (or Shift F10) in a page for link, image,
   selection, text-field and page actions: open a link or image in a new tab,
@@ -145,6 +145,56 @@ version of Weft says so when you press them.
   agent drives (take control first). While DevTools are open the tab shows
   "DevTools open" and Weft never fills a saved sign-in into it. Agents cannot
   open DevTools or page source: neither is an agent command.
+
+## Everything, windows and panes
+
+**Everything** is the built-in workspace first in the rail (dashed mark). It holds
+pages that are not part of a project yet: links and files other apps ask Weft to
+open, and, if you choose when deleting a workspace, that workspace's open pages
+(they reopen in Everything's own storage container, so sign-ins and page state do
+not move). Everything cannot be renamed, archived or deleted. Move tabs out of it
+with **Move to workspace**, and materials or captures with **Move to workspace…**
+in their dialogs. History, Bookmarks and Find anything (Ctrl/Cmd K) have a
+**Show from** switch: this workspace (default), Everything, or all workspaces.
+
+**Links from other apps.** Settings > Links from other apps chooses where they open:
+Everything (default), ask each time, or the workspace the main window shows. Links
+are treated as data: they pass your site rules like a typed address, never start
+an agent action, never download without the usual approval and never give an agent
+access; each is logged as supplied by another app. Only `http`/`https` links are
+opened (credentials in a URL are refused); `.html`, `.htm` and `.pdf` files are
+copied into the workspace as materials, not loaded as live pages. A link that
+arrives while Weft is locked opens after you unlock it. **Use Weft for web links**
+(installed builds only) registers Weft as a browser; it is never done silently.
+Windows then asks you to confirm in Settings > Apps > Default apps; macOS shows its
+own prompt; on Linux, stop using Weft by choosing another browser in your desktop
+settings. On Windows, choose **Stop using Weft for web links** before uninstalling:
+the uninstaller does not change link handling.
+
+**Windows.** Drag a workspace's rail button out of the window, or choose **Move to
+new window** in Manage workspaces, to open it in a window of its own; its tabs keep
+running and are not reloaded. Each window has its own rail, address bar, active tab
+and pane layout. Drag a workspace onto another window's rail to move it there, or
+choose **Return to main window**; closing a window returns its workspaces to the main
+window. Everything always stays in the main window, and a workspace is shown in one
+window at a time. Closing the main window quits Weft; the other windows reopen where
+they were at the next launch (a window whose display is gone opens on the primary
+display). Locking an encrypted profile closes the other windows; they reopen after
+unlocking. Headless sessions use one window. Approvals, the emergency stop and
+settings are available in every window.
+
+**Panes.** The split-view button toggles one and two panes; **Page tools > Pane
+layout** offers one, two side by side or stacked, three (one large and two stacked,
+or three columns) and a 2×2 grid. A pane shows a live tab, a saved capture (or the
+offline archive preview), a material or a task: use **Open in new pane** in their
+dialogs, or the choices in an empty pane. Drag a divider, or focus it and use the
+arrow keys (Shift for larger steps, Home or a double-click to reset). The focused
+pane is framed and labelled "Focused"; when it holds a tab, that tab is the active
+tab, so the address bar, find, zoom, printing, shortcuts and Send to Weft act on it.
+F6 visits every pane. Each tab pane shows who controls it. Visible tabs are never
+suspended. The layout is saved with the workspace and restored; older split views
+open as two panes. A window too small for the chosen layout shows fewer panes and
+says so. Panes are only what you see: agents act on tabs by id as before.
 
 Use the top-right **Ask Weft** button for conversations and the command icon for
 the complete command desk. Sidebar controls remain usable without configuring

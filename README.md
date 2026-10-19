@@ -46,7 +46,8 @@ MCP or REST. Details: [connecting clients](docs/CONNECTING.md) and
 ## What you can do
 
 - **Browse** with native Chromium pages, separate sign-in state per workspace,
-  split view, bookmarks, history, downloads and find.
+  1–4 panes, multiple windows, an Everything workspace for links from other
+  apps, bookmarks, history, downloads and find.
 - **Organize** notes, website references, copied files, and what you have
   confirmed, found, asked and decided, per workspace. Give each workspace a
   description, standing instructions and memory, and an optional due date.

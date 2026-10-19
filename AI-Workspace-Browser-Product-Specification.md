@@ -75,7 +75,7 @@ This is a unified product specification, not an MVP or phased delivery plan. The
 
 - Workspace selector and sidebar.
 - Address bar, back/forward, reload/stop, and standard navigation controls.
-- Central browsing area with optional split views.
+- Central browsing area with optional split views. (Implementation note: Weft shows 1–4 panes of tabs, captures and documents, and workspaces can move to their own windows; see docs/USING-WEFT.md.)
 - Tab groups with ownership and agent-activity indicators.
 - Workspace sections: Overview, Tabs, Materials, Context, Tasks, Conversations, Artifacts, and Activity.
 - Collapsible agent chat panel.

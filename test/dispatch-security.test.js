@@ -90,7 +90,7 @@ test('resolved targets are explicit and echoed across REST, CLI and MCP', { time
   assert.equal((await f.request('page.inspect')).outcome.error.code, 'ambiguous_target');
   assert.equal((await f.request('workspace.snapshot')).outcome.error.code, 'ambiguous_target');
   const humanSnapshot = await f.dispatch('workspace.snapshot', {}, human);
-  assert.equal(humanSnapshot.result.workspaces.length, 2, 'GUI workspace rail retains all projects');
+  assert.equal(humanSnapshot.result.workspaces.length, 3, 'GUI workspace rail retains all projects and Everything');
   const scopedSnapshot = await f.request('workspace.snapshot', { workspaceId: f.firstId });
   assert.equal(scopedSnapshot.outcome.result.workspaces.length, 1);
   assert.equal((await f.request('page.inspect', { workspaceId: f.firstId })).outcome.error.code, 'ambiguous_target');

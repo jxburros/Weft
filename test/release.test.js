@@ -130,6 +130,11 @@ test('packaging policy: per-user assisted installer, data kept, stable GitHub ch
   assert.deepEqual(config.electronFuses, { ...require('../scripts/release/fuses.cjs'), resetAdHocDarwinSignature: true });
   assert.deepEqual([config.electronFuses.enableNodeOptionsEnvironmentVariable, config.electronFuses.enableNodeCliInspectArguments, config.electronFuses.onlyLoadAppFromAsar, config.electronFuses.enableEmbeddedAsarIntegrityValidation], [false, false, true, true]);
   assert.equal(config.electronFuses.runAsNode, true, 'the plugin sandbox and credential broker still run the binary as Node (docs/RELEASING.md)');
+  // Links and files from other apps (#99): declared on macOS and Linux only; nothing registers on Windows at install.
+  assert.deepEqual(config.mac.protocols, [{ name: 'Web page', schemes: ['http', 'https'] }]);
+  assert.deepEqual(config.linux.fileAssociations.map(item => item.ext), [['html', 'htm'], 'pdf']);
+  assert.equal(config.win.fileAssociations, undefined);
+  assert.equal(config.fileAssociations, undefined);
   const signed = load({ AZURE_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net', AZURE_SIGNING_ACCOUNT: 'weft', AZURE_SIGNING_PROFILE: 'release', WEFT_WINDOWS_PUBLISHER: 'Weft Contributors', APPLE_API_KEY: '/k.p8', APPLE_API_KEY_ID: 'id', APPLE_API_ISSUER: 'issuer' });
   assert.equal(signed.win.azureSignOptions.publisherName, 'Weft Contributors');
   assert.equal(signed.mac.notarize, true);

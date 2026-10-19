@@ -124,7 +124,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | workspaces.archive | Archive a workspace without deleting its contents | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.restore | Restore an archived workspace | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | workspaces.duplicate | Copy project records; exclude sessions and credentials | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
-| workspaces.delete | Permanently delete a workspace and its saved records | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.delete | Permanently delete a workspace and its saved records; the built-in Everything workspace cannot be deleted | administration | Human only | GUI IPC, CLI, REST, MCP |
+| workspaces.moveRecord | Human moves a material or saved capture to another workspace (for example out of Everything into a project) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | workspaces.export | Export project records with optional exact-term residue scan and metadata review; images are unverifiable | administration | Human only | GUI IPC, CLI, REST, MCP |
 | workspaces.import | Import a versioned project export as a new workspace | administration | Human only | GUI IPC, CLI, REST, MCP |
 | settings.get | Get non-secret application preferences | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -343,8 +344,8 @@ Human-only describes an unconditional administration gate. Every other non-human
 | resources.status | Read scheduler limits, running and queued agent work, capture queue, suspended tabs and the caller’s budgets | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | captures.list | List queued, running and recent capture jobs with progress | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | captures.cancel | Cancel a queued capture job; a running screenshot or PDF is discarded, a running artifact capture cannot be cancelled | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
-| resume.get | Read a workspace resume record: last section, active tab, split panes, panel layout, pinned resources, continuation links to blockers, tasks and handoffs, and restore disclosures | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
-| resume.save | Save the workspace last view: section, active tab, split panes and focused pane, panel layout and pinned resources | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
+| resume.get | Read a workspace resume record: last section, active tab, pane layout (1–4 panes), panel layout, pinned resources, continuation links to blockers, tasks and handoffs, and restore disclosures | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| resume.save | Save the workspace last view: section, active tab, pane layout and focused pane, panel layout and pinned resources | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabGroups.list | List tab groups in a workspace with their tabs | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabGroups.create | Create a named, colored tab group and optionally move tabs into it | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | tabGroups.update | Rename, recolor, collapse or expand a tab group | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
@@ -352,6 +353,9 @@ Human-only describes an unconditional administration gate. Every other non-human
 | display.status | Read whether the Weft window is visible, how pages render, pending human decisions and how a person can attach | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
 | display.show | Show the Weft window so a person can inspect and take over the running session (attach); offscreen pages reload when shown | local_write | Policy checked | GUI IPC, CLI, REST, MCP |
 | display.hide | Human hides the window and keeps this session running headless; open pages reload to render offscreen | administration | Human only | GUI IPC, CLI, REST, MCP |
+| windows.list | List Weft windows, the workspaces each one shows and its active tab (informational; windows grant nothing) | local_read | Policy checked | GUI IPC, CLI, REST, MCP |
+| windows.moveWorkspace | Human moves a workspace into a new window, another window, or back to the main window (the built-in Everything workspace stays in the main window) | administration | Human only | GUI IPC, CLI, REST, MCP |
+| windows.focus | Human brings a Weft window to the front | administration | Human only | GUI IPC, CLI, REST, MCP |
 | browsingData.sources | Human lists browser profiles found on this computer and what Weft can import from them (never passwords, cookies, sessions or autofill) | administration | Human only | GUI IPC, CLI, REST, MCP |
 | browsingData.preview | Human previews a bookmarks/history import: counts, containers, duplicates, unsupported fields and excluded secret data | administration | Human only | GUI IPC, CLI, REST, MCP |
 | browsingData.import | Human imports previewed bookmarks (as pinned website materials) and history into a workspace | administration | Human only | GUI IPC, CLI, REST, MCP |

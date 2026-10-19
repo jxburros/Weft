@@ -14,7 +14,8 @@ function fixture(t) {
 
 test('empty workspace persists notes, revisions, conversations and theme across restart', async t => {
   const { directory, service } = fixture(t);
-  assert.equal(service.snapshot().workspaces[0].name, 'My workspace');
+  assert.equal(service.snapshot().workspaces[0].name, 'My workspace', 'a new profile opens on its own project workspace');
+  assert.equal(service.snapshot().workspaces.at(-1).builtin, 'everything', 'the built-in Everything workspace is stored after the projects');
   assert.deepEqual(service.snapshot().materials, []);
   const note = await service.execute('materials.create', { title: 'Release notes', content: 'First version' });
   await service.execute('materials.update', { id: note.id, expectedRevision: 1, changes: { content: 'Second version' } });
@@ -51,9 +52,11 @@ test('archive preserves records and deleting the last workspace leaves a usable 
   assert.equal(service.snapshot().materials.length, 1);
   await service.execute('workspaces.restore', { id: original });
   await service.execute('workspaces.switch', { id: original });
-  for (const workspace of service.snapshot().workspaces) await service.execute('workspaces.delete', { id: workspace.id });
+  for (const workspace of service.snapshot().workspaces.filter(item => !item.builtin)) await service.execute('workspaces.delete', { id: workspace.id });
+  // Everything is built in: it remains and becomes the usable workspace.
   assert.equal(service.snapshot().workspaces.length, 1);
   assert.equal(service.snapshot().workspaces[0].id, service.activeWorkspaceId);
+  assert.equal(service.snapshot().workspaces[0].builtin, 'everything');
 });
 
 test('site rules use hostname boundaries, paths and workspace scope', async t => {

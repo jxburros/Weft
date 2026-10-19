@@ -99,7 +99,7 @@ if (process.argv.includes("--gui-workflows")) {
       'document.getElementById("content")?.textContent.includes("Make room")',
     );
     assert.equal(
-      await run('document.querySelector(".workspace-dot").textContent'),
+      await run('document.querySelector(".workspace-dot:not(.everything)").textContent'),
       "W",
     );
     // Workspace editing stays open across background polls and persists the new fields.

@@ -12,7 +12,9 @@ const browserTests = new Set(['message-capture.test.js', 'browser.test.js', 'bro
   // Everyday browser chrome: shortcuts, context menu, find bar, zoom, closed tabs, DevTools and page source.
   'browser-chrome.test.js',
   // Site permission prompts, popups, private windows, saved passwords and the extension toolbar (#90, #94, #95, #97, #98).
-  'site-permissions-browser.test.js', 'private-window.test.js', 'passwords-browser.test.js', 'gui-site.test.js']);
+  'site-permissions-browser.test.js', 'private-window.test.js', 'passwords-browser.test.js', 'gui-site.test.js',
+  // Multiple windows, the Everything workspace's external links and four live panes (#99, #100, #101).
+  'windows-browser.test.js']);
 // Files that launch Electron but skip that test themselves outside the Linux Chromium job; their other tests run everywhere.
 const selfScopedElectronTests = new Set(['logo.test.js']);
 const all = readdirSync('test').filter(name => name.endsWith('.test.js'));
