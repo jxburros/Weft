@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('weft', {
     return () => ipcRenderer.off('weft:turn', listener);
   },
   focusPage: () => ipcRenderer.invoke('weft:focusPage'),
+  openPrivateWindow: () => ipcRenderer.invoke('weft:openPrivateWindow'),
   onChrome: callback => {
     const listener = (_event, shortcut) => callback(String(shortcut));
     ipcRenderer.on('weft:chrome', listener);

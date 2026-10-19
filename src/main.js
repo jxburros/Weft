@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser, applyEngineHardening } from './browser.js';
+import { PrivateWindows } from './private-window.js';
 import { commands, CommandError } from './commands.js';
 import { createApiServer, EventLog, sanitizeEvent, registerEventType } from './server.js';
 import { Transfers } from './transfers.js';
@@ -37,6 +38,9 @@ registerEventType('encryption');
 import { DisplayController, displayEnvironment, profileFingerprint } from './display.js';
 
 let browser;
+let privateWindows;
+// Site rules without a workspace scope: only rules that apply to every workspace reach private windows.
+const PRIVATE_SCOPE = 'weft-private-window';
 let workspace;
 let providers;
 let server;
@@ -176,6 +180,8 @@ if (primary) app.whenReady().then(async () => {
   // The operating system's memory-pressure signal (Linux PSI and available memory, Windows available memory, a macOS free-page heuristic).
   browser.systemMemory = createMemoryPressureSource();
   workspace.attachBrowser(browser);
+  // Private windows (#94): in-memory sessions outside every workspace; only global site rules and threat lists apply.
+  privateWindows = new PrivateWindows({ browser, audit: entry => activity.append(entry), siteRuleFor: url => workspace.matchSiteRule(url, PRIVATE_SCOPE) });
   // Third-party plugins are discovered from <userData>/plugins and never run until a person enables them.
   plugins = new PluginRegistry({ pluginsDirectory: join(app.getPath('userData'), 'plugins'), stateDirectory: directory });
   const extensions = new WorkspaceExtensions({ directory, workspace, browser });
@@ -251,6 +257,8 @@ if (primary) app.whenReady().then(async () => {
   ipcMain.handle('weft:commands', event => { trusted(event); return commands; });
   ipcMain.handle('weft:layout', (event, bounds) => { trusted(event); return browser.setLayout(bounds); });
   ipcMain.handle('weft:focusPage', event => { trusted(event); return browser.focusPage(); });
+  // A person opens a private window from the trusted GUI (menu or Ctrl/Cmd+Shift+N); no command or agent can.
+  ipcMain.handle('weft:openPrivateWindow', event => { trusted(event); return privateWindows.open(); });
   // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
   ipcMain.handle('weft:pickPath', async (event, kind) => {
     trusted(event);
@@ -295,6 +303,7 @@ app.on('before-quit', event => {
   credentials?.close();
   retrieval?.close();
   relay.close();
+  privateWindows?.closeAll();
   plugins?.close();
   standby?.close();
   learning?.close();

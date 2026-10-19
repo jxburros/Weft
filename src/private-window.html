@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'" />
+    <title>Private window — Weft</title>
+    <link rel="stylesheet" href="./private-window.css" />
+    <script type="module" src="./private-chrome.js"></script>
+  </head>
+  <body>
+    <header class="private-bar">
+      <span class="private-badge" role="img" aria-label="Private window"><span class="mask" aria-hidden="true"></span>Private</span>
+      <form id="navigation" class="navigation" aria-label="Address and page controls">
+        <button type="button" id="back" aria-label="Back" title="Back (Alt+Left)">‹</button>
+        <button type="button" id="forward" aria-label="Forward" title="Forward (Alt+Right)">›</button>
+        <button type="button" id="reload" aria-label="Reload" title="Reload (Ctrl+R)">⟳</button>
+        <input id="address" aria-label="Website URL or search" aria-keyshortcuts="Control+L" placeholder="Search privately or enter a URL" autocomplete="off" spellcheck="false" />
+        <button type="button" id="new-private" aria-keyshortcuts="Control+Shift+N" title="New private window (Ctrl+Shift+N)">New private window</button>
+      </form>
+    </header>
+    <p id="notice" class="private-notice" role="note">Private window: nothing here is saved to a workspace, history or session restore; cookies and site data stay in memory and are erased when the window closes. Agents cannot see or control it. It does not hide you from websites, your network or this computer.</p>
+    <p id="status" class="visually-hidden" role="status" aria-live="polite"></p>
+  </body>
+</html>
