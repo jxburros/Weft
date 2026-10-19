@@ -2,7 +2,9 @@
 // signing setup. Signing is enabled only when the corresponding secrets are present;
 // otherwise the release workflow produces builds labelled "unsigned".
 const env = process.env;
-const azure = env.AZURE_SIGNING_ENDPOINT && env.AZURE_SIGNING_ACCOUNT && env.AZURE_SIGNING_PROFILE && env.WEFT_WINDOWS_PUBLISHER;
+// The release workflow labels builds from the same conditions (scripts/release/signing.cjs).
+const { azureSigning, macNotarization } = require('./scripts/release/signing.cjs');
+const azure = azureSigning(env);
 const icon = 'assets/logo/icons/app-icon-plum-1024.png';
 const fuses = require('./scripts/release/fuses.cjs');
 
@@ -62,7 +64,7 @@ module.exports = {
     hardenedRuntime: true,
     gatekeeperAssess: false,
     // Notarization runs only when Apple credentials are present in the environment.
-    notarize: Boolean(env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER),
+    notarize: macNotarization(env),
   },
   linux: {
     target: [{ target: 'AppImage', arch: ['x64'] }, { target: 'deb', arch: ['x64'] }],

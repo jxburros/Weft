@@ -22,8 +22,8 @@ jobs:
       # Synced disk writes are several times slower on Windows runners; per-test hang guards scale with this (test/time-budget.js).
       WEFT_TEST_TIME_SCALE: ${{ matrix.os == 'windows-latest' && '4' || '1' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -32,13 +32,27 @@ jobs:
         run: node node_modules/electron/install.js
       - run: npm run check
       - run: npm run test:unit
+      - name: Performance budgets
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run test:perf
+  audit:
+    name: Supply-chain audit of shipped dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      # The same gate as the release workflow: no high or critical advisory in runtime dependencies.
+      - run: npm audit --omit=dev --audit-level=high
   chromium:
     name: Real Chromium and GUI (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -55,7 +69,7 @@ jobs:
           xvfb-run -a npm test 2>&1 | tee artifacts/chromium-tests.log
       - name: Compare reviewed visual fixtures
         run: WEFT_VISUAL=1 xvfb-run -a node --test test/visual.test.js
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: chromium-results-${{ github.sha }}
@@ -71,8 +85,8 @@ jobs:
     env:
       WEFT_DISABLE_UPDATES: '1'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -98,8 +112,8 @@ jobs:
       CSC_LINK: ''
       WIN_CSC_LINK: ''
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -119,6 +133,12 @@ jobs:
           app_dir=dist/mac
           if [[ "$(node -p 'process.arch')" == arm64 ]]; then app_dir=dist/mac-arm64; fi
           node scripts/release/smoke-packaged.js "$app_dir/Weft.app/Contents/MacOS/Weft" dmg
+      # Informational: the x64 build under Rosetta 2 on the arm64 runner is not Intel hardware, and a
+      # runner image without Rosetta cannot run it, so this launch does not gate the job.
+      - name: Launch the x64 app under Rosetta (informational)
+        if: runner.arch == 'ARM64'
+        continue-on-error: true
+        run: node scripts/release/smoke-packaged.js dist/mac/Weft.app/Contents/MacOS/Weft dmg
   windows-installer:
     name: Build, install and uninstall the Windows installer (unsigned)
     runs-on: windows-latest
@@ -127,8 +147,8 @@ jobs:
       WEFT_DISABLE_UPDATES: '1'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
           cache: npm
@@ -147,7 +167,7 @@ jobs:
           $version = node -p 'require("./package.json").version'
           pwsh -NoProfile -File scripts/release/windows-install-check.ps1 "dist/Weft-Setup-$version-x64.exe" $version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: weft-windows-installer-unsigned-${{ github.sha }}
           if-no-files-found: error

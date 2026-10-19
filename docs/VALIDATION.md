@@ -42,7 +42,9 @@ Weft startup retains Chromium sandboxing. Fixture tokens are disposable local-on
 values; CI has read-only repository permissions and uses no production secrets.
 
 `npm run test:docs`, `npm run evals`, and `npm run test:perf` exercise published
-examples, scripted MCP tasks, and generous local performance budgets respectively.
+examples, scripted MCP tasks, and local performance budgets respectively. CI runs
+`test:perf` on the Linux unit job and an `npm audit --omit=dev --audit-level=high` job
+on every pull request; workflow actions are pinned by commit SHA.
 Performance budgets are regression thresholds, not a throughput guarantee.
 
 Hostile-input tests use fixed random seeds, compare record operations against a

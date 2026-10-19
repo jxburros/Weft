@@ -135,6 +135,29 @@ test('packaging policy: per-user assisted installer, data kept, stable GitHub ch
   assert.equal(signed.mac.notarize, true);
 });
 
+test('the release label and the packaging config make one signing decision (#123)', () => {
+  const { signingDecision, azureSigning } = require('../scripts/release/signing.cjs');
+  const azure = { AZURE_SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net', AZURE_SIGNING_ACCOUNT: 'weft', AZURE_SIGNING_PROFILE: 'release', WEFT_WINDOWS_PUBLISHER: 'Weft Contributors' };
+  assert.equal(signingDecision('windows-x64', azure), true);
+  // A partial Azure configuration builds unsigned, so it must also be labelled unsigned.
+  for (const missing of Object.keys(azure)) {
+    const partial = { ...azure, [missing]: '' };
+    assert.equal(azureSigning(partial), false, missing);
+    assert.equal(signingDecision('windows-x64', partial), false, missing);
+  }
+  assert.equal(signingDecision('windows-x64', { WIN_CSC_LINK: 'base64-pfx' }), true);
+  const mac = { MAC_CSC_LINK: 'base64-p12', APPLE_API_KEY_P8: 'key', APPLE_API_KEY_ID: 'id', APPLE_API_ISSUER: 'issuer' };
+  assert.equal(signingDecision('macos', mac), true);
+  for (const missing of Object.keys(mac)) assert.equal(signingDecision('macos', { ...mac, [missing]: '' }), false, missing);
+  assert.equal(signingDecision('linux-x64', { ...azure, ...mac }), false);
+  const workflow = readFileSync(join(root, '.github/workflows/release.yml'), 'utf8');
+  assert.match(workflow, /node scripts\/release\/signing\.cjs/, 'the release workflow labels builds with the shared decision');
+  for (const file of ['ci.yml', 'release.yml']) {
+    const text = readFileSync(join(root, '.github/workflows', file), 'utf8');
+    for (const [, ref] of text.matchAll(/(?<!\w)uses:\s*([^\s#]+)/g)) assert.match(ref, /@[0-9a-f]{40}$/, `${file}: ${ref} is pinned by commit SHA`);
+  }
+});
+
 test('the profile folder the uninstaller may remove is the one packaged Weft uses', () => {
   const name = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).name;
   const main = readFileSync(join(root, 'src/main.js'), 'utf8');

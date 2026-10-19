@@ -39,6 +39,10 @@ The repository maintainers with release permission on `jxburros/Weft` own releas
 the signing identities and Electron/Chromium security updates. Dependabot opens
 weekly npm and GitHub Actions update PRs (`.github/dependabot.yml`); Electron is
 grouped separately so its security review is never bundled with routine updates.
+Every workflow action is pinned by commit SHA with its version in a comment
+(`test/release.test.js` refuses a tag or branch reference); Dependabot updates the SHA
+and the comment together. Pull requests run the same `npm audit --omit=dev
+--audit-level=high` gate as releases, and CI and releases run `npm run test:perf`.
 Naming an individual on-call owner is a maintainer decision recorded in the
 repository settings, not in this file.
 
@@ -137,7 +141,17 @@ Without these secrets the workflow still releases, but each package is labelled
 **UNSIGNED** in the release notes and on Windows the updater verifies only the
 manifest's size and SHA-512. Unsigned Windows release notes also tell people how
 to check the installer against `SHA256SUMS.txt` and get past the SmartScreen
-"Windows protected your PC" prompt (**More info** > **Run anyway**).
+"Windows protected your PC" prompt (**More info** > **Run anyway**); unsigned macOS
+notes explain checking the `.dmg`/`.zip` with `shasum -a 256` and opening Weft past
+Gatekeeper (**System Settings** > **Privacy & Security** > **Open Anyway**).
+
+`scripts/release/signing.cjs` holds the one signing decision: `electron-builder.config.cjs`
+enables Azure Trusted Signing and notarization from it, and the release workflow labels
+a platform signed only when it holds. Windows needs all of `AZURE_SIGNING_ENDPOINT`,
+`AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` and `WEFT_WINDOWS_PUBLISHER` (or a
+`WIN_CSC_LINK` certificate); macOS needs the certificate and all three notarization
+values. A partial set builds and is labelled unsigned rather than failing signature
+verification with a confusing cause.
 
 | Secret | Purpose |
 | --- | --- |
