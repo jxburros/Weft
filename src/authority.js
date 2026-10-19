@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
 import { ACTION_CLASSES, APPROVAL_DATA_CLASSES, AUTONOMY_LEVELS, ONCE_ONLY_CLASSES, actionClassForCommand, raiseActionClass, dataClassesForCommand, effectForCommand, effectiveLevel,
   evaluateAutonomy, resourceForCommand, sensitiveCategoriesForCommand, EXTERNAL_CLASSES } from './autonomy.js';
-import { ActivityLog, summarizeArgs } from './activity-log.js';
+import { ActivityLog, redactPaths, summarizeArgs } from './activity-log.js';
 import { ApprovalQueue, approvalFingerprint, previewArgs, withholdValues } from './approvals.js';
 
 const level = z.enum(AUTONOMY_LEVELS);
@@ -264,7 +264,7 @@ export class Authority {
       irreversible: effect === 'irreversible' || external, external, approvalId: decision?.approvalId,
       summary: { ...summarizeArgs(args, command), ...(type === 'artifact' && { versions: Array.isArray(result.versions) ? result.versions.length : undefined }),
         ...(batch && { commands: batch.map(item => item.command).slice(0, 100) }), ...(replayed && { replayed: true }), ...(typeof args?.requestId === 'string' && { requestId: args.requestId.slice(0, 128) }) },
-      detail: outcome.error ? `${code}: ${outcome.error.message}` : replayed ? 'Replayed the stored result of an earlier identical request; nothing was applied again.'
+      detail: outcome.error ? `${code}: ${redactPaths(outcome.error.message)}` : replayed ? 'Replayed the stored result of an earlier identical request; nothing was applied again.'
         : dryRun ? 'Dry run: validated and previewed; nothing was applied.' : external ? 'Accepted by the browser or provider; the external result is not verified by this record.' : undefined });
     // Each command applied by a committed batch is attributable on its own, linked to the batch entry by requestId and position.
     if (batch && outcome.execution === 'succeeded' && !replayed && !dryRun && Array.isArray(result.results)) {

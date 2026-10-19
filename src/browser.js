@@ -14,6 +14,10 @@ const PROTECTED_ALLOWED = new Set(['page.inspect', 'tabs.list', 'tabs.release'])
 // Observation routes that would show a brokered secret if the page revealed or copied it as plain text.
 const REVEAL_CHECKED = new Set(['page.snapshot', 'page.screenshot', 'page.pdf']);
 const isHuman = actor => ['human', 'admin'].includes(actor);
+/** Page-sourced JSON with control and bidirectional-override characters removed from every string and key. */
+const cleanPageValue = value => typeof value === 'string' ? pageString(value, Infinity)
+  : Array.isArray(value) ? value.map(cleanPageValue)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, item]) => [pageString(key, Infinity), cleanPageValue(item)])) : value;
 const failure = (code, message, details) => Object.assign(new Error(message), { code, ...(details && { details }) });
 const stale = (reason, message, details = {}) => failure('stale_state', message, { reason, ...details });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -1913,7 +1917,9 @@ export class Browser {
         await this.assertObservable(tab, name, context);
         if (!human) await this.assertNoCredentialResidue(tab);
         const result = await contents.executeJavaScript(args.expression, true);
-        return result === undefined ? null : JSON.parse(JSON.stringify(result));
+        const value = result === undefined ? null : JSON.parse(JSON.stringify(result));
+        // For automation the value is page data like every other page read: control characters removed and marked untrusted.
+        return human ? value : { value: cleanPageValue(value), contentTrust: 'untrusted' };
       }
       case 'page.click':
       case 'page.fill': {

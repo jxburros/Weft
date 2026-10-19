@@ -1,3 +1,4 @@
+import { redactPaths } from './activity-log.js';
 import { commands, executeOutcome, normalizeCommand, validateCommand, errorOutcome, CommandError, API_VERSION, OUTCOME_STATUSES, ERROR_HTTP_STATUS, ERROR_STATUS, exitCodes } from './commands.js';
 import { PAGEABLE, pageItems } from './pagination.js';
 import { describeCapabilities, MAX_DEADLINE_MS, DEADLINE_GRACE_MS } from './capabilities.js';
@@ -408,6 +409,8 @@ export function createDispatcher({ workspace, browser, providers, clients, lists
     // Versioned request envelope: authenticated identity and linkage, never caller-asserted.
     outcome.request = { apiVersion: API_VERSION, requestId: typeof state.args?.requestId === 'string' ? state.args.requestId : null, actor: typeof context.actor === 'string' ? context.actor.slice(0, 64) : null,
       clientId: context.clientId ?? null, taskId: context.taskId ?? null, deadlineMs: Number.isSafeInteger(deadlineMs) ? deadlineMs : null };
+    // Untyped errors carry raw Node/filesystem text; agents never see local paths from it (typed Weft errors are kept as written).
+    if (outcome.error?.code === 'command_failed' && !['human', 'admin'].includes(context.actor)) outcome.error.message = redactPaths(outcome.error.message);
     authority.recordOutcome({ command: outcome.command, args: state.args ?? {}, context, outcome, decision: state.decision, spec: state.spec ?? commands[outcome.command] ?? {}, batch: state.batch });
     const event = { type: 'command', command: outcome.command, actor: context.actor,
       status: outcome.execution === 'succeeded' ? 'success' : outcome.error?.code === 'approval_required' || outcome.error?.details?.authority ? 'blocked' : 'failure', outcome: outcome.status,

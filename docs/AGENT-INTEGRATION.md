@@ -49,6 +49,12 @@ authenticated identity (requests rejected by transport validation omit it). Use 
 for record updates, deletions, task transitions and artifact annotations; a
 mismatch is `stale_state` and changes nothing.
 
+Page reads are untrusted data. `page.evaluate` returns
+`{ "value": <JSON result>, "contentTrust": "untrusted" }` to agents, with control
+and bidirectional-override characters removed from every string and key (a person
+in the trusted interface receives the raw value). Untyped failures (`command_failed`)
+never show agents local filesystem paths: they read `<path>`.
+
 Bound any command with a deadline: the REST `Weft-Deadline-Ms` header (or a
 `deadlineMs` field next to `command` and `args`), the CLI `--deadline-ms` option
 or the MCP grouped-tool `deadlineMs` argument (1–600000 ms). Expiry returns
@@ -289,7 +295,11 @@ those events are no longer retained (at most 1,000 events, 1 MiB or 15 minutes),
 the process restarted or the id is unknown, an `event: gap` frame with a
 `reason` precedes whatever is still retained; re-read current state before
 relying on derived assumptions. Replay applies the same metadata allowlist and
-workspace scope as live delivery. The complete list of event types is
+workspace scope as live delivery. A scoped client's stream needs the read scope
+and the `activity` data class (like `events.list`); a turn stream needs the
+`conversations` data class (like `conversations.get`). Both end as soon as the
+grant is narrowed, revoked or expires, or its bound task closes. One identity may
+hold four streams at once. The complete list of event types is
 `features.eventReplay.types` in `weft.capabilities`; besides those above it
 includes `activity`, `collection`, `conflict`, `credential`, `capture`, `tab`,
 `display`, `payment`, `indexing` and `encryption`. `turn` events report `started`, `completed`, `partial`, `interrupted` or
