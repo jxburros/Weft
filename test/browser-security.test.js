@@ -234,7 +234,8 @@ async function securitySmoke() {
     for (const path of ['/prefetch', '/speculative', '/prerender']) assert.equal(controls.has(path), false, `speculative ${path} must be cancelled for every destination`);
     report.preconnectConnections = fixture.connections.length;
     assert.equal(fixture.connections.length, 0, 'observed: link rel=preconnect opened no connection in this engine build');
-    assert.ok(browser.describe(browser.tab(tab)).protection.storageActivity.speculativeLoadsCancelled >= 2);
+    // Chromium issues speculation requests on its own schedule; wait for them instead of assuming the pause covered them.
+    await until(() => browser.describe(browser.tab(tab)).protection.storageActivity.speculativeLoadsCancelled >= 2, 'speculative loads were cancelled');
     for (const [route, destination] of [['/form', '/form-post'], ['/frame-top', '/top-nav'], ['/replace', '/replace']]) {
       await navigate(url('127.0.0.1', route));
       if (route === '/form') await browser.execute('page.evaluate', { tabId: tab, expression: 'document.getElementById("f").submit()' }).catch(() => {});
