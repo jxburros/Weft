@@ -2251,3 +2251,62 @@ dialog.trusted .trusted-band {
 :root[data-accent="rose"] { --brand:var(--accent-rose); }
 :root[data-density="compact"] .settings-row { padding-block:8px; }
 :root[data-density="compact"] .record-card { padding:12px; }
+
+/* External-application approvals show the whole target address. */
+.launch-url {
+  max-height: 12em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+  font-size: var(--font-size-13);
+}
+.launch-url mark {
+  background: var(--clay-soft);
+  color: inherit;
+}
+
+/* High-contrast support: Windows/OS forced colors keep every state cue visible with system colors,
+   and a "more contrast" preference strengthens muted text, borders and focus rings. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+  button,
+  input,
+  select,
+  textarea,
+  .state-badge,
+  .tag {
+    border: 1px solid ButtonText;
+  }
+  [aria-current="true"],
+  [aria-current="page"],
+  [aria-selected="true"],
+  [aria-pressed="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  dialog,
+  .trusted-section {
+    border: 2px solid CanvasText;
+  }
+  mark {
+    background: Highlight;
+    color: HighlightText;
+  }
+  button:disabled {
+    color: GrayText;
+    border-color: GrayText;
+  }
+}
+@media (prefers-contrast: more) {
+  :root {
+    --muted: var(--ink);
+    --border: var(--border-strong);
+  }
+  :focus-visible {
+    outline-width: 3px;
+  }
+}

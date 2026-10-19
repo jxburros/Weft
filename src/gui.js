@@ -1100,6 +1100,15 @@ async function loadUpdates() {
     if ($("update-center")) setHTML($("update-center"), `<div class="notice" role="status">${esc(errorMessage(e))}</div>`);
   }
 }
+/** The exact address an external application will receive: never truncated; arguments after ? or # are highlighted (#113). */
+function launchTarget(value) {
+  const text = String(value || "");
+  const cut = text.search(/[?#]/);
+  const base = cut < 0 ? text : text.slice(0, cut);
+  const rest = cut < 0 ? "" : text.slice(cut);
+  return `<p class="launch-url" tabindex="0" role="group" aria-label="Full address the application will receive, ${text.length} characters"><code>${esc(base)}${rest ? `<mark>${esc(rest)}</mark>` : ""}</code></p><p class="muted micro">${text.length} characters, shown in full${rest ? "; the highlighted part is passed to the application as arguments" : ""}.</p>`;
+}
+
 async function loadDownloads() {
   try {
     const rows = await execute("downloads.list", {}, true);
@@ -1107,7 +1116,7 @@ async function loadDownloads() {
     if (!$("download-list")) return;
     $("download-list").innerHTML =
       (launches.length
-        ? `<section class="settings-section trusted-section">${trustedBand("Application launch requests", icon("shield"))}<h2>External application requests</h2><p>Pages cannot open other applications on their own. Approve only requests you started and recognize.</p>${launches.map((l) => `<div class="activity-row"><span class="activity-dot icon">${icon("external")}</span><div><strong>${esc(l.scheme)}: link</strong><p>${esc(l.targetUrl.slice(0, 200))}</p><p>From ${esc(l.sourceTitle || host(l.sourceUrl))} (${esc(l.sourceUrl || "unknown page")}) · ${esc(l.frame)} · ${l.recentHumanInput ? "after your input" : "no recent input"} · ${esc(l.state)}${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}</p>${l.state === "refused" ? `<p>${esc(l.reason)}</p>` : ""}</div>${l.state === "pending" ? action("approve-launch", "Open application", "", 'data-id="' + l.id + '"') + action("deny-launch", "Dismiss", "", 'data-id="' + l.id + '"') : ""}</div>`).join("")}</section>`
+        ? `<section class="settings-section trusted-section">${trustedBand("Application launch requests", icon("shield"))}<h2>External application requests</h2><p>Pages cannot open other applications on their own. Approve only requests you started and recognize.</p>${launches.map((l) => `<div class="activity-row"><span class="activity-dot icon">${icon("external")}</span><div><strong>${esc(l.scheme)}: link</strong>${launchTarget(l.targetUrl)}<p>From ${esc(l.sourceTitle || host(l.sourceUrl))} (${esc(l.sourceUrl || "unknown page")}) · ${esc(l.frame)} · ${l.recentHumanInput ? "after your input" : "no recent input"} · ${esc(l.state)}${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}</p>${l.state === "refused" ? `<p>${esc(l.reason)}</p>` : ""}</div>${l.state === "pending" ? action("approve-launch", "Open application", "", 'data-id="' + l.id + '"') + action("deny-launch", "Dismiss", "", 'data-id="' + l.id + '"') : ""}</div>`).join("")}</section>`
         : "") +
       (rows.length
         ? rows
