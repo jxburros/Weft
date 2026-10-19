@@ -1,4 +1,7 @@
-# Capture inbox, retrieval and learning in Weft 1.3
+# Capture and learning
+
+How to bring a message or page text into a workspace, have Ask Weft find the
+relevant parts of your saved work, and control what background learning keeps.
 
 ## Capture a message without connecting an email account
 
@@ -40,7 +43,7 @@ unchanged chunks and invalidates vectors when the configured model changes.
 Cloud/network embeddings require an explicit sharing acknowledgement;
 on-device-only documents never go to those endpoints.
 
-Workspace description and manual memory now participate in search, alongside
+Workspace description and manual memory participate in search, alongside
 materials, learned memories, context, tasks and saved capture versions. Trusted
 workspace instructions remain separate. **Find relevant workspace context** in
 Ask Weft attaches up to eight ranked results with passages of up to 3,000

@@ -25,7 +25,9 @@ leaked handle shows up before Windows CI. Crash tests accept Windows termination
 replacement scenario asserts that Windows refuses the replacement instead.
 
 The separate Linux Chromium job runs **all** tests under `xvfb-run -a npm test`,
-including native browser isolation and GUI workflows. It archives the test log
+including native browser isolation and GUI workflows, then compares the GUI
+goldens (`WEFT_VISUAL=1`; `test/visual.test.js` skips without it; see
+`test/visual/README.md`). It archives the test log
 under an artifact named with the tested commit SHA. Electron subprocesses in tests
 use `--no-sandbox` because hosted runners lack a configured setuid helper. Normal
 Weft startup retains Chromium sandboxing. Fixture tokens are disposable local-only
@@ -58,5 +60,8 @@ evidence is Linux-only; the responsiveness budgets are deliberately generous
 regression ceilings, and `perf/README.md` records the reference numbers.
 
 Tests do not substitute for real screen-reader, signing/notarization, recovery-key,
-malware-feed, payment-provider, or multi-user deployment validation. Those items
+malware-feed, payment-provider, model-provider account, signed-in webmail,
+email-forwarding relay or multi-user deployment validation. Model discovery,
+learning, embeddings and webmail capture are exercised only against local fake
+endpoints and fixture pages. Those items
 remain open until their issue-specific acceptance criteria have evidence.

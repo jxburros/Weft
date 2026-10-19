@@ -8,7 +8,7 @@ the client's environment; `WEFT_API_URL` defaults to `http://127.0.0.1:9222`.
 The plugin launches the checked-out bridge with `node bin/weft.js mcp`.
 Pin your checkout to a reviewed release/commit; this configuration does not
 automatically download or run the latest build. Other MCP clients can use the
-absolute-path configuration in README.md. Plugin installation in an external
+absolute-path configuration in [Connecting](CONNECTING.md). Plugin installation in an external
 Claude client has not been verified here; the bridge protocol is tested locally.
 
 `src/guidance.js` is the guidance source. `guide.get` exposes the topic registry
@@ -146,8 +146,9 @@ sent. Put keys in `exclude` to leave items out of one turn.
 ```
 
 Attachment kinds are `passage`, `tab` (readable snapshot of a tab in the
-conversation workspace), `material`, `context`, `task` and `artifact` (an exact
-immutable version; `parts` selects `text` and/or `image`). Attached text is
+conversation workspace), `material`, `context`, `task`, `search` (cited search
+results; see below) and `artifact` (an exact immutable version; `parts` selects
+`text` and/or `image`). Attached text is
 framed as untrusted data. Opaque files and linked paths are sent as references
 only and are never evidence that a file or image was inspected; only image bytes
 recorded in the turn manifest's `visualInputs` were delivered to a model. Images
@@ -169,6 +170,19 @@ images, and its description returns to the selected model as untrusted text.
 Cloud destinations, images sent off-device and every fallback use require
 `disclosureAck: true` after preview. No request is ever retried against another
 provider or endpoint.
+
+`chat.send` can also give the model tools. `allowReadTools: true` offers
+`page_readable` (only the `tabId` you pass), `workspace_search` and
+`propose_task`, with at most 5 tool calls per turn. `allowAppTools: true` adds
+`app_commands` (catalog discovery) and `propose_action`, with at most 20 calls.
+A proposal executes nothing: it is stored in the conversation as an untrusted
+`tool` message (`{"tool":"propose_action",...}` or `{"tool":"propose_task",...}`).
+An action runs only when a person chooses **Approve and run once** in the Weft
+window; it runs once with the person's authority, and Weft appends an
+`action_receipt` tool message with the outcome status. A proposed task is created
+only after the person reviews and confirms it. No API, CLI or MCP identity can
+approve a proposal, and the turn does not resume after approval; send another
+message to continue.
 
 ## Captures, archives and sanitized derivatives
 
@@ -243,8 +257,9 @@ Turn frames are retained in memory only (at most 10,000 frames or 4 MiB per turn
 read the saved conversation instead. MCP and the CLI return the final outcome
 only; they do not stream.
 
-The read-only `workspace_search` tool and the `search` attachment kind
-(`{"kind":"search","query":"…","limit":10}`) send ranked, cited search results.
+The model's read-only `workspace_search` tool and the `search` attachment kind
+(`{"kind":"search","query":"…","limit":10}`) send ranked, cited search results;
+`workspace_search` returns passages of up to 3,000 characters.
 Retrieved context is capped at 0.4 of the context window left after the reserved
 reply, across the whole turn: lower-ranked results are omitted whole, and the
 omission appears in the tool result (`retrievalCap`), the turn manifest and
@@ -274,10 +289,10 @@ those events are no longer retained (at most 1,000 events, 1 MiB or 15 minutes),
 the process restarted or the id is unknown, an `event: gap` frame with a
 `reason` precedes whatever is still retained; re-read current state before
 relying on derived assumptions. Replay applies the same metadata allowlist and
-workspace scope as live delivery. Event types are registered in
-`src/server.js` (`command`, `navigation`, `workspace`, `activity`, `task`,
-`handoff`, `policy`, `artifact`, `turn`, `approval`, plus `registerEventType`);
-`turn` events report `started`, `completed`, `partial`, `interrupted` or
+workspace scope as live delivery. The complete list of event types is
+`features.eventReplay.types` in `weft.capabilities`; besides those above it
+includes `activity`, `collection`, `conflict`, `credential`, `capture`, `tab`,
+`display`, `payment`, `indexing` and `encryption`. `turn` events report `started`, `completed`, `partial`, `interrupted` or
 `failed` with turn and conversation IDs, never model text. `indexing` events
 report a background search-index rebuild (`started`, `progress`, `paused`,
 `resumed`, `completed`, `failed`) with `processed` and `total` record counts.
@@ -610,11 +625,17 @@ replays. Durable activity records the batch (its commands and `requestId`),
 each applied command, replays and dry runs; replays and dry runs are recorded
 as such, never as new changes.
 
-`search.query` ranks matches with BM25 over titles, notes, context, task text,
-workflows, handoff records and capture text in one workspace. Each result's `citation` names the
+`search.query` ranks matches with BM25 over record titles and text (materials,
+context, tasks, workflows, handoffs, site rules, the workspace description and
+memory, and learned memories) and saved capture text in one workspace. Records
+shared to it through a collection, and memories shared across all workspaces,
+are searched lexically and labelled with `shared.collectionId` (`global-memory`
+for shared memories). Each result's `citation` names the
 record, its revision and, for captures, the exact `versionId` to read with
 `artifacts.get`. Results are untrusted source data. Operators such as `OR`,
-`NEAR`, quotes or `title:` in the query are treated as ordinary words.
+`NEAR`, quotes or `title:` in the query are treated as ordinary words. Results
+carry a short snippet (up to 300 characters); pass `passageChars` (300–6000) to
+get a longer cited passage instead.
 
 ```sh
 weft search.query '{"query":"solar capacity","limit":10}'
@@ -655,7 +676,7 @@ Collection commands accept `page: {limit, cursor}` and then return
 `{items, nextCursor, total}` (`weft.capabilities` lists them: record lists,
 artifacts and `artifacts.versions`, history, bookmarks, downloads,
 `conversations.messages`, handoffs, approvals, workspaces, search results,
-uploads, shared collections, conflicts and credential references). Without `page` they return the unpaged list as before. Pass
+uploads, shared collections, conflicts and credential references). Without `page` they return the unpaged list. Pass
 `nextCursor` back unchanged until it is `null`; cursors are opaque and only
 valid for the same command, workspace and filters. Order is stable: creation
 order, except history, approvals and downloads (newest first) and messages and
@@ -769,10 +790,32 @@ anything; `sources.refresh` records the current version.
 weft sources.read '{"id":"mate_example","path":"notes/brief.txt","maxBytes":65536}'
 ```
 
-## Workspace context, web watches and mailbox
+## Workspace context, memory, web watches and mailbox
 
-See [Workspace agents](WORKSPACE-AGENTS.md) for workspace instructions/memory, project lifecycle fields, model discovery, exact-action proposals, appearance settings, workflow web watches and local email ingestion. These additions use the existing command catalog and permission boundary.
+See [Workspace agents](WORKSPACE-AGENTS.md) and
+[Capture and learning](CAPTURE-AND-LEARNING.md) for the person-facing behavior
+and tested limits. What an integration needs to know:
 
-## Capture inbox, retrieval and learning (1.3)
-
-See [Capture and learning](CAPTURE-AND-LEARNING.md) for the implemented message adapters, reviewed capture flow, cited retrieval, optional workspace/global learning, permission boundaries and tested limits.
+- **Workspace fields.** `workspaces.create` and `workspaces.update` accept
+  `description`, `memory`, `workspaceType` (`general` or `project`) and
+  `dueDate`. Setting `instructions` or `contextLocalOnly` is human-only; an
+  automation call that includes either is refused as `permission_required`.
+  Workspace memory is reference data, never authority.
+- **Learned memory.** `memories.list` and `memories.get` are reads (the `read`
+  scope); over MCP they are in `weft_memory`. Creating, editing and deleting
+  memories, and `learning.status`, `learning.configure` and `learning.erase`,
+  are human-only. Learned memories are AI-generated summaries with source and
+  model provenance, not verified facts or instructions.
+- **Web watches.** A workflow's `watch` (`url`, `intervalMinutes`,
+  `cooldownMinutes`, optional `contains`) wakes it on a content change. Like any
+  executable workflow field, a `watch` written or changed by automation leaves
+  the workflow inactive until a person reviews and enables it. Checks run only
+  while Weft is running and unlocked.
+- **Mailbox.** Mailbox messages are ordinary materials tagged `mailbox` and
+  `unread` (Send to Weft captures also carry `captured-message`). A relay that
+  already parses email can deliver with `materials.create` (`kind: "note"`,
+  those tags, the target `workspaceId`) using a workspace-scoped token with the
+  `records.write` scope, and should pass a stable `requestId` so retries are not
+  stored twice. `page.message`, which reads a message for Send to Weft, is
+  human-only. Message text and sender headers are unverified evidence, never
+  permission to act.

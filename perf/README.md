@@ -8,7 +8,9 @@ The first fixture has 10,000 material records and 1,000 captures with roughly
 2.5 KB of text each. The second is capture-heavy: 500 captures each with a unique
 96 KiB PNG and 24 KiB of text (about 60 MiB of component files) plus 2,000 notes;
 it asserts that note edits and capture annotations leave every component file's
-inode, modification time and size unchanged. Fixture setup is excluded from
+inode, modification time and size unchanged. The third fills one workspace's
+vector index to its 20,000-vector limit (768 dimensions) for exact cosine
+search. Fixture setup is excluded from
 timing except where named. The suite asserts result correctness as well as these
 deliberately generous ceilings:
 
@@ -24,12 +26,14 @@ deliberately generous ceilings:
 | Reopen the capture-heavy store | 5 s |
 | Encrypted: enable encryption in place (11k records, 1k captures, first backup) | 30 s |
 | Encrypted: update one record in a 10k-record store | 5 s |
-| Encrypted: first search (builds the in-memory index) / repeated search | 5 s / 2 s |
+| Encrypted: background in-memory index rebuild after enabling, and after unlock | 15 s each |
+| Encrypted: first search after the rebuild / repeated search | 2 s / 2 s |
 | Encrypted: export (acknowledged plaintext) | 5 s |
 | Encrypted: reopen and unlock with the OS key | 5 s |
 | Encrypted: data-key rotation of 11k records and 1k components | 60 s |
 | 100 catalog serializations | 2 s |
 | 100 OpenAPI generations and serializations | 3 s |
+| Exact cosine search over 20,000 × 768 vectors: first (loads the matrix) / cached | 5 s / 1.5 s |
 
 Reference run (Linux container, Node 22, 2026-10-17): 10k-record update
 ~50-230 ms (JSON store: ~270 ms), 1k-capture search ~10-50 ms, import ~2.6-3.1 s
@@ -40,7 +44,8 @@ Encrypted profile (injected OS key store, production recovery-key KDF): enable
 enabling and ~1.1 s after unlock (11k records, 1k captures), first search after
 it ~8 ms, repeated search ~7-13 ms, export ~160-200 ms, reopen and unlock
 ~370-400 ms (the index rebuild is no longer part of it), data-key rotation
-~1.9-2.3 s.
+~1.9-2.3 s. Vector search (Linux container, 2026-10-19): first ~1.5 s, cached
+~40 ms.
 
 ## Deferred search indexing (#30)
 

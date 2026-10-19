@@ -2,7 +2,9 @@
 
 Day-to-day details that the [README](../README.md) only summarizes: running Weft,
 keyboard controls, model connections, where your data lives, and what Weft does
-and does not protect.
+and does not protect. Workspace instructions, Ask Weft actions, web watches and
+email are in [Workspace agents](WORKSPACE-AGENTS.md); message capture, relevant
+context and learning are in [Capture and learning](CAPTURE-AND-LEARNING.md).
 
 ## Running Weft
 
@@ -60,6 +62,8 @@ account only and needs no administrator rights.
 | Ctrl/Cmd W | Close the current tab |
 | Ctrl/Cmd F | Find in page |
 | Ctrl/Cmd J | Downloads |
+| Ctrl/Cmd Shift A | Search open tabs |
+| F6 / Shift F6 | Move between the address bar, page, Ask Weft panel, sidebar and content, including from inside a website |
 | Escape | Close the current dialog |
 
 Use the top-right **Ask Weft** button for conversations and the command icon for
@@ -68,9 +72,13 @@ any model.
 
 ## Model connections
 
-Open **Settings → Model connections**. Configure the exact endpoint and model ID
-supported by your provider. The included entries are editable starting points,
-not a claim that an account, endpoint, or model is available.
+Open **Settings → Model connections** and choose **Add connection**. Pick a
+provider preset (OpenAI, an OpenAI-compatible endpoint, Anthropic, Gemini,
+DeepSeek, Moonshot, Meta Muse, Ollama or JX Runtime), enter a key or the name of
+an environment variable that holds it, and choose **Fetch available models**.
+Every endpoint stays editable, and a preset is not a claim that an account,
+endpoint or model is available. [Workspace agents](WORKSPACE-AGENTS.md#model-connections)
+covers discovery and capability labels.
 
 OpenAI-compatible API bases normally end in `/v1`; a local Ollama example is
 `http://127.0.0.1:11434/v1`. The Anthropic adapter uses its messages API. An API key
@@ -97,7 +105,7 @@ configure, after acknowledgement. Each reply shows endpoint locality,
 provider-reported tokens and, if you set prices, a labeled cost estimate. The
 Ollama native API (`http://127.0.0.1:11434`) is also supported.
 
-Errors, cancellation, and
+Errors, cancellation and
 unsupported responses are shown as such; a stopped reply is kept and marked
 interrupted, and the application does not manufacture an assistant reply.
 
@@ -123,7 +131,9 @@ material bytes and task/workflow/evidence links. They exclude browser sessions,
 cookies, configured model keys, global policies, activity and browsing history.
 Imports create new IDs, rewrite citations of exported IDs, verify capture hashes,
 report every lossy mapping and leave imported rules/workflows inactive for review;
-the GUI shows a preview first. Copies use this same behavior. Linked files, folders and
+imported workspace instructions arrive as memory for you to review, learned
+memories arrive scoped to the new workspace, and background learning stays off.
+The GUI shows a preview first. Copies use this same behavior. Linked files, folders and
 service references export as metadata only; their content, local paths and
 credentials are omitted and listed in the import report.
 

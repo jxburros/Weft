@@ -20,8 +20,10 @@ core-to-plugin import, a plugin importing core, plugin infrastructure importing
 a core service, or a dynamic loader shortcut (`import()`, `require`,
 `createRequire`, `new Function`, `eval`, `node:vm`) in core. Reviewed exceptions
 live in its `KNOWN_COUPLINGS` list, and stale entries fail so the list only
-shrinks. The only current entry is the Electron preload's required CommonJS
-`require('electron')`, which is unrelated to plugins.
+shrinks. Current entries are Electron preloads' required CommonJS
+`require('electron')`, the credential broker child's built-in `node:crypto`, the
+dynamic `node:sqlite` load that filters its startup warning, and the redaction
+matcher's `node:vm` timeout; none is a plugin path.
 
 ## Manifest
 

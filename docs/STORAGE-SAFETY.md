@@ -1,6 +1,6 @@
 # Local storage, backup and export safety
 
-Verified against code: 2026-10-17. Design and rationale: [ADR 011](decisions/011-transactional-storage-search-and-recovery.md);
+Verified against code: 2026-10-19. Design and rationale: [ADR 011](decisions/011-transactional-storage-search-and-recovery.md);
 workspace encryption: [ADR 014](decisions/014-workspace-encryption-and-key-management.md).
 
 ## Layout
@@ -32,7 +32,10 @@ records, shared context collections, evidence conflicts, freshness schedules,
 record provenance and citations, linked-source metadata and cached service
 versions (cached bytes are components), site-rule provenance (creator, revision history, review state),
 storage modes (`storagePolicies`), community list subscriptions (`siteLists`),
-conversation turn manifests and the in-store activity entries. Modules that
+conversation turn manifests, manual and learned memories (`memories` records),
+background-learning configuration and processed-source fingerprints (the
+`learning` entry in `state_meta`), embedding settings, vectors and
+queue (`vector_*` tables) and the in-store activity entries. Modules that
 share it (handoffs, community lists, site storage, extensions) commit through
 the same transaction and, on failure, return to the last committed state, so a
 change and its activity entries roll back together.
@@ -150,7 +153,10 @@ stops with `STORE_CONFLICT` and both are preserved for human review. Unreadable,
 unsupported, newer or invalid JSON stops without writing anything.
 
 Database schema changes use `PRAGMA user_version` and an append-only migration
-list; a consistent copy is saved in `recovery/` before an existing database is
+list (`storeMigrations` in `src/store.js`; the current version is 1, because new
+collections such as `memories` are stored as ordinary record rows, and the
+embedding tables are versioned separately by `vectorIndexVersion` in
+`store_info` and recreated when that version changes); a consistent copy is saved in `recovery/` before an existing database is
 migrated. A database from a newer Weft fails with `STORE_UNSUPPORTED`. One that
 fails `quick_check` or cannot be opened fails with `STORE_CORRUPT` and is left
 byte-for-byte unchanged; restore a backup (below).
@@ -234,7 +240,9 @@ the absence of other secrets/PII.
 Exports (format 2) keep revisions and revision histories, conversations and turn
 manifests, exact artifact versions with component hashes and annotations,
 task/workflow/evidence/attachment links, site-rule provenance (creator, revision
-history, review state) and handoff/takeover history. They exclude browser
+history, review state), handoff/takeover history and the workspace's memories
+(an import makes shared memories workspace-scoped). Background-learning
+configuration is not exported, and an import never enables learning. They exclude browser
 sessions, cookies, credentials, provider keys, model settings, global site rules,
 activity, browsing history, the search index, request identities, backups,
 storage modes and community list subscriptions (both browser policy for this

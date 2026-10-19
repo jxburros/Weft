@@ -3,7 +3,16 @@
 Entries describe implemented changes and verification limits. Product direction
 alone is not a shipped capability.
 
-## 1.3.0 — 2026-10-18
+## Unreleased
+
+### Documentation
+
+- Brought the README, guides, integration reference, design system, implementation coverage, accessibility, storage, validation, release and issue-status records in line with 1.2 and 1.3 behavior: version, workspace instructions and memory, Send to Weft capture, provider presets, retrieval with `passageChars`, background learning, the `weft_memory` MCP tool, web watches, mailbox, and the icon-grid sidebar.
+- Corrected the encrypted-search performance budgets (15 s background rebuild, 2 s searches), added the vector-search budget, and recorded that web watches, model, embedding and learning requests use main-process `fetch`, so site rules and threat intelligence do not apply to them.
+- Listed the bundled Source Sans 3 font in third-party notices.
+- Accessibility audit counts were re-measured under Xvfb (111 states, 0 findings). The Send to Weft preview, action review, email reader and workflow watch fields are not yet audited.
+
+## v1.3.0 — 2026-10-18
 
 - Capture visible Gmail/Outlook messages or selected page text into a workspace inbox through a reviewed Send to Weft flow; no domain, mail account connection or relay required.
 - Add inbox summarize, sort, remember and task drafts with explicit model/action review, source metadata, on-device defaults and archive controls.
