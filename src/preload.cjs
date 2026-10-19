@@ -3,7 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('weft', {
   layout: bounds => ipcRenderer.invoke('weft:layout', bounds),
   commands: () => ipcRenderer.invoke('weft:commands'),
-  pickPath: kind => ipcRenderer.invoke('weft:pickPath', kind === 'folder' ? 'folder' : 'file'),
+  pickPath: kind => ipcRenderer.invoke('weft:pickPath', ['folder', 'save', 'import'].includes(kind) ? kind : 'file'),
   onTurnFrame: callback => {
     const listener = (_event, frame) => callback(frame);
     ipcRenderer.on('weft:turn', listener);

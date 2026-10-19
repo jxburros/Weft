@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { Browser, applyEngineHardening } from './browser.js';
 import { PrivateWindows } from './private-window.js';
+import { PasswordService } from './passwords.js';
 import { commands, CommandError } from './commands.js';
 import { createApiServer, EventLog, sanitizeEvent, registerEventType } from './server.js';
 import { Transfers } from './transfers.js';
@@ -39,6 +40,7 @@ import { DisplayController, displayEnvironment, profileFingerprint } from './dis
 
 let browser;
 let privateWindows;
+let passwords;
 // Site rules without a workspace scope: only rules that apply to every workspace reach private windows.
 const PRIVATE_SCOPE = 'weft-private-window';
 let workspace;
@@ -198,6 +200,11 @@ if (primary) app.whenReady().then(async () => {
   credentials = new CredentialService({ directory: join(app.getPath('userData'), 'credentials'), protector: safeStorageProtector(safeStorage), browser, workspace,
     promptSecret: request => promptCredentialSecret(window, request) });
   credentials.start().catch(error => console.warn(`Weft credential vault: ${error.message}`));
+  // The person's own saved passwords (#95, ADR-020): a separate OS-protected vault outside workspace-data, human-only.
+  passwords = new PasswordService({ directory: join(app.getPath('userData'), 'passwords'), protector: safeStorageProtector(safeStorage), browser, workspace,
+    audit: entry => activity.append(entry),
+    confirmReveal: async ({ origin, username }) => (await dialog.showMessageBox(window, { type: 'warning', buttons: ['Cancel', 'Show password'], defaultId: 0, cancelId: 0, noLink: true,
+      title: 'Show saved password', message: `Show the saved password for ${username || 'this account'} on ${origin}?`, detail: 'Anyone who can see your screen will see it.' })).response === 1 });
   // Service credentials live only in OS-protected storage; scheduled freshness checks are opt-in per workspace.
   const knowledge = new Knowledge({ workspace, credentials: new ServiceCredentials({ directory, safeStorage }), audit: entry => activity.append(entry), protectedPaths: [app.getPath('userData')] });
   // Scheduled checks read workspace data: they wait while an encrypted profile is locked.
@@ -262,7 +269,9 @@ if (primary) app.whenReady().then(async () => {
   // A person picks a file or folder to link in a native dialog; only the chosen path returns to the trusted GUI.
   ipcMain.handle('weft:pickPath', async (event, kind) => {
     trusted(event);
-    const result = await dialog.showOpenDialog(window, { title: kind === 'folder' ? 'Link a folder' : 'Link a file', properties: [kind === 'folder' ? 'openDirectory' : 'openFile', 'dontAddToRecent'] });
+    // 'save' picks where a person-requested export (saved passwords) is written.
+    if (kind === 'save') { const saved = await dialog.showSaveDialog(window, { title: 'Export to a file', defaultPath: 'weft-passwords.csv', properties: ['showOverwriteConfirmation', 'dontAddToRecent'] }); return saved.canceled ? null : saved.filePath ?? null; }
+    const result = await dialog.showOpenDialog(window, { title: kind === 'folder' ? 'Link a folder' : kind === 'import' ? 'Choose a password export (CSV)' : 'Link a file', properties: [kind === 'folder' ? 'openDirectory' : 'openFile', 'dontAddToRecent'] });
     return result.canceled ? null : result.filePaths[0] ?? null;
   });
   ipcMain.handle('weft:execute', (event, name, args) => {
@@ -304,6 +313,7 @@ app.on('before-quit', event => {
   retrieval?.close();
   relay.close();
   privateWindows?.closeAll();
+  passwords?.close();
   plugins?.close();
   standby?.close();
   learning?.close();

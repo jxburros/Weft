@@ -30,6 +30,7 @@ import { displayCommandDefinitions } from './display.js';
 import { browsingCommandDefinitions } from './browsing-import.js';
 import { paymentCommandDefinitions, PAYMENT_ADMIN_COMMANDS, PAYMENT_REASONS, PAYMENT_CHANGES } from './payments.js';
 import { permissionCommandDefinitions, PERMISSION_ADMIN_COMMANDS } from './site-permissions.js';
+import { passwordCommandDefinitions, PASSWORD_COMMANDS } from './passwords.js';
 
 const tabId = z.number().int().positive().optional();
 const workspaceId = z.string().min(1).max(200).optional();
@@ -154,6 +155,7 @@ const definitions = {
   ...browsingCommandDefinitions,
   ...paymentCommandDefinitions,
   ...permissionCommandDefinitions,
+  ...passwordCommandDefinitions,
 };
 // Additive pagination for every potentially large collection (ADR 018).
 for (const name of PAGEABLE) if (definitions[name] && !definitions[name][1].page) definitions[name][1] = { ...definitions[name][1], page: pageField.optional() };
@@ -175,7 +177,7 @@ const humanOnly = new Set(['learning.status', 'learning.configure', 'learning.er
   'artifacts.setAccess', 'artifacts.purgeContent', 'artifacts.preview', 'artifacts.closePreview', 'search.configureEmbeddings', 'search.indexing',
   ...Object.keys(encryptionCommandDefinitions).filter(name => name !== 'encryption.status'),
   'tasks.reassign', 'tasks.review', 'tasks.reconcile', 'tasks.retryStep', 'workflows.recordStart', 'workflows.recordStop',
-  'display.hide', ...Object.keys(browsingCommandDefinitions), ...PERMISSION_ADMIN_COMMANDS]);
+  'display.hide', ...Object.keys(browsingCommandDefinitions), ...PERMISSION_ADMIN_COMMANDS, ...PASSWORD_COMMANDS]);
 const readOnly = new Set(['learning.status', 'page.message', 'browser.info', 'page.inspect', 'page.readable', 'page.snapshot', 'page.title', 'page.content',
   'page.screenshot', 'page.pdf', 'workspace.snapshot', 'search.query', 'workspaces.export', 'workspaces.exportAs', 'artifacts.render', 'activity.report',
   'page.extract', 'extensions.audit', 'plugins.invoke', 'update.status', 'backups.verify', 'collections.read', 'sources.read', 'services.read',

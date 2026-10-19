@@ -495,7 +495,7 @@ export class Browser {
       storageActivity: this.siteStorage?.activityFor(tab.view.webContents.id) ?? {}, blockedPopups: tab.blockedPopups ?? [],
       permissionDenials: tab.permissionDenials ?? {}, permissionUserDenials: tab.permissionUserDenials ?? {}, permissionPrompt: this.permissions.promptFor(tab.id),
       permissionUses: tab.permissionUses?.document === (tab.documentSerial ?? 0) ? tab.permissionUses.permissions : [], sharing: tab.sharing ?? null,
-      popupsAllowed: this.permissions.popupsAllowed(tab), pendingLaunches: [...this.launches.values()].filter(item => item.tabId === tab.id && item.state === 'pending').length,
+      popupsAllowed: this.permissions.popupsAllowed(tab), passwordOffer: this.passwords?.offerFor(tab.id) ?? null, savedLogins: this.passwords?.available(tab).length ?? 0, pendingLaunches: [...this.launches.values()].filter(item => item.tabId === tab.id && item.state === 'pending').length,
       securityWarning: tab.securityWarning ?? null, exception: tab.allowUrl ? { url: sanitizeUrl(tab.allowUrl) || null, security: Boolean(tab.allowSecurity) } : null };
   }
 
@@ -641,6 +641,8 @@ export class Browser {
     };
     contents.on('before-input-event', humanInput);
     contents.on('before-mouse-event', humanInput);
+    // The person's own password manager (#95) offers to save a sign-in they submit; agents never see it.
+    try { this.passwords?.watch(tab, contents); } catch { /* saving passwords is optional */ }
     contents.on('did-navigate', () => {
       // A new document: credential residue protections keyed to the filled document end here.
       tab.documentSerial = (tab.documentSerial ?? 0) + 1;
@@ -1737,6 +1739,10 @@ export class Browser {
     if (/^(storage\.(policy|setSiteMode|setDefaultMode)|threats\.|launches\.|downloads\.configureScanner$|siteRules\.explain$)/.test(name)) return this.executeSecurity(name, args, context, workspaceId);
     if (name.startsWith('permissions.')) return this.permissions.execute(name, { ...args, workspaceId }, context);
     if (name === 'popups.allow') return this.allowPopup(args, context);
+    if (name.startsWith('passwords.')) {
+      if (!this.passwords) throw failure('unavailable', 'Saved passwords are not available in this session');
+      return this.passwords.execute(name, args, context);
+    }
 
     switch (name) {
       case 'browser.emergencyStop': {
