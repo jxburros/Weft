@@ -45,7 +45,7 @@ export const commandDefinitions = {
   'bookmarks.list': ['List pinned website materials', optionalWorkspace],
   'bookmarks.create': ['Bookmark a website as a pinned material', { ...optionalWorkspace, title, url: httpUrl }],
   'bookmarks.delete': ['Delete a bookmarked website material', { id }],
-  'workspace.snapshot': ['Get persistent workspace state', optionalWorkspace],
+  'workspace.snapshot': ['Get persistent workspace state', { ...optionalWorkspace, ifRevision: z.string().max(100).optional().describe('Revision from an earlier snapshot. When the state has not changed since, the reply is only { unchanged: true, revision }.') }],
   'workspaces.list': ['List workspaces', {}],
   'workspaces.get': ['Get one workspace', { id }],
   'workspaces.create': ['Create an empty workspace', { ...workspaceDetails, name: title, description: text.optional(), color: z.string().max(30).optional(), icon: z.string().max(50).optional() }],

@@ -213,8 +213,9 @@ export class WorkspaceExtensions {
   /** Startup: reload enabled extensions; anything that fails verification is disabled with a reason. */
   async restore() {
     let changed = false;
+    const workspaces = (this.workspace.data ?? this.workspace.snapshot()).workspaces;
     for (const record of [...this.records]) {
-      if (!this.workspace.snapshot().workspaces.some(item => item.id === record.workspaceId)) {
+      if (!workspaces.some(item => item.id === record.workspaceId)) {
         this.records = this.records.filter(item => item.id !== record.id);
         rmSync(this.copyPath(record), { recursive: true, force: true });
         changed = true;

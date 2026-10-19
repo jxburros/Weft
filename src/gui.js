@@ -265,14 +265,16 @@ async function refresh(force = false) {
 }
 async function refreshState(force) {
   {
-    const [next, nextTabs, browserInfo, nextEncryption] = await Promise.all([
-      weftExecute("workspace.snapshot", {}),
+    // The full snapshot is fetched only when its revision moved (#109).
+    const [reply, nextTabs, browserInfo, nextEncryption] = await Promise.all([
+      weftExecute("workspace.snapshot", state?.revision && !force ? { ifRevision: state.revision } : {}),
       weftExecute("tabs.list", {}),
       weftExecute("browser.info", {}),
       weftExecute("encryption.status", {}),
     ]);
     encryption = nextEncryption;
-    const snapshot = JSON.stringify([next, nextTabs, browserInfo.automation, nextEncryption]);
+    const next = reply.unchanged ? state : reply;
+    const snapshot = JSON.stringify([next.revision, nextTabs, browserInfo.automation, nextEncryption]);
     state = next;
     tabs = nextTabs;
     if (snapshot !== lastSnapshot || force) {

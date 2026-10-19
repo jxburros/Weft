@@ -31,7 +31,12 @@ test('10k-record store write, 1k-capture search and workspace transfer budgets',
   // Capture text is component-backed (lazy), so the fixture supplies it explicitly.
   service.data.artifacts = Array.from({ length: 1000 }, (_, i) => ({ ...structuredClone(capture), id: `capture-perf-${i}`, versions: [{ ...service.data.artifacts[0].versions[0], id: `version-perf-${i}`, text: 'fixture searchable-needle '.repeat(100) }] }));
   service.save();
-  await budget(t, 'write with 10k records', 5000, () => service.execute('materials.update', { id: 'material-perf-9999', changes: { content: 'Updated last record' } }));
+  // Change tracking (#108) diffs only the records a command read: one update no longer re-serializes the store.
+  await budget(t, 'write with 10k records', 500, () => service.execute('materials.update', { id: 'material-perf-9999', changes: { content: 'Updated last record' } }));
+  // The GUI polls with the last revision (#109); an unchanged store answers without building a snapshot.
+  const { revision } = await service.execute('workspace.snapshot', {});
+  const unchanged = await budget(t, 'unchanged snapshot poll with 10k records', 50, () => service.execute('workspace.snapshot', { ifRevision: revision }));
+  assert.deepEqual(unchanged, { unchanged: true, revision });
   const results = await budget(t, 'search across 1k captures', 2000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
   assert.equal(results.length, 200);
   assert.ok(results.every(result => result.type === 'artifacts'));
@@ -85,7 +90,7 @@ test('encrypted profile: enabling on a 10k-record store, writes, first and repea
   service.data.artifacts = Array.from({ length: 1000 }, (_, i) => ({ ...structuredClone(capture), id: `capture-perf-${i}`, versions: [{ ...service.data.artifacts[0].versions[0], id: `version-perf-${i}`, text: `fixture searchable-needle ${i} `.repeat(100) }] }));
   service.save();
   await budget(t, 'enable encryption in place (11k records, 1k captures)', 30000, () => service.executeEncryption('encryption.enable', { acknowledgeKeyLoss: true, unlockMode: 'os' }, human));
-  await budget(t, 'encrypted write with 10k records', 5000, () => service.execute('materials.update', { id: 'material-perf-9999', changes: { content: 'Updated last record' } }));
+  await budget(t, 'encrypted write with 10k records', 1000, () => service.execute('materials.update', { id: 'material-perf-9999', changes: { content: 'Updated last record' } }));
   // The in-memory index is rebuilt in background batches after enabling/unlocking (#30); searches meanwhile are partial.
   await budget(t, 'encrypted background index rebuild (11k records, 1k captures)', 15000, () => service.indexingIdle());
   const first = await budget(t, 'encrypted first search', 2000, () => service.execute('search.query', { query: 'searchable-needle', limit: 200 }));
