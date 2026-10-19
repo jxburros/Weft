@@ -1,9 +1,11 @@
+import electron from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { auditExtensionManifest, matchesPattern } from './extension-policy.js';
 import { fileStamp, writeVerifiedJson } from './storage-safety.js';
+import { classify } from './autonomy.js';
 
 const workspaceId = z.string().min(1).max(128).optional();
 const path = z.string().min(1).max(4096).refine(value => isAbsolute(value) && !value.includes('\0'), 'Expected an absolute local directory path').describe('Absolute path of an unpacked extension directory on this computer.');
@@ -16,7 +18,10 @@ export const extensionCommandDefinitions = {
   'extensions.enable': ['Human loads an installed extension into its workspace session after re-verifying files and scope', { id }],
   'extensions.disable': ['Human revokes an extension: it is unloaded from its workspace session immediately', { id }],
   'extensions.remove': ['Human unloads and deletes an installed extension copy', { id }],
+  'extensions.actions': ['Human lists the toolbar buttons (action popup, options page) of extensions enabled in a workspace', { workspaceId }],
+  'extensions.openPage': ['Human opens an enabled extension\'s action popup or options page in a browser-owned window', { id, page: z.enum(['popup', 'options']) }],
 };
+classify('administration', 'extensions.actions extensions.openPage');
 const schemas = Object.fromEntries(Object.entries(extensionCommandDefinitions).map(([name, [, shape]]) => [name, z.strictObject(shape)]));
 const recordSchema = z.strictObject({ id: z.string(), workspaceId: z.string(), name: z.string(), version: z.string(), sha256: z.string(), hostGrants: z.array(z.string()), permissions: z.array(z.string()),
   enabled: z.boolean(), installedAt: z.string(), source: z.string(), chromeId: z.string().nullable(), lastError: z.string().nullable() });
@@ -76,8 +81,9 @@ function parseManifest(files) {
  * service-worker requests are limited to granted hosts and site rules.
  */
 export class WorkspaceExtensions {
-  constructor({ directory, workspace, browser = null, chromiumVersion = process.versions.chrome ?? '0' }) {
-    Object.assign(this, { workspace, browser, chromiumVersion });
+  constructor({ directory, workspace, browser = null, chromiumVersion = process.versions.chrome ?? '0', electronApi = electron }) {
+    Object.assign(this, { workspace, browser, chromiumVersion, electron: electronApi });
+    this.pages = new Map();
     this.root = join(directory, 'extensions');
     mkdirSync(this.root, { recursive: true, mode: 0o700 });
     this.path = join(this.root, 'extensions.json');
@@ -164,8 +170,13 @@ export class WorkspaceExtensions {
       await this.activity(name, record, `${record.name} ${record.version} sha256 ${record.sha256}; hosts ${record.hostGrants.join(', ') || 'none'}; disabled until enabled`);
       return { ...this.summary(record), audit: report, notice: 'Installed disabled. Review the scope, then enable it for this workspace.' };
     }
+    if (name === 'extensions.actions') {
+      const target = args.workspaceId ?? this.workspace.activeWorkspaceId;
+      return this.records.filter(item => item.workspaceId === target && item.enabled && this.loaded.has(item.id)).map(item => this.toolbar(item)).filter(Boolean);
+    }
     const record = this.records.find(item => item.id === args.id);
     if (!record) throw failure('not_found', 'Extension not found');
+    if (name === 'extensions.openPage') return this.openPage(record, args.page);
     if (name === 'extensions.enable') {
       await this.load(record);
       record.enabled = true; record.lastError = null;
@@ -204,7 +215,63 @@ export class WorkspaceExtensions {
     this.loaded.set(record.id, loaded.id);
   }
 
+  /** The audited toolbar description of an installed copy (re-read and hash-checked, so a changed file is never shown). */
+  installedUi(record) {
+    const pkg = readPackage(this.copyPath(record));
+    if (pkg.sha256 !== record.sha256) throw failure('permission_required', 'Installed extension files changed since installation; remove and reinstall it');
+    const audit = auditExtensionManifest(parseManifest(pkg.files), { hostGrants: record.hostGrants, files: new Set(pkg.files.keys()), chromiumVersion: this.chromiumVersion });
+    if (!audit.ok) throw failure('permission_required', 'Extension no longer satisfies policy');
+    return { ui: audit.scope.ui, files: pkg.files };
+  }
+
+  toolbar(record) {
+    let described;
+    try { described = this.installedUi(record); } catch { return null; }
+    const { ui, files } = described;
+    if (!ui.popup && !ui.options) return null;
+    const bytes = ui.icon && files.get(ui.icon);
+    const type = /\.png$/i.test(ui.icon ?? '') ? 'image/png' : /\.svg$/i.test(ui.icon ?? '') ? null : /\.(jpe?g)$/i.test(ui.icon ?? '') ? 'image/jpeg' : null;
+    // SVG icons are not shown: they are active documents. Raster icons up to 64 KiB become data URLs.
+    const icon = bytes && type && bytes.length <= 65536 ? `data:${type};base64,${bytes.toString('base64')}` : null;
+    return { id: record.id, name: record.name, title: ui.title || record.name, popup: Boolean(ui.popup), options: Boolean(ui.options), icon,
+      badge: null, notice: 'Badges and other chrome.action APIs are not supported in Weft.' };
+  }
+
+  /**
+   * Action popup or options page in a separate browser-owned window: the workspace session, sandboxed, no preload,
+   * no navigation outside the extension, no new windows. It never expands the audited permissions.
+   */
+  async openPage(record, page) {
+    if (!record.enabled || !this.loaded.has(record.id) || !record.chromeId) throw failure('invalid_arguments', 'Enable the extension for this workspace first');
+    const { ui } = this.installedUi(record);
+    const file = page === 'popup' ? ui.popup : ui.options;
+    if (!file) throw failure('unsupported', page === 'popup' ? 'This extension has no action popup' : 'This extension has no options page');
+    const active = this.browser?.tabs?.get(this.browser.activeId);
+    if (active && this.browser.protectedReason?.(active)) throw failure('permission_required', 'Extension pages cannot open while a protected sign-in or payment is in progress');
+    const session = this.session(record);
+    const base = `chrome-extension://${record.chromeId}/`;
+    const window = new this.electron.BrowserWindow({ width: page === 'popup' ? 420 : 960, height: page === 'popup' ? 600 : 720, title: `${record.name} — ${page === 'popup' ? 'extension' : 'extension options'}`,
+      autoHideMenuBar: true, show: true, webPreferences: { session, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true } });
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.webContents.on('will-navigate', (event, target) => { if (!String(target).startsWith(base)) event.preventDefault(); });
+    window.webContents.on('will-attach-webview', event => event.preventDefault());
+    // Like a browser action popup, it closes when the person clicks elsewhere (after it was focused once).
+    if (page === 'popup') window.once('focus', () => window.on('blur', () => { if (!window.isDestroyed()) window.close(); }));
+    const open = this.pages.get(record.id) ?? new Set();
+    open.add(window);
+    this.pages.set(record.id, open);
+    window.on('closed', () => open.delete(window));
+    await window.loadURL(`${base}${file}`);
+    return { id: record.id, page, url: `${base}${file}`, notice: 'Opened in a separate window with this workspace\'s extension session. It has only the permissions you granted.' };
+  }
+
+  closePages(record) {
+    for (const window of this.pages.get(record.id) ?? []) { try { window.destroy(); } catch { /* already closed */ } }
+    this.pages.delete(record.id);
+  }
+
   async unload(record) {
+    this.closePages(record);
     const chromeId = this.loaded.get(record.id);
     this.loaded.delete(record.id);
     if (chromeId) this.session(record).extensions.removeExtension(chromeId);
