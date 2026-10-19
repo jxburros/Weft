@@ -21,6 +21,7 @@ import { DEFAULT_PAGE_LIMIT, decodeCursor, encodeCursor, pageItems } from './pag
 import { RRF_K, documentKey, reciprocalRankFusion } from './retrieval.js';
 import { createKeyProtector, lockedError } from './encryption.js';
 import { ProfileEncryption } from './profile-encryption.js';
+import { AutoLockSettings } from './auto-lock.js';
 import { encryptionSchemas } from './encryption-commands.js';
 // Same registered symbol as commands.js PARTIAL_COVERAGE (not imported here to avoid an import cycle).
 const PARTIAL_COVERAGE = Symbol.for('weft.partialCoverage');
@@ -206,6 +207,7 @@ export class WorkspaceService {
     this.clock = clock;
     this.path = join(directory, STORE_FILE);
     // Workspace encryption (ADR 014). Hooks are set by the app: stop work before lock, restore tabs after unlock.
+    this.autoLock = new AutoLockSettings(directory);
     this.encryption = new ProfileEncryption({ directory, protector: keyProtector ?? createKeyProtector(), ...(encryption.kdf && { kdfParams: encryption.kdf }), clock });
     this.encryptionHooks = { beforeLock: async () => {}, afterUnlock: async () => {} };
     // Profile files outside workspace-data that are sealed with the same keys (payment records, ADR 019) follow every key change.
@@ -1839,7 +1841,7 @@ export class WorkspaceService {
     if (!schema) throw fail('unknown_command', `Unknown encryption command: ${name}`);
     const args = schema.parse(input);
     const human = context.actor === 'human';
-    if (name === 'encryption.status') return this.encryption.status({ locked: this.locked, inventory: human && args.inventory === true });
+    if (name === 'encryption.status') return { ...this.encryption.status({ locked: this.locked, inventory: human && args.inventory === true }), autoLock: this.autoLock.read() };
     if (!human) throw fail('permission_required', 'PERMISSION_REQUIRED: workspace encryption is managed by a person in the Weft window', { notStarted: true });
     if (name === 'encryption.unlock') return this.unlockProfile(args);
     if (name === 'encryption.checkRecoveryKey') {
@@ -1851,7 +1853,16 @@ export class WorkspaceService {
     this.assertUnlocked();
     if (!this.encryption.enabled) throw fail('invalid_arguments', 'This profile is not encrypted');
     if (name === 'encryption.disable') return this.disableEncryption(context);
-    if (name === 'encryption.configure') return this.exclusive(() => { this.assertUnlocked(); this.encryption.configure(args); this.logEncryption('encryption.configure', `Unlock: ${this.encryption.keyring.unlockMode}; passphrase ${this.encryption.keyring.wrappers.passphrase ? 'set' : 'not set'}`); return this.encryption.status({ locked: false }); });
+    if (name === 'encryption.configure') return this.exclusive(() => {
+      this.assertUnlocked();
+      const { autoLockMinutes, lockOnScreenLock, ...unlock } = args;
+      const changesUnlock = unlock.unlockMode !== undefined || unlock.passphrase !== undefined;
+      if (changesUnlock) this.encryption.configure(unlock);
+      const autoLock = autoLockMinutes !== undefined || lockOnScreenLock !== undefined ? this.autoLock.write({ idleMinutes: autoLockMinutes, onScreenLock: lockOnScreenLock }) : this.autoLock.read();
+      this.logEncryption('encryption.configure', [changesUnlock && `Unlock: ${this.encryption.keyring.unlockMode}; passphrase ${this.encryption.keyring.wrappers.passphrase ? 'set' : 'not set'}`,
+        `Auto-lock: ${autoLock.idleMinutes ? `after ${autoLock.idleMinutes} min idle` : 'off'}${autoLock.onScreenLock ? ', on screen lock' : ''}`].filter(Boolean).join('; '));
+      return { ...this.encryption.status({ locked: false }), autoLock };
+    });
     if (args.target === 'wrapping') {
       return this.exclusive(() => {
         this.assertUnlocked();
@@ -1904,19 +1915,21 @@ export class WorkspaceService {
     this.openStorage();
     this.storage.sweepOrphans();
   }
-  async lockProfile() {
+  /** Human lock, or the person's idle/screen-lock auto-lock setting (`reason` idle or screen_locked). */
+  async lockProfile({ reason = 'locked' } = {}) {
     if (!this.encryption.enabled) throw fail('invalid_arguments', 'Turn on workspace encryption before locking');
     if (this.locked) return { locked: true, alreadyLocked: true };
     await this.encryptionHooks.beforeLock?.({ persist: true });
     for (const store of this.sealedStores) await store.beforeLock?.();
     return this.exclusive(() => {
       if (this.locked) return { locked: true, alreadyLocked: true };
-      try { this.log('encryption.lock', this.activeWorkspaceId, null, 'human', 'Workspace data locked'); this.save(); } catch { /* locking proceeds */ }
+      const detail = reason === 'idle' ? 'Workspace data locked automatically after the idle time the person set' : reason === 'screen_locked' ? 'Workspace data locked automatically when the screen locked' : 'Workspace data locked';
+      try { this.log('encryption.lock', this.activeWorkspaceId, null, 'human', detail); this.save(); } catch { /* locking proceeds */ }
       this.storage.close();
       this.storage = null;
       this._data = null;
       this.encryption.forget();
-      this.encryption.lockReason = 'locked';
+      this.encryption.lockReason = reason;
       this.locked = true;
       return { locked: true };
     });

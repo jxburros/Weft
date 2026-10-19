@@ -88,7 +88,7 @@ if (process.argv.includes("--a11y-child")) {
     await window.webContents.debugger.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
     await run(readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8"));
     await run(`(${installChecks.toString()})()`);
-    const report = { views: [], keyboard: [], restoration: [], zoom: [], motion: null, liveRegions: null, boundary: null, ownership: null, split: null };
+    const report = { views: [], keyboard: [], restoration: [], zoom: [], motion: null, liveRegions: null, boundary: null, ownership: null, split: null, credentialEntry: [] };
     const failures = [];
     const audit = async (label, theme) => {
       await settle();
@@ -383,6 +383,66 @@ if (process.argv.includes("--a11y-child")) {
     report.motion = { reducedMotionRunning: moving, handoffDuration: await run('getComputedStyle(document.documentElement).getPropertyValue("--motion-handoff").trim()') };
     if (moving.length) failures.push(`reduced motion: still animating ${moving.join("; ")}`);
     await window.webContents.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] });
+
+    // ---- Credential entry window (ADR-017): the separate browser-owned window where a person types a secret.
+    // Audited for both kinds in both OS themes: axe, rendered contrast, targets, text size, focus indicators,
+    // Tab reaching every control, and Escape cancelling (the window closes and the command reports no entry).
+    const { nativeTheme } = electron;
+    const { promptCredentialSecret } = await import("../src/credential-entry.js");
+    const axeSource = readFileSync(createRequire(import.meta.url).resolve("axe-core/axe.min.js"), "utf8");
+    for (const theme of ["light", "dark"]) {
+      nativeTheme.themeSource = theme;
+      for (const kind of ["login", "payment_card"]) {
+        const label = `credential entry (${kind}) ${theme}`;
+        // The window is opened directly: CI's Linux keyring is basic_text, so credentials.create refuses before prompting.
+        const pending = promptCredentialSecret(window, { label: "Audit sign-in", origins: [origin], kind });
+        let entry;
+        for (let i = 0; i < 400 && !entry; i++) {
+          entry = BrowserWindow.getAllWindows().find((w) => w !== window && !w.isDestroyed() && w.webContents.getURL().endsWith("/credential-entry.html") && !w.webContents.isLoading());
+          if (!entry) await pause(25);
+        }
+        if (!entry) { failures.push(`${label}: the entry window did not open`); continue; }
+        const entryRun = (expression) => entry.webContents.executeJavaScript(expression);
+        for (let i = 0; i < 200 && !(await entryRun(`document.getElementById("label").textContent.length > 0 && (document.documentElement.dataset.theme === "dark") === ${theme === "dark"}`)); i++) await pause(25);
+        if ((await entryRun('document.documentElement.dataset.theme || "light"')) !== theme) failures.push(`${label}: the entry window did not follow the ${theme} OS theme`);
+        await entryRun("document.fonts.ready.then(() => true)");
+        await entryRun(axeSource);
+        await entryRun(`(${installChecks.toString()})()`);
+        const axe = await entryRun(`axe.run(document, { runOnly: { type: "tag", values: ${JSON.stringify(AXE_TAGS)} }, resultTypes: ["violations"] }).then((r) => r.violations.map((v) => ({ id: v.id, nodes: v.nodes.slice(0, 6).map((n) => n.target.join(" ")) })))`);
+        const contrast = await entryRun("window.__a11y.contrast()");
+        const targets = await entryRun("window.__a11y.targets()");
+        const font = await entryRun("window.__a11y.minFont()");
+        const focus = await entryRun("window.__a11y.focusIndicators()");
+        const expected = await entryRun("window.__a11y.tabbable()");
+        entry.focus();
+        entry.webContents.focus();
+        await entryRun("document.activeElement?.blur(); true");
+        const seen = new Set();
+        for (let i = 0; i < expected.length + 4; i++) {
+          entry.webContents.sendInputEvent({ type: "keyDown", keyCode: "Tab" });
+          entry.webContents.sendInputEvent({ type: "keyUp", keyCode: "Tab" });
+          await pause(25);
+          const id = await entryRun("window.__a11y.focusedId()");
+          if (id) seen.add(id);
+        }
+        const missed = expected.filter((e) => !seen.has(e.id)).map((e) => e.element);
+        report.credentialEntry.push({ kind, theme, axe, contrast: contrast.failures, targets: targets.failures, minFont: font, focus: focus.failures, controls: expected.length, missed });
+        if (axe.length) failures.push(`${label}: axe ${axe.map((v) => `${v.id} (${v.nodes.join(", ")})`).join("; ")}`);
+        if (contrast.failures.length) failures.push(`${label}: contrast ${JSON.stringify(contrast.failures.slice(0, 5))}`);
+        if (targets.failures.length) failures.push(`${label}: targets ${JSON.stringify(targets.failures.slice(0, 5))}`);
+        if (font.min < 11) failures.push(`${label}: text below 11px (${font.min}px at ${font.where})`);
+        if (focus.failures.length) failures.push(`${label}: focus indicators ${JSON.stringify(focus.failures.slice(0, 6))}`);
+        if (missed.length) failures.push(`${label}: not reachable with Tab: ${missed.join("; ")}`);
+        entry.webContents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+        entry.webContents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+        const outcome = await pending;
+        if (!entry.isDestroyed()) failures.push(`${label}: Escape did not close the entry window`);
+        if (outcome !== null) failures.push(`${label}: cancelling still returned an entry`);
+      }
+    }
+    nativeTheme.themeSource = "system";
+    window.focus();
+    window.webContents.focus();
 
     // ---- Lock screen: the only operable surface, audited in both themes, and focus returns after unlock.
     await execute("encryption.enable", { acknowledgeKeyLoss: true, unlockMode: "manual", passphrase: "a11y lock passphrase" });

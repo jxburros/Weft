@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, safeStorage, shell, nativeImage } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, net, powerMonitor, safeStorage, shell, nativeImage } from 'electron';
 import { execFile, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
@@ -11,6 +11,7 @@ import { Transfers } from './transfers.js';
 import { Retrieval } from './retrieval.js';
 import { WorkspaceService } from './workspace.js';
 import { createKeyProtector } from './encryption.js';
+import { IdleAutoLock } from './auto-lock.js';
 import { AutomationAdmission } from './admission.js';
 import { ClientGrants } from './clients.js';
 import { CommunityLists } from './community-lists.js';
@@ -226,6 +227,11 @@ if (primary) app.whenReady().then(async () => {
       void retrieval.drain().catch(() => {});
     },
   };
+  // Idle auto-lock (off unless a person set it in encryption.configure): OS idle time, never agent activity, keeps it unlocked.
+  const autoLock = new IdleAutoLock({ settings: workspace.autoLock, idleSeconds: () => powerMonitor.getSystemIdleTime(), isUnlocked: () => workspace.encryption.enabled && !workspace.locked,
+    lock: reason => workspace.lockProfile({ reason }) });
+  autoLock.start();
+  for (const signal of ['lock-screen', 'suspend']) powerMonitor.on(signal, () => { void autoLock.screenLocked().catch(error => console.error('Weft auto-lock:', error.message)); });
   // Launching Weft again attaches a person to this session; a second headless launch changes nothing.
   app.on('second-instance', (_event, argv, _cwd, data) => {
     if (data?.show === false || argv.includes('--headless')) return;

@@ -130,6 +130,47 @@ before first use. EV/HSM-backed certificates should prefer Azure Trusted Signing
 **Not yet verified:** no signing identity exists for this repository, so signing,
 notarization, Gatekeeper assessment and the signature verification steps have not run.
 
+## Maintainer checklist with real credentials
+
+Everything below needs accounts, certificates or hardware that CI does not
+have. Each step closes one "Not yet verified" row in the validation table;
+record the date, version, machine and result there (and in
+`docs/VALIDATION.md`) when it is done. Issues #33, #54 and #60 were closed as
+code complete with this list as their outstanding external validation.
+
+1. **Create signing identities.** Windows: an Azure Trusted Signing account and
+   certificate profile (or an OV/EV certificate as PFX), with the publisher
+   common name chosen for `WEFT_WINDOWS_PUBLISHER`. macOS: an Apple Developer ID
+   Application certificate and an App Store Connect API key with notarization
+   rights. Optional: a GPG key for `SHA256SUMS.txt`, with its fingerprint
+   published in `README.md`.
+2. **Store the secrets** in a protected GitHub environment with required
+   reviewers (table above). Set either the complete Azure group or the PFX pair,
+   not part of a group: the workflow and `electron-builder.config.cjs` must agree
+   on whether a build is signed.
+3. **Dry run on a release branch.** Push a `vX.Y.Z-rc` style tag in a fork or a
+   draft and confirm: Windows `Get-AuthenticodeSignature` reports `Valid` with
+   the expected subject; `codesign --verify --deep --strict` and
+   `spctl --assess --type execute` pass and `xcrun stapler validate` succeeds on
+   the macOS app; the GPG signature of `SHA256SUMS.txt` verifies.
+4. **Interactive Windows installer** (#54): on a real Windows 10/11 machine run
+   the installer by hand: welcome, folder choice, finish page; check the art and
+   text; uninstall once keeping data and once choosing data removal (with its
+   confirmation); confirm SmartScreen behaviour for the signed build.
+5. **Upgrade across two real releases** (#33, #60): install release N, create a
+   workspace with captures, a credential and an encrypted profile, then update to
+   N+1 through Settings > Updates on Windows, macOS, AppImage and `.deb`.
+   Confirm the profile migrates, the health check passes, and data is intact.
+6. **Failed and tampered updates** (#60): serve a manifest with a wrong SHA-512
+   and a downgraded version from a test release and confirm refusal; force a
+   health-check failure (for example by killing the new version during its first
+   two launches) and confirm AppImage rollback, the Windows retained-installer
+   offer and the macOS/`.deb` guidance.
+7. **Offline recovery**: with networking off, reinstall the previous release
+   from a downloaded file verified with `SHA256SUMS.txt`.
+8. **Intel macOS**: launch the x64 app on Intel hardware (or under Rosetta).
+9. **Name release owners** in "Maintenance ownership" above.
+
 ## Trust roots
 
 - **Release source:** the fixed repository `jxburros/Weft` on GitHub, over HTTPS with
