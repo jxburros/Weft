@@ -78,3 +78,7 @@ invent a new confirmation requirement for ordinary reversible work.
 Do not put tokens, provider secrets, private workspace exports or real browsing
 content in fixtures, logs, commits or examples. Do not claim external-client,
 platform or account validation from a mocked test.
+
+## Unified release maintenance
+
+Keep `release.json` authoritative and synchronize every configured embedded version. Use a patch bump by default for affected apps and real version-specific release notes. Merging or pushing tags prepares source; publish only via the main-branch manual Release action after a successful dry run. Preserve existing updater signatures, tag namespaces, asset names, and the configured checksum/latest compatibility controls. See `.release/README.md`.
