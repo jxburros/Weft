@@ -13,3 +13,5 @@ Existing checksum filenames and the primary stable latest-release alias are reta
 To bump locally, obtain the pinned toolkit at `.toolkit`, run `node .toolkit/src/release.mjs bump --app APP_ID`, regenerate any application-specific resources/generated bundles, update the version-specific notes file, and run the repository's checks. All meaningful main changes require at least one advance; shared source/workflow changes require every affected app to advance.
 
 Validation for this migration: shared engine syntax/test suite and workflow lint; manifest/embedded-version validation is run against the prepared changes. Hosted/native consumer release dry runs and actual publication have not been performed from these unmerged branches. No release/tag was created by this migration.
+
+Hosted validation note (2026-10-20): GitHub reported that an Actions budget prevented some jobs from starting. Other repositories also reported dependency advisories in unchanged dependency graphs. These gates remain enforced; the migration does not claim an end-to-end native release where those checks are blocked.
