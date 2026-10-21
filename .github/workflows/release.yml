@@ -24,9 +24,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   plan:
-    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/plan.yml@e219396d4dcab9a14c9d7ee1730320fc94006dcc
+    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/plan.yml@181636b602317ba703c3f4bf12775c34560f4efb
     with:
-      toolkit-ref: e219396d4dcab9a14c9d7ee1730320fc94006dcc
+      toolkit-ref: 181636b602317ba703c3f4bf12775c34560f4efb
       channel: ${{ inputs.channel }}
       app: ${{ inputs.app }}
   verify:
@@ -302,7 +302,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         repository: JX-Holdings-LLC/release-infrastructure
-        ref: e219396d4dcab9a14c9d7ee1730320fc94006dcc
+        ref: 181636b602317ba703c3f4bf12775c34560f4efb
         path: .toolkit
         persist-credentials: false
     - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -324,11 +324,11 @@ jobs:
     - plan
     - publish
     if: needs.plan.outputs.selected == 'true' && fromJSON(needs.plan.outputs.apps)['weft'].selected
-    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/finish.yml@e219396d4dcab9a14c9d7ee1730320fc94006dcc
+    uses: JX-Holdings-LLC/release-infrastructure/.github/workflows/finish.yml@181636b602317ba703c3f4bf12775c34560f4efb
     permissions:
       contents: write
     with:
-      toolkit-ref: e219396d4dcab9a14c9d7ee1730320fc94006dcc
+      toolkit-ref: 181636b602317ba703c3f4bf12775c34560f4efb
       source-sha: ${{ needs.plan.outputs.sha }}
       app: weft
       security: standard

@@ -135,7 +135,10 @@ async function crash() {
 
 function filesUnder(directory) {
   const out = [];
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+  let entries;
+  try { entries = readdirSync(directory, { withFileTypes: true }); }
+  catch (error) { if (error.code === 'ENOENT') return out; throw error; }
+  for (const entry of entries) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) out.push(...filesUnder(path));
     else if (entry.isFile()) out.push(path);
@@ -170,7 +173,11 @@ if (mode) {
     const { signal, output } = await launch('--private-crash', profile, (text, child) => { if (text.includes('WEFT_PRIVATE_READY')) child.kill('SIGKILL'); });
     assert.equal(signal, 'SIGKILL', output);
     assert.match(output, /WEFT_PRIVATE_READY/, 'the private page stored its data before the crash');
-    const holding = filesUnder(profile).filter(file => statSync(file).size < 64 * 1024 * 1024 && readFileSync(file).includes(MARKER));
+    const holding = filesUnder(profile).filter(file => {
+      // Chromium children may finish an atomic rename after the parent exits.
+      try { return statSync(file).size < 64 * 1024 * 1024 && readFileSync(file).includes(MARKER); }
+      catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+    });
     assert.deepEqual(holding, [], 'no file in the profile contains private-window data');
   });
 }
