@@ -36,11 +36,11 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: 24
         cache: npm
@@ -69,7 +69,7 @@ jobs:
       run: npm run test:perf
     - name: Full suite with real Chromium
       run: xvfb-run -a npm test
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: release-notes
         path: release-notes.md
@@ -117,11 +117,11 @@ jobs:
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['weft'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: 24
         cache: npm
@@ -218,7 +218,7 @@ jobs:
         cp dist/*.exe dist/*.blockmap dist/*.dmg dist/*.zip dist/*.AppImage dist/*.deb dist/latest*.yml "signing-${{ matrix.name }}.txt" release-assets/
         ls -l release-assets
         compgen -G 'release-assets/latest*.yml' > /dev/null || { echo "::error::No latest*.yml staged"; exit 1; }
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: weft-${{ matrix.name }}
         if-no-files-found: error
@@ -246,22 +246,22 @@ jobs:
       RELEASE_VERSION: ${{ fromJSON(needs.plan.outputs.apps)['weft'].version }}
       RELEASE_SOURCE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         ref: ${{ needs.plan.outputs.sha }}
         persist-credentials: false
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: 24
         cache: npm
     - name: Install verification dependencies only
       run: npm ci --ignore-scripts --omit=dev
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         pattern: weft-*
         path: release
         merge-multiple: true
-    - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: release-notes
     - name: Verify manifests and write SHA256SUMS.txt
@@ -299,13 +299,13 @@ jobs:
     - name: Preserve the observed signing status
       shell: bash
       run: sed -n '/^## Integrity and signing/,$p' notes.md > release/release-signing-status.md
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: JX-Holdings-LLC/release-infrastructure
         ref: 181636b602317ba703c3f4bf12775c34560f4efb
         path: .toolkit
         persist-credentials: false
-    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
       with:
         node-version: 24
     - name: Stage the complete configured release inventory
@@ -314,7 +314,7 @@ jobs:
         RELEASE_APP: weft
       run: node .toolkit/src/release.mjs stage --app "$RELEASE_APP" --from release --bundle unified-bundle --sha
         "$RELEASE_SOURCE_SHA"
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: bundle-weft
         path: unified-bundle
