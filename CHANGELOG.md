@@ -986,3 +986,18 @@ macOS and Linux. Offline MCP reference scenarios passed (3/3); performance budge
 passed for 10k materials and 1k captures. Integrated documentation, grouped MCP eval and performance checks passed
 (6 tests, no skips; 11 documented command examples). These checks do not
 establish cross-platform hardware/account support.
+
+### Release infrastructure migration — 2026-10-20
+
+- Adopt the unified release manifest, version-advance validation, manual main-only planning, complete artifact staging, and verified draft publisher. Preserve local packaging, existing updater trust, and distribution identities.
+- Validation: shared engine tests, workflow lint, and prepared manifest/version checks. Native/hosted consumer release dry runs and publication remain unverified until the migration is merged and credentials/settings are checked.
+
+## 2026-10-21 — Release check fixes
+
+### Changed
+
+- Make the private-window crash scan tolerate ENOENT when Chromium renames a temporary profile file after its parent exits; other filesystem errors still fail.
+
+### Notes
+
+- Syntax/exports/lint checks pass locally; the full Chromium check runs in GitHub CI.

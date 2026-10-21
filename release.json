@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "apps": {
+    "weft": {
+      "title": "Weft",
+      "version": "1.4.0"
+    }
+  }
+}

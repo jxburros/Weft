@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "bumpPolicy": "every-main-change",
+  "apps": {
+    "weft": {
+      "tagPrefix": "v",
+      "paths": [
+        "**"
+      ],
+      "versionFiles": [
+        {
+          "path": "package.json",
+          "format": "json",
+          "key": "version"
+        },
+        {
+          "path": "package-lock.json",
+          "format": "json",
+          "key": "version"
+        },
+        {
+          "path": "package-lock.json",
+          "format": "json",
+          "key": "packages..version"
+        }
+      ],
+      "notes": ".release/notes/{app}/{version}.md",
+      "assets": [
+        "latest-linux.yml",
+        "latest-mac.yml",
+        "latest.yml",
+        "Weft-{version}-amd64.deb",
+        "Weft-{version}-arm64.dmg",
+        "Weft-{version}-arm64.dmg.blockmap",
+        "Weft-{version}-arm64.zip",
+        "Weft-{version}-arm64.zip.blockmap",
+        "Weft-{version}-x64.dmg",
+        "Weft-{version}-x64.dmg.blockmap",
+        "Weft-{version}-x64.zip",
+        "Weft-{version}-x64.zip.blockmap",
+        "Weft-{version}-x86_64.AppImage",
+        "Weft-Setup-{version}-x64.exe",
+        "Weft-Setup-{version}-x64.exe.blockmap",
+        "release-signing-status.md"
+      ],
+      "security": "standard",
+      "checksumFile": "SHA256SUMS.txt",
+      "legacyLatest": true,
+      "optionalAssets": [
+        {
+          "pattern": "^SHA256SUMS\\.txt\\.asc$",
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "preserveChecksum": true,
+      "checksumExclusions": [
+        "SHA256SUMS.txt.asc",
+        "release-signing-status.md"
+      ],
+      "notesAsset": "release-signing-status.md"
+    }
+  }
+}
